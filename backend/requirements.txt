@@ -35,7 +35,6 @@ loguru==0.7.2
 asgiref==3.8.1
 
 # AI libraries
-pinecone==3.0.0
 openai
 anthropic
 google-generativeai==0.8.4
@@ -52,11 +51,13 @@ opensearch-py==2.8.0
 playwright==1.49.1 # Caution: version must match docker-compose.playwright.yaml
 elasticsearch==8.17.1
 
+
 transformers
 sentence-transformers==3.3.1
 accelerate
 colbert-ai==0.2.21
 einops==0.8.1
+
 
 ftfy==6.2.3
 pypdf==4.3.1
@@ -114,6 +115,7 @@ google-cloud-storage==2.19.0
 
 azure-identity==1.21.0
 azure-storage-blob==12.24.1
+
 
 ## LDAP
 ldap3==2.9.1
