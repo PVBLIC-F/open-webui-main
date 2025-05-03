@@ -138,6 +138,3 @@ opentelemetry-instrumentation-requests==0.52b1
 opentelemetry-instrumentation-logging==0.52b1
 opentelemetry-instrumentation-httpx==0.52b1
 opentelemetry-instrumentation-aiohttp-client==0.52b1
-
-##Pinecone Client
-pinecone[grpc,asyncio]==6.0.0
