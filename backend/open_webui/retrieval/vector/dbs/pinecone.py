@@ -1,5 +1,6 @@
 from typing import Optional, List, Dict, Any, Union
 import logging
+import asyncio
 from pinecone import Pinecone, ServerlessSpec
 
 from open_webui.retrieval.vector.main import (
@@ -19,7 +20,7 @@ from open_webui.config import (
 from open_webui.env import SRC_LOG_LEVELS
 
 NO_LIMIT = 10000  # Reasonable limit to avoid overwhelming the system
-BATCH_SIZE = 100  # Recommended batch size for Pinecone operations
+BATCH_SIZE = 200  # Recommended batch size for Pinecone operations
 
 log = logging.getLogger(__name__)
 log.setLevel(SRC_LOG_LEVELS["RAG"])
@@ -185,8 +186,9 @@ class PineconeClient(VectorDBBase):
             )
             raise
 
-    def insert(self, collection_name: str, items: List[VectorItem]) -> None:
+    async def insert(self, collection_name: str, items: List[VectorItem]) -> None:
         """Insert vectors into a collection."""
+        import time
         if not items:
             log.warning("No items to insert")
             return
@@ -200,10 +202,10 @@ class PineconeClient(VectorDBBase):
         for i in range(0, len(points), BATCH_SIZE):
             batch = points[i : i + BATCH_SIZE]
             try:
-                self.index.upsert(vectors=batch)
-                log.debug(
-                    f"Inserted batch of {len(batch)} vectors into '{collection_name_with_prefix}'"
-                )
+                start = time.time()
+                await asyncio.to_thread(self.index.upsert, vectors=batch)
+                elapsed = int((time.time() - start) * 1000)
+                # Log line removed as requested
             except Exception as e:
                 log.error(
                     f"Error inserting batch into '{collection_name_with_prefix}': {e}"
@@ -214,8 +216,9 @@ class PineconeClient(VectorDBBase):
             f"Successfully inserted {len(items)} vectors into '{collection_name_with_prefix}'"
         )
 
-    def upsert(self, collection_name: str, items: List[VectorItem]) -> None:
+    async def upsert(self, collection_name: str, items: List[VectorItem]) -> None:
         """Upsert (insert or update) vectors into a collection."""
+        import time
         if not items:
             log.warning("No items to upsert")
             return
@@ -229,10 +232,10 @@ class PineconeClient(VectorDBBase):
         for i in range(0, len(points), BATCH_SIZE):
             batch = points[i : i + BATCH_SIZE]
             try:
-                self.index.upsert(vectors=batch)
-                log.debug(
-                    f"Upserted batch of {len(batch)} vectors into '{collection_name_with_prefix}'"
-                )
+                start = time.time()
+                await asyncio.to_thread(self.index.upsert, vectors=batch)
+                elapsed = int((time.time() - start) * 1000)
+                # Log line removed as requested
             except Exception as e:
                 log.error(
                     f"Error upserting batch into '{collection_name_with_prefix}': {e}"
@@ -358,13 +361,14 @@ class PineconeClient(VectorDBBase):
             log.error(f"Error getting collection '{collection_name}': {e}")
             return None
 
-    def delete(
+    async def delete(
         self,
         collection_name: str,
         ids: Optional[List[str]] = None,
         filter: Optional[Dict] = None,
     ) -> None:
         """Delete vectors by IDs or filter."""
+        import time
         collection_name_with_prefix = self._get_collection_name_with_prefix(
             collection_name
         )
@@ -376,10 +380,10 @@ class PineconeClient(VectorDBBase):
                     batch_ids = ids[i : i + BATCH_SIZE]
                     # Note: When deleting by ID, we can't filter by collection_name
                     # This is a limitation of Pinecone - be careful with ID uniqueness
-                    self.index.delete(ids=batch_ids)
-                    log.debug(
-                        f"Deleted batch of {len(batch_ids)} vectors by ID from '{collection_name_with_prefix}'"
-                    )
+                    start = time.time()
+                    await asyncio.to_thread(self.index.delete, ids=batch_ids)
+                    elapsed = int((time.time() - start) * 1000)
+                    # Log line removed as requested
                 log.info(
                     f"Successfully deleted {len(ids)} vectors by ID from '{collection_name_with_prefix}'"
                 )
