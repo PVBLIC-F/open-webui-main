@@ -36,48 +36,14 @@ from open_webui.storage.provider import Storage
 from open_webui.utils.auth import get_admin_user, get_verified_user
 from pydantic import BaseModel
 
+# -- NEW IMPORTS for PDF ingest --
+import anyio
+from open_webui.routers.filters.chat_file_upload_and_vectorize import ingest_pdf_bytes
+
 log = logging.getLogger(__name__)
 log.setLevel(SRC_LOG_LEVELS["MODELS"])
 
-
 router = APIRouter()
-
-
-############################
-# Check if the current user has access to a file through any knowledge bases the user may be in.
-############################
-
-
-def has_access_to_file(
-    file_id: Optional[str], access_type: str, user=Depends(get_verified_user)
-) -> bool:
-    file = Files.get_file_by_id(file_id)
-    log.debug(f"Checking if user has {access_type} access to file")
-
-    if not file:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=ERROR_MESSAGES.NOT_FOUND,
-        )
-
-    has_access = False
-    knowledge_base_id = file.meta.get("collection_name") if file.meta else None
-
-    if knowledge_base_id:
-        knowledge_bases = Knowledges.get_knowledge_bases_by_user_id(
-            user.id, access_type
-        )
-        for knowledge_base in knowledge_bases:
-            if knowledge_base.id == knowledge_base_id:
-                has_access = True
-                break
-
-    return has_access
-
-
-############################
-# Upload File
-############################
 
 
 @router.post("/", response_model=FileModelResponse)
@@ -90,12 +56,12 @@ def upload_file(
 ):
     log.info(f"file.content_type: {file.content_type}")
 
-    file_metadata = file_metadata if file_metadata else {}
+    file_metadata = file_metadata or {}
     try:
         unsanitized_filename = file.filename
         filename = os.path.basename(unsanitized_filename)
 
-        # replace filename with uuid
+        # generate a UUID for the stored filename
         id = str(uuid.uuid4())
         name = filename
         filename = f"{id}_{filename}"
@@ -123,9 +89,10 @@ def upload_file(
                 }
             ),
         )
+
         if process:
             try:
-
+                # audio/video OCR logic
                 if file.content_type.startswith(
                     (
                         "audio/mpeg",
@@ -135,14 +102,15 @@ def upload_file(
                         "audio/webm",
                     )
                 ):
-                    file_path = Storage.get_file(file_path)
-                    result = transcribe(request, file_path)
+                    file_path_resolved = Storage.get_file(file_path)
+                    result = transcribe(request, file_path_resolved)
 
                     process_file(
                         request,
                         ProcessFileForm(file_id=id, content=result.get("text", "")),
                         user=user,
                     )
+                # default document processing
                 elif file.content_type not in [
                     "image/png",
                     "image/jpeg",
@@ -154,14 +122,37 @@ def upload_file(
                 ]:
                     process_file(request, ProcessFileForm(file_id=id), user=user)
 
+                # --- NEW: PDF ingestion hook ---
+                if file.content_type == "application/pdf":
+                    # retrieve raw PDF bytes from storage
+                    try:
+                        pdf_bytes = Storage.download_to_bytes(file_path)
+                    except AttributeError:
+                        # fallback if no download_to_bytes
+                        raw_path = Storage.get_file(file_path)
+                        with open(raw_path, 'rb') as f:
+                            pdf_bytes = f.read()
+                    ns = f"{id}_files"
+                    anyio.start_blocking_portal().submit(
+                        lambda: ingest_pdf_bytes(
+                            pdf_bytes=pdf_bytes,
+                            namespace=ns,
+                            filename=name,
+                            uploaded_by=user.id,
+                        )
+                    )
+                    log.info(f"Dispatched PDF ingest for file_id={id} namespace={ns}")
+                # -----------------------------------
+
                 file_item = Files.get_file_by_id(id=id)
+
             except Exception as e:
                 log.exception(e)
                 log.error(f"Error processing file: {file_item.id}")
                 file_item = FileModelResponse(
                     **{
                         **file_item.model_dump(),
-                        "error": str(e.detail) if hasattr(e, "detail") else str(e),
+                        "error": getattr(e, "detail", str(e)),
                     }
                 )
 
@@ -172,6 +163,13 @@ def upload_file(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=ERROR_MESSAGES.DEFAULT("Error uploading file"),
             )
+
+    except Exception as e:
+        log.exception(e)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=ERROR_MESSAGES.DEFAULT(str(e)),
+        )
 
     except Exception as e:
         log.exception(e)
