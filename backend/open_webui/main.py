@@ -210,6 +210,7 @@ from open_webui.config import (
     DOCLING_SERVER_URL,
     DOCLING_OCR_ENGINE,
     DOCLING_OCR_LANG,
+    DOCLING_DO_PICTURE_DESCRIPTION,
     DOCUMENT_INTELLIGENCE_ENDPOINT,
     DOCUMENT_INTELLIGENCE_KEY,
     MISTRAL_OCR_API_KEY,
@@ -291,6 +292,8 @@ from open_webui.config import (
     ENABLE_EVALUATION_ARENA_MODELS,
     USER_PERMISSIONS,
     DEFAULT_USER_ROLE,
+    PENDING_USER_OVERLAY_CONTENT,
+    PENDING_USER_OVERLAY_TITLE,
     DEFAULT_PROMPT_SUGGESTIONS,
     DEFAULT_MODELS,
     DEFAULT_ARENA_MODEL,
@@ -572,6 +575,8 @@ app.state.config.ADMIN_EMAIL = ADMIN_EMAIL
 app.state.config.DEFAULT_MODELS = DEFAULT_MODELS
 app.state.config.DEFAULT_PROMPT_SUGGESTIONS = DEFAULT_PROMPT_SUGGESTIONS
 app.state.config.DEFAULT_USER_ROLE = DEFAULT_USER_ROLE
+app.state.config.PENDING_USER_OVERLAY_CONTENT = PENDING_USER_OVERLAY_CONTENT
+app.state.config.PENDING_USER_OVERLAY_TITLE = PENDING_USER_OVERLAY_TITLE
 
 app.state.config.USER_PERMISSIONS = USER_PERMISSIONS
 app.state.config.WEBHOOK_URL = WEBHOOK_URL
@@ -645,6 +650,7 @@ app.state.config.TIKA_SERVER_URL = TIKA_SERVER_URL
 app.state.config.DOCLING_SERVER_URL = DOCLING_SERVER_URL
 app.state.config.DOCLING_OCR_ENGINE = DOCLING_OCR_ENGINE
 app.state.config.DOCLING_OCR_LANG = DOCLING_OCR_LANG
+app.state.config.DOCLING_DO_PICTURE_DESCRIPTION = DOCLING_DO_PICTURE_DESCRIPTION
 app.state.config.DOCUMENT_INTELLIGENCE_ENDPOINT = DOCUMENT_INTELLIGENCE_ENDPOINT
 app.state.config.DOCUMENT_INTELLIGENCE_KEY = DOCUMENT_INTELLIGENCE_KEY
 app.state.config.MISTRAL_OCR_API_KEY = MISTRAL_OCR_API_KEY
@@ -1170,8 +1176,8 @@ async def chat_completion(
             "tool_ids": form_data.get("tool_ids", None),
             "tool_servers": form_data.pop("tool_servers", None),
             "files": form_data.get("files", None),
-            "features": form_data.get("features", None),
-            "variables": form_data.get("variables", None),
+            "features": form_data.get("features", {}),
+            "variables": form_data.get("variables", {}),
             "model": model,
             "direct": model_item.get("direct", False),
             **(
@@ -1394,6 +1400,10 @@ async def get_app_config(request: Request):
                     "client_id": ONEDRIVE_CLIENT_ID.value,
                     "sharepoint_url": ONEDRIVE_SHAREPOINT_URL.value,
                     "sharepoint_tenant_id": ONEDRIVE_SHAREPOINT_TENANT_ID.value,
+                },
+                "ui": {
+                    "pending_user_overlay_title": app.state.config.PENDING_USER_OVERLAY_TITLE,
+                    "pending_user_overlay_content": app.state.config.PENDING_USER_OVERLAY_CONTENT,
                 },
                 "license_metadata": app.state.LICENSE_METADATA,
                 **(

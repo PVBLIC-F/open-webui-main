@@ -989,6 +989,19 @@ DEFAULT_USER_ROLE = PersistentConfig(
     os.getenv("DEFAULT_USER_ROLE", "pending"),
 )
 
+PENDING_USER_OVERLAY_TITLE = PersistentConfig(
+    "PENDING_USER_OVERLAY_TITLE",
+    "ui.pending_user_overlay_title",
+    os.environ.get("PENDING_USER_OVERLAY_TITLE", ""),
+)
+
+PENDING_USER_OVERLAY_CONTENT = PersistentConfig(
+    "PENDING_USER_OVERLAY_CONTENT",
+    "ui.pending_user_overlay_content",
+    os.environ.get("PENDING_USER_OVERLAY_CONTENT", ""),
+)
+
+
 USER_PERMISSIONS_WORKSPACE_MODELS_ACCESS = (
     os.environ.get("USER_PERMISSIONS_WORKSPACE_MODELS_ACCESS", "False").lower()
     == "true"
@@ -1847,6 +1860,12 @@ DOCLING_OCR_LANG = PersistentConfig(
     "DOCLING_OCR_LANG",
     "rag.docling_ocr_lang",
     os.getenv("DOCLING_OCR_LANG", "eng,fra,deu,spa"),
+)
+
+DOCLING_DO_PICTURE_DESCRIPTION = PersistentConfig(
+    "DOCLING_DO_PICTURE_DESCRIPTION",
+    "rag.docling_do_picture_description",
+    os.getenv("DOCLING_DO_PICTURE_DESCRIPTION", "False").lower() == "true",
 )
 
 DOCUMENT_INTELLIGENCE_ENDPOINT = PersistentConfig(

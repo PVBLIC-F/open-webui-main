@@ -478,10 +478,6 @@ async def signup(request: Request, response: Response, form_data: SignupForm):
             "admin" if user_count == 0 else request.app.state.config.DEFAULT_USER_ROLE
         )
 
-        if user_count == 0:
-            # Disable signup after the first user is created
-            request.app.state.config.ENABLE_SIGNUP = False
-
         # The password passed to bcrypt must be 72 bytes or fewer. If it is longer, it will be truncated before hashing.
         if len(form_data.password.encode("utf-8")) > 72:
             raise HTTPException(
@@ -540,6 +536,10 @@ async def signup(request: Request, response: Response, form_data: SignupForm):
             user_permissions = get_permissions(
                 user.id, request.app.state.config.USER_PERMISSIONS
             )
+
+            if user_count == 0:
+                # Disable signup after the first user is created
+                request.app.state.config.ENABLE_SIGNUP = False
 
             return {
                 "token": token,
@@ -696,6 +696,8 @@ async def get_admin_config(request: Request, user=Depends(get_admin_user)):
         "ENABLE_CHANNELS": request.app.state.config.ENABLE_CHANNELS,
         "ENABLE_NOTES": request.app.state.config.ENABLE_NOTES,
         "ENABLE_USER_WEBHOOKS": request.app.state.config.ENABLE_USER_WEBHOOKS,
+        "PENDING_USER_OVERLAY_TITLE": request.app.state.config.PENDING_USER_OVERLAY_TITLE,
+        "PENDING_USER_OVERLAY_CONTENT": request.app.state.config.PENDING_USER_OVERLAY_CONTENT,
     }
 
 
@@ -713,6 +715,8 @@ class AdminConfig(BaseModel):
     ENABLE_CHANNELS: bool
     ENABLE_NOTES: bool
     ENABLE_USER_WEBHOOKS: bool
+    PENDING_USER_OVERLAY_TITLE: Optional[str] = None
+    PENDING_USER_OVERLAY_CONTENT: Optional[str] = None
 
 
 @router.post("/admin/config")
@@ -750,6 +754,13 @@ async def update_admin_config(
 
     request.app.state.config.ENABLE_USER_WEBHOOKS = form_data.ENABLE_USER_WEBHOOKS
 
+    request.app.state.config.PENDING_USER_OVERLAY_TITLETLE = (
+        form_data.PENDING_USER_OVERLAY_TITLE
+    )
+    request.app.state.config.PENDING_USER_OVERLAY_CONTENT = (
+        form_data.PENDING_USER_OVERLAY_CONTENT
+    )
+
     return {
         "SHOW_ADMIN_DETAILS": request.app.state.config.SHOW_ADMIN_DETAILS,
         "WEBUI_URL": request.app.state.config.WEBUI_URL,
@@ -764,6 +775,8 @@ async def update_admin_config(
         "ENABLE_CHANNELS": request.app.state.config.ENABLE_CHANNELS,
         "ENABLE_NOTES": request.app.state.config.ENABLE_NOTES,
         "ENABLE_USER_WEBHOOKS": request.app.state.config.ENABLE_USER_WEBHOOKS,
+        "PENDING_USER_OVERLAY_TITLE": request.app.state.config.PENDING_USER_OVERLAY_TITLE,
+        "PENDING_USER_OVERLAY_CONTENT": request.app.state.config.PENDING_USER_OVERLAY_CONTENT,
     }
 
 
