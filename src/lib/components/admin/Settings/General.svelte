@@ -306,8 +306,8 @@
 						<Switch bind:state={adminConfig.SHOW_ADMIN_DETAILS} />
 					</div>
 
-					<div class="mb-3.5">
-						<div class=" self-center text-xs font-medium mb-1">
+					<div class="mb-2.5">
+						<div class=" self-center text-xs font-medium mb-2">
 							{$i18n.t('Pending User Overlay Title')}
 						</div>
 						<Textarea
@@ -319,8 +319,8 @@
 						/>
 					</div>
 
-					<div class="mb-3.5">
-						<div class=" self-center text-xs font-medium mb-1">
+					<div class="mb-2.5">
+						<div class=" self-center text-xs font-medium mb-2">
 							{$i18n.t('Pending User Overlay Content')}
 						</div>
 						<Textarea
@@ -585,6 +585,13 @@
 													/>
 												</div>
 											</div>
+											<div class="flex justify-between items-center text-xs">
+												<div class=" font-medium">Validate certificate</div>
+
+												<div class="mt-1">
+													<Switch bind:state={LDAP_SERVER.validate_cert} />
+												</div>
+											</div>
 											<div class="flex w-full gap-2">
 												<div class="w-full">
 													<div class=" self-center text-xs font-medium min-w-fit mb-1">
@@ -649,6 +656,16 @@
 						</div>
 
 						<Switch bind:state={adminConfig.ENABLE_USER_WEBHOOKS} />
+					</div>
+
+					<div class="mb-2.5">
+						<div class=" self-center text-xs font-medium mb-2">
+							{$i18n.t('Response Watermark')}
+						</div>
+						<Textarea
+							placeholder={$i18n.t('Enter a watermark for the response. Leave empty for none.')}
+							bind:value={adminConfig.RESPONSE_WATERMARK}
+						/>
 					</div>
 
 					<div class="mb-2.5 w-full justify-between">

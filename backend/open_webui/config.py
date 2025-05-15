@@ -1002,6 +1002,13 @@ PENDING_USER_OVERLAY_CONTENT = PersistentConfig(
 )
 
 
+RESPONSE_WATERMARK = PersistentConfig(
+    "RESPONSE_WATERMARK",
+    "ui.watermark",
+    os.environ.get("RESPONSE_WATERMARK", ""),
+)
+
+
 USER_PERMISSIONS_WORKSPACE_MODELS_ACCESS = (
     os.environ.get("USER_PERMISSIONS_WORKSPACE_MODELS_ACCESS", "False").lower()
     == "true"
@@ -1744,6 +1751,7 @@ QDRANT_API_KEY = os.environ.get("QDRANT_API_KEY", None)
 QDRANT_ON_DISK = os.environ.get("QDRANT_ON_DISK", "false").lower() == "true"
 QDRANT_PREFER_GRPC = os.environ.get("QDRANT_PREFER_GRPC", "False").lower() == "true"
 QDRANT_GRPC_PORT = int(os.environ.get("QDRANT_GRPC_PORT", "6334"))
+ENABLE_QDRANT_MULTITENANCY_MODE = os.environ.get("ENABLE_QDRANT_MULTITENANCY_MODE", "false").lower() == "true"
 
 # OpenSearch
 OPENSEARCH_URI = os.environ.get("OPENSEARCH_URI", "https://localhost:9200")
@@ -1836,6 +1844,18 @@ CONTENT_EXTRACTION_ENGINE = PersistentConfig(
     "CONTENT_EXTRACTION_ENGINE",
     "rag.CONTENT_EXTRACTION_ENGINE",
     os.environ.get("CONTENT_EXTRACTION_ENGINE", "").lower(),
+)
+
+EXTERNAL_DOCUMENT_LOADER_URL = PersistentConfig(
+    "EXTERNAL_DOCUMENT_LOADER_URL",
+    "rag.external_document_loader_url",
+    os.environ.get("EXTERNAL_DOCUMENT_LOADER_URL", ""),
+)
+
+EXTERNAL_DOCUMENT_LOADER_API_KEY = PersistentConfig(
+    "EXTERNAL_DOCUMENT_LOADER_API_KEY",
+    "rag.external_document_loader_api_key",
+    os.environ.get("EXTERNAL_DOCUMENT_LOADER_API_KEY", ""),
 )
 
 TIKA_SERVER_URL = PersistentConfig(
@@ -1937,6 +1957,12 @@ RAG_FILE_MAX_SIZE = PersistentConfig(
         if os.environ.get("RAG_FILE_MAX_SIZE")
         else None
     ),
+)
+
+RAG_ALLOWED_FILE_EXTENSIONS = PersistentConfig(
+    "RAG_ALLOWED_FILE_EXTENSIONS",
+    "rag.file.allowed_extensions",
+    os.environ.get("RAG_ALLOWED_FILE_EXTENSIONS", "").split(","),
 )
 
 RAG_EMBEDDING_ENGINE = PersistentConfig(
@@ -2856,6 +2882,12 @@ LDAP_CA_CERT_FILE = PersistentConfig(
     "LDAP_CA_CERT_FILE",
     "ldap.server.ca_cert_file",
     os.environ.get("LDAP_CA_CERT_FILE", ""),
+)
+
+LDAP_VALIDATE_CERT = PersistentConfig(
+    "LDAP_VALIDATE_CERT",
+    "ldap.server.validate_cert",
+    os.environ.get("LDAP_VALIDATE_CERT", "True").lower() == "true",
 )
 
 LDAP_CIPHERS = PersistentConfig(
