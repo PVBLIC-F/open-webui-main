@@ -12,12 +12,10 @@ aiohttp==3.11.11
 async-timeout
 aiocache
 aiofiles
-starlette-compress==1.6.0
-
 
 sqlalchemy==2.0.38
 alembic==1.14.0
-peewee==3.18.1
+peewee==3.17.9
 peewee-migrate==1.12.2
 psycopg2-binary==2.9.9
 pgvector==0.4.0
@@ -26,6 +24,7 @@ bcrypt==4.3.0
 
 pymongo
 redis
+rq
 boto3==1.35.53
 
 argon2-cffi==23.1.0
