@@ -33,25 +33,32 @@ def get_message_list(messages, message_id):
     :param messages: Message history dict containing all messages
     :return: List of ordered messages starting from the root to the given message
     """
-
-    # Handle case where messages is None
+    # Input validation
     if not messages:
-        return []  # Return empty list instead of None to prevent iteration errors
+        log.debug(f"get_message_list: messages dict is empty or None")
+        return []
+    
+    if not message_id:
+        log.debug(f"get_message_list: message_id is empty or None")
+        return []
 
     # Find the message by its id
     current_message = messages.get(message_id)
 
     if not current_message:
-        return []  # Return empty list instead of None to prevent iteration errors
+        log.debug(f"get_message_list: message_id '{message_id}' not found in messages")
+        return []
 
     # Reconstruct the chain by following the parentId links
     message_list = []
+    seen_ids = set()  # Prevent infinite loops in case of circular references
 
-    while current_message:
+    while current_message and current_message.get("id") not in seen_ids:
+        seen_ids.add(current_message.get("id"))
         message_list.insert(
             0, current_message
         )  # Insert the message at the beginning of the list
-        parent_id = current_message.get("parentId")  # Use .get() for safety
+        parent_id = current_message.get("parentId")
         current_message = messages.get(parent_id) if parent_id else None
 
     return message_list
@@ -134,9 +141,7 @@ def prepend_to_first_user_message_content(
     return messages
 
 
-def add_or_update_system_message(
-    content: str, messages: list[dict], append: bool = False
-):
+def add_or_update_system_message(content: str, messages: list[dict]):
     """
     Adds a new system message at the beginning of the messages list
     or updates the existing system message at the beginning.
@@ -147,10 +152,7 @@ def add_or_update_system_message(
     """
 
     if messages and messages[0].get("role") == "system":
-        if append:
-            messages[0]["content"] = f"{messages[0]['content']}\n{content}"
-        else:
-            messages[0]["content"] = f"{content}\n{messages[0]['content']}"
+        messages[0]["content"] = f"{content}\n{messages[0]['content']}"
     else:
         # Insert at the beginning
         messages.insert(0, {"role": "system", "content": content})
