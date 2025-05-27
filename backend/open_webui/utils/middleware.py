@@ -3,6 +3,7 @@ import logging
 import sys
 import os
 import base64
+import traceback
 
 import asyncio
 from aiocache import cached
@@ -41,7 +42,6 @@ from open_webui.routers.pipelines import (
     process_pipeline_inlet_filter,
     process_pipeline_outlet_filter,
 )
-from open_webui.routers.memories import query_memory, QueryMemoryForm
 
 from open_webui.utils.webhook import post_webhook
 
@@ -96,6 +96,35 @@ from open_webui.constants import TASKS
 logging.basicConfig(stream=sys.stdout, level=GLOBAL_LOG_LEVEL)
 log = logging.getLogger(__name__)
 log.setLevel(SRC_LOG_LEVELS["MAIN"])
+
+# Enhanced middleware logging helpers
+def log_middleware_operation(operation: str, **kwargs):
+    """Log middleware operations with consistent formatting"""
+    context = []
+    for key, value in kwargs.items():
+        context.append(f"{key}={value}")
+    
+    context_str = f" ({', '.join(context)})" if context else ""
+    log.info(f"🔄 {operation}{context_str}")
+
+def log_middleware_error(operation: str, error: Exception, **kwargs):
+    """Log middleware errors with consistent formatting and context"""
+    context = []
+    for key, value in kwargs.items():
+        context.append(f"{key}={value}")
+    
+    context_str = f" ({', '.join(context)})" if context else ""
+    log.error(f"❌ {operation} failed{context_str}: {str(error)}")
+    log.debug(f"❌ {operation} traceback{context_str}: {traceback.format_exc()}")
+
+def log_middleware_warning(operation: str, message: str, **kwargs):
+    """Log middleware warnings with consistent formatting"""
+    context = []
+    for key, value in kwargs.items():
+        context.append(f"{key}={value}")
+    
+    context_str = f" ({', '.join(context)})" if context else ""
+    log.warning(f"⚠️  {operation}{context_str}: {message}")
 
 
 async def chat_completion_tools_handler(
@@ -252,12 +281,7 @@ async def chat_completion_tools_handler(
                                     "name": (f"TOOL:{tool_name}"),
                                 },
                                 "document": [tool_result],
-                                "metadata": [
-                                    {
-                                        "source": (f"TOOL:{tool_name}"),
-                                        "parameters": tool_function_params,
-                                    }
-                                ],
+                                "metadata": [{"source": (f"TOOL:{tool_name}")}],
                             }
                         )
                     else:
@@ -294,38 +318,6 @@ async def chat_completion_tools_handler(
         del body["metadata"]["files"]
 
     return body, {"sources": sources}
-
-
-async def chat_memory_handler(
-    request: Request, form_data: dict, extra_params: dict, user
-):
-    results = await query_memory(
-        request,
-        QueryMemoryForm(
-            **{"content": get_last_user_message(form_data["messages"]), "k": 3}
-        ),
-        user,
-    )
-
-    user_context = ""
-    if results and hasattr(results, "documents"):
-        if results.documents and len(results.documents) > 0:
-            for doc_idx, doc in enumerate(results.documents[0]):
-                created_at_date = "Unknown Date"
-
-                if results.metadatas[0][doc_idx].get("created_at"):
-                    created_at_timestamp = results.metadatas[0][doc_idx]["created_at"]
-                    created_at_date = time.strftime(
-                        "%Y-%m-%d", time.localtime(created_at_timestamp)
-                    )
-
-                user_context += f"{doc_idx + 1}. [{created_at_date}] {doc}\n"
-
-    form_data["messages"] = add_or_update_system_message(
-        f"User Context:\n{user_context}\n", form_data["messages"], append=True
-    )
-
-    return form_data
 
 
 async def chat_web_search_handler(
@@ -427,7 +419,6 @@ async def chat_web_search_handler(
                             "name": ", ".join(queries),
                             "type": "web_search",
                             "urls": results["filenames"],
-                            "queries": queries,
                         }
                     )
             elif results.get("docs"):
@@ -439,7 +430,6 @@ async def chat_web_search_handler(
                         "name": ", ".join(queries),
                         "type": "web_search",
                         "urls": results["filenames"],
-                        "queries": queries,
                     }
                 )
 
@@ -643,7 +633,6 @@ async def chat_completion_files_handler(
                         reranking_function=request.app.state.rf,
                         k_reranker=request.app.state.config.TOP_K_RERANKER,
                         r=request.app.state.config.RELEVANCE_THRESHOLD,
-                        hybrid_bm25_weight=request.app.state.config.HYBRID_BM25_WEIGHT,
                         hybrid_search=request.app.state.config.ENABLE_RAG_HYBRID_SEARCH,
                         full_context=request.app.state.config.RAG_FULL_CONTEXT,
                     ),
@@ -815,11 +804,6 @@ async def process_chat_payload(request, form_data, user, metadata, model):
 
     features = form_data.pop("features", None)
     if features:
-        if "memory" in features and features["memory"]:
-            form_data = await chat_memory_handler(
-                request, form_data, extra_params, user
-            )
-
         if "web_search" in features and features["web_search"]:
             form_data = await chat_web_search_handler(
                 request, form_data, extra_params, user
@@ -922,7 +906,6 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                 for doc_context, doc_meta in zip(
                     source["document"], source["metadata"]
                 ):
-                    source_name = source.get("source", {}).get("name", None)
                     citation_id = (
                         doc_meta.get("source", None)
                         or source.get("source", {}).get("id", None)
@@ -930,11 +913,7 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                     )
                     if citation_id not in citation_idx:
                         citation_idx[citation_id] = len(citation_idx) + 1
-                    context_string += (
-                        f'<source id="{citation_idx[citation_id]}"'
-                        + (f' name="{source_name}"' if source_name else "")
-                        + f">{doc_context}</source>\n"
-                    )
+                    context_string += f'<source id="{citation_idx[citation_id]}">{doc_context}</source>\n'
 
         context_string = context_string.strip()
         prompt = get_last_user_message(form_data["messages"])
@@ -997,42 +976,111 @@ async def process_chat_response(
     request, response, form_data, user, metadata, model, events, tasks
 ):
     async def background_tasks_handler():
-        message_map = Chats.get_messages_by_chat_id(metadata["chat_id"])
-        message = message_map.get(metadata["message_id"]) if message_map else None
+        """Enhanced background task handler with comprehensive error handling and logging"""
+        try:
+            log_middleware_operation("Starting background tasks", 
+                                   chat_id=metadata.get("chat_id"), 
+                                   message_id=metadata.get("message_id"))
+            
+            # Safely retrieve message map with validation
+            message_map = Chats.get_messages_by_chat_id(metadata["chat_id"])
+            if message_map is None:
+                log_middleware_warning("Background tasks", "No message map found", 
+                                     chat_id=metadata["chat_id"])
+                return
+            
+            if not isinstance(message_map, dict):
+                log_middleware_warning("Background tasks", "Invalid message map type", 
+                                     chat_id=metadata["chat_id"], 
+                                     message_map_type=type(message_map).__name__)
+                return
+            
+            # Safely get the specific message
+            message = message_map.get(metadata["message_id"]) if message_map else None
+            if not message:
+                log_middleware_warning("Background tasks", "Message not found", 
+                                     chat_id=metadata["chat_id"], 
+                                     message_id=metadata["message_id"])
+                return
+            
+            log_middleware_operation("Processing message for background tasks", 
+                                   chat_id=metadata["chat_id"], 
+                                   message_id=metadata["message_id"])
 
-        if message:
-            message_list = get_message_list(message_map, metadata["message_id"])
+            # Get message list with enhanced error handling
+            try:
+                message_list = get_message_list(message_map, metadata["message_id"])
+                if not message_list:
+                    log_middleware_warning("Background tasks", "Empty message list returned", 
+                                         chat_id=metadata["chat_id"], 
+                                         message_id=metadata["message_id"])
+                    return
+                
+                log_middleware_operation("Retrieved message list", 
+                                       chat_id=metadata["chat_id"], 
+                                       message_count=len(message_list))
+            except Exception as e:
+                log_middleware_error("Getting message list", e, 
+                                   chat_id=metadata["chat_id"], 
+                                   message_id=metadata["message_id"])
+                return
 
             # Remove details tags and files from the messages.
             # as get_message_list creates a new list, it does not affect
             # the original messages outside of this handler
 
             messages = []
-            for message in message_list:
-                content = message.get("content", "")
-                if isinstance(content, list):
-                    for item in content:
-                        if item.get("type") == "text":
-                            content = item["text"]
-                            break
+            for idx, message in enumerate(message_list):
+                try:
+                    # Safely extract content
+                    content = message.get("content", "")
+                    if isinstance(content, list):
+                        for item in content:
+                            if isinstance(item, dict) and item.get("type") == "text":
+                                content = item.get("text", "")
+                                break
+                        else:
+                            content = ""  # No text item found
 
-                if isinstance(content, str):
-                    content = re.sub(
-                        r"<details\b[^>]*>.*?<\/details>|!\[.*?\]\(.*?\)",
-                        "",
-                        content,
-                        flags=re.S | re.I,
-                    ).strip()
+                    if isinstance(content, str):
+                        content = re.sub(
+                            r"<details\b[^>]*>.*?<\/details>",
+                            "",
+                            content,
+                            flags=re.S | re.I,
+                        ).strip()
+                    else:
+                        content = str(content) if content else ""
 
-                messages.append(
-                    {
-                        **message,
-                        "role": message.get(
-                            "role", "assistant"
-                        ),  # Safe fallback for missing role
+                    # Ensure message has required fields with safe fallbacks
+                    processed_message = {
+                        "role": message.get("role", "assistant"),  # Safe fallback for missing role
                         "content": content,
                     }
-                )
+                    
+                    messages.append(processed_message)
+                    
+                except Exception as e:
+                    log_middleware_error("Processing message", e, 
+                                       chat_id=metadata["chat_id"], 
+                                       message_index=idx)
+                    # Continue with other messages
+                    continue
+            
+            if not messages:
+                log_middleware_warning("Background tasks", "No valid messages after processing", 
+                                     chat_id=metadata["chat_id"])
+                return
+                
+            log_middleware_operation("Successfully processed messages for background tasks", 
+                                   chat_id=metadata["chat_id"], 
+                                   processed_count=len(messages))
+            
+        except Exception as e:
+            log_middleware_error("Background tasks handler", e, 
+                               chat_id=metadata.get("chat_id"), 
+                               message_id=metadata.get("message_id"))
+            return
 
             if tasks and messages:
                 if TASKS.TITLE_GENERATION in tasks:
@@ -1147,107 +1195,125 @@ async def process_chat_response(
     # Non-streaming response
     if not isinstance(response, StreamingResponse):
         if event_emitter:
-            if "error" in response:
-                error = response["error"].get("detail", response["error"])
-                Chats.upsert_message_to_chat_by_id_and_message_id(
-                    metadata["chat_id"],
-                    metadata["message_id"],
-                    {
-                        "error": {"content": error},
-                    },
-                )
-
-            if "selected_model_id" in response:
-                Chats.upsert_message_to_chat_by_id_and_message_id(
-                    metadata["chat_id"],
-                    metadata["message_id"],
-                    {
-                        "selectedModelId": response["selected_model_id"],
-                    },
-                )
-
-            choices = response.get("choices", [])
-            if choices and choices[0].get("message", {}).get("content"):
-                content = response["choices"][0]["message"]["content"]
-
-                if content:
-
-                    await event_emitter(
-                        {
-                            "type": "chat:completion",
-                            "data": response,
-                        }
-                    )
-
-                    title = Chats.get_chat_title_by_id(metadata["chat_id"])
-
-                    await event_emitter(
-                        {
-                            "type": "chat:completion",
-                            "data": {
-                                "done": True,
-                                "content": content,
-                                "title": title,
+            try:
+                log_middleware_operation("Processing non-streaming response", 
+                                       chat_id=metadata.get("chat_id"), 
+                                       message_id=metadata.get("message_id"))
+                
+                if "error" in response:
+                    error = response["error"].get("detail", response["error"])
+                    log_middleware_warning("Non-streaming response", "Error in response", 
+                                         chat_id=metadata["chat_id"], 
+                                         error=str(error))
+                    try:
+                        Chats.upsert_message_to_chat_by_id_and_message_id(
+                            metadata["chat_id"],
+                            metadata["message_id"],
+                            {
+                                "error": {"content": error},
                             },
-                        }
-                    )
+                        )
+                    except Exception as e:
+                        log_middleware_error("Saving error message", e, 
+                                           chat_id=metadata["chat_id"], 
+                                           message_id=metadata["message_id"])
 
-                    # Save message in the database
-                    Chats.upsert_message_to_chat_by_id_and_message_id(
-                        metadata["chat_id"],
-                        metadata["message_id"],
-                        {
-                            "role": "assistant",
-                            "content": content,
-                        },
-                    )
+                if "selected_model_id" in response:
+                    try:
+                        Chats.upsert_message_to_chat_by_id_and_message_id(
+                            metadata["chat_id"],
+                            metadata["message_id"],
+                            {
+                                "selectedModelId": response["selected_model_id"],
+                            },
+                        )
+                        log_middleware_operation("Saved selected model ID", 
+                                               chat_id=metadata["chat_id"], 
+                                               model_id=response["selected_model_id"])
+                    except Exception as e:
+                        log_middleware_error("Saving selected model ID", e, 
+                                           chat_id=metadata["chat_id"], 
+                                           message_id=metadata["message_id"])
 
-                    # Send a webhook notification if the user is not active
-                    if not get_active_status_by_user_id(user.id):
-                        webhook_url = Users.get_user_webhook_url_by_id(user.id)
-                        if webhook_url:
-                            post_webhook(
-                                request.app.state.WEBUI_NAME,
-                                webhook_url,
-                                f"{title} - {request.app.state.config.WEBUI_URL}/c/{metadata['chat_id']}\n\n{content}",
+                choices = response.get("choices", [])
+                if choices and choices[0].get("message", {}).get("content"):
+                    content = response["choices"][0]["message"]["content"]
+
+                    if content:
+                        try:
+                            await event_emitter(
                                 {
-                                    "action": "chat",
-                                    "message": content,
-                                    "title": title,
-                                    "url": f"{request.app.state.config.WEBUI_URL}/c/{metadata['chat_id']}",
-                                },
+                                    "type": "chat:completion",
+                                    "data": response,
+                                }
                             )
 
-                    await background_tasks_handler()
+                            title = Chats.get_chat_title_by_id(metadata["chat_id"])
 
-            if events and isinstance(events, list) and isinstance(response, dict):
-                extra_response = {}
-                for event in events:
-                    if isinstance(event, dict):
-                        extra_response.update(event)
-                    else:
-                        extra_response[event] = True
+                            await event_emitter(
+                                {
+                                    "type": "chat:completion",
+                                    "data": {
+                                        "done": True,
+                                        "content": content,
+                                        "title": title,
+                                    },
+                                }
+                            )
 
-                response = {
-                    **extra_response,
-                    **response,
-                }
+                            # Save message in the database with role field
+                            Chats.upsert_message_to_chat_by_id_and_message_id(
+                                metadata["chat_id"],
+                                metadata["message_id"],
+                                {
+                                    "role": "assistant",  # Ensure role field is included
+                                    "content": content,
+                                },
+                            )
+                            
+                            log_middleware_operation("Saved assistant message", 
+                                                   chat_id=metadata["chat_id"], 
+                                                   message_id=metadata["message_id"], 
+                                                   content_length=len(content))
+                            
+                        except Exception as e:
+                            log_middleware_error("Processing chat completion", e, 
+                                               chat_id=metadata["chat_id"], 
+                                               message_id=metadata["message_id"])
+                            
+                            # Send a webhook notification if the user is not active
+                            if not get_active_status_by_user_id(user.id):
+                                webhook_url = Users.get_user_webhook_url_by_id(user.id)
+                                if webhook_url:
+                                    try:
+                                        post_webhook(
+                                            request.app.state.WEBUI_NAME,
+                                            webhook_url,
+                                            f"{title} - {request.app.state.config.WEBUI_URL}/c/{metadata['chat_id']}\n\n{content}",
+                                            {
+                                                "action": "chat",
+                                                "message": content,
+                                                "title": title,
+                                                "url": f"{request.app.state.config.WEBUI_URL}/c/{metadata['chat_id']}",
+                                            },
+                                        )
+                                        log_middleware_operation("Webhook sent", 
+                                                               chat_id=metadata["chat_id"], 
+                                                               webhook_url=webhook_url)
+                                    except Exception as e:
+                                        log_middleware_error("Sending webhook", e, 
+                                                           chat_id=metadata["chat_id"], 
+                                                           webhook_url=webhook_url)
+
+                            await background_tasks_handler()
+                            
+            except Exception as e:
+                log_middleware_error("Non-streaming response processing", e, 
+                                   chat_id=metadata.get("chat_id"), 
+                                   message_id=metadata.get("message_id"))
 
             return response
         else:
-            if events and isinstance(events, list) and isinstance(response, dict):
-                extra_response = {}
-                for event in events:
-                    if isinstance(event, dict):
-                        extra_response.update(event)
-                    else:
-                        extra_response[event] = True
-
-                response = {
-                    **extra_response,
-                    **response,
-                }
-
             return response
 
     # Non standard response
