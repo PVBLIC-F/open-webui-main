@@ -4,6 +4,7 @@ import mimetypes
 import os
 import shutil
 import asyncio
+import re  # For regex-based text cleaning
 
 
 import uuid
@@ -106,11 +107,55 @@ from open_webui.constants import ERROR_MESSAGES
 log = logging.getLogger(__name__)
 log.setLevel(SRC_LOG_LEVELS["RAG"])
 
+# Log that text cleaning is enabled
+log.info("Text cleaning enabled: Special characters will be cleaned before vector database storage")
+
 ##########################################
 #
 # Utility functions
 #
 ##########################################
+
+def clean_text(text: str) -> str:
+    """
+    Clean text by handling special characters before storing in vector database.
+    Handles the most common problematic patterns.
+    
+    Args:
+        text: Raw text to clean
+        
+    Returns:
+        Cleaned text safe for embedding and storage
+    """
+    if not text:
+        return ""
+        
+    # Convert literal newline sequences to actual newlines
+    text = text.replace("\\n", "\n")
+    
+    # Handle other common escape sequences
+    text = text.replace("\\t", "\t")
+    text = text.replace('\\\"', '"')
+    text = text.replace("\\'", "'")
+    
+    # Remove problematic control characters that cause JSON serialization issues
+    text = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F\uFEFF\uFFFE\uFFFF]', '', text)
+    
+    # Remove zero-width spaces and other invisible characters
+    text = re.sub(r'[\u200B-\u200D\uFEFF]', '', text)
+    
+    # Normalize whitespace (reduce multiple spaces/newlines but preserve paragraph structure)
+    text = re.sub(r'\n{3,}', '\n\n', text)  # Limit consecutive newlines
+    text = re.sub(r' {2,}', ' ', text)      # Reduce multiple spaces
+    text = text.strip()                      # Remove leading/trailing whitespace
+    
+    # Ensure proper UTF-8 encoding (handle encoding issues)
+    try:
+        text = text.encode('utf-8', 'ignore').decode('utf-8')
+    except Exception:
+        pass
+        
+    return text
 
 
 def get_ef(
@@ -349,7 +394,6 @@ async def get_rag_config(request: Request, user=Depends(get_admin_user)):
         "ENABLE_RAG_HYBRID_SEARCH": request.app.state.config.ENABLE_RAG_HYBRID_SEARCH,
         "TOP_K_RERANKER": request.app.state.config.TOP_K_RERANKER,
         "RELEVANCE_THRESHOLD": request.app.state.config.RELEVANCE_THRESHOLD,
-        "HYBRID_BM25_WEIGHT": request.app.state.config.HYBRID_BM25_WEIGHT,
         # Content extraction settings
         "CONTENT_EXTRACTION_ENGINE": request.app.state.config.CONTENT_EXTRACTION_ENGINE,
         "PDF_EXTRACT_IMAGES": request.app.state.config.PDF_EXTRACT_IMAGES,
@@ -388,7 +432,6 @@ async def get_rag_config(request: Request, user=Depends(get_admin_user)):
             "WEB_SEARCH_CONCURRENT_REQUESTS": request.app.state.config.WEB_SEARCH_CONCURRENT_REQUESTS,
             "WEB_SEARCH_DOMAIN_FILTER_LIST": request.app.state.config.WEB_SEARCH_DOMAIN_FILTER_LIST,
             "BYPASS_WEB_SEARCH_EMBEDDING_AND_RETRIEVAL": request.app.state.config.BYPASS_WEB_SEARCH_EMBEDDING_AND_RETRIEVAL,
-            "BYPASS_WEB_SEARCH_WEB_LOADER": request.app.state.config.BYPASS_WEB_SEARCH_WEB_LOADER,
             "SEARXNG_QUERY_URL": request.app.state.config.SEARXNG_QUERY_URL,
             "YACY_QUERY_URL": request.app.state.config.YACY_QUERY_URL,
             "YACY_USERNAME": request.app.state.config.YACY_USERNAME,
@@ -441,7 +484,6 @@ class WebConfig(BaseModel):
     WEB_SEARCH_CONCURRENT_REQUESTS: Optional[int] = None
     WEB_SEARCH_DOMAIN_FILTER_LIST: Optional[List[str]] = []
     BYPASS_WEB_SEARCH_EMBEDDING_AND_RETRIEVAL: Optional[bool] = None
-    BYPASS_WEB_SEARCH_WEB_LOADER: Optional[bool] = None
     SEARXNG_QUERY_URL: Optional[str] = None
     YACY_QUERY_URL: Optional[str] = None
     YACY_USERNAME: Optional[str] = None
@@ -495,7 +537,6 @@ class ConfigForm(BaseModel):
     ENABLE_RAG_HYBRID_SEARCH: Optional[bool] = None
     TOP_K_RERANKER: Optional[int] = None
     RELEVANCE_THRESHOLD: Optional[float] = None
-    HYBRID_BM25_WEIGHT: Optional[float] = None
 
     # Content extraction settings
     CONTENT_EXTRACTION_ENGINE: Optional[str] = None
@@ -581,11 +622,6 @@ async def update_rag_config(
         form_data.RELEVANCE_THRESHOLD
         if form_data.RELEVANCE_THRESHOLD is not None
         else request.app.state.config.RELEVANCE_THRESHOLD
-    )
-    request.app.state.config.HYBRID_BM25_WEIGHT = (
-        form_data.HYBRID_BM25_WEIGHT
-        if form_data.HYBRID_BM25_WEIGHT is not None
-        else request.app.state.config.HYBRID_BM25_WEIGHT
     )
 
     # Content extraction settings
@@ -760,9 +796,6 @@ async def update_rag_config(
         request.app.state.config.BYPASS_WEB_SEARCH_EMBEDDING_AND_RETRIEVAL = (
             form_data.web.BYPASS_WEB_SEARCH_EMBEDDING_AND_RETRIEVAL
         )
-        request.app.state.config.BYPASS_WEB_SEARCH_WEB_LOADER = (
-            form_data.web.BYPASS_WEB_SEARCH_WEB_LOADER
-        )
         request.app.state.config.SEARXNG_QUERY_URL = form_data.web.SEARXNG_QUERY_URL
         request.app.state.config.YACY_QUERY_URL = form_data.web.YACY_QUERY_URL
         request.app.state.config.YACY_USERNAME = form_data.web.YACY_USERNAME
@@ -849,7 +882,6 @@ async def update_rag_config(
         "ENABLE_RAG_HYBRID_SEARCH": request.app.state.config.ENABLE_RAG_HYBRID_SEARCH,
         "TOP_K_RERANKER": request.app.state.config.TOP_K_RERANKER,
         "RELEVANCE_THRESHOLD": request.app.state.config.RELEVANCE_THRESHOLD,
-        "HYBRID_BM25_WEIGHT": request.app.state.config.HYBRID_BM25_WEIGHT,
         # Content extraction settings
         "CONTENT_EXTRACTION_ENGINE": request.app.state.config.CONTENT_EXTRACTION_ENGINE,
         "PDF_EXTRACT_IMAGES": request.app.state.config.PDF_EXTRACT_IMAGES,
@@ -888,7 +920,6 @@ async def update_rag_config(
             "WEB_SEARCH_CONCURRENT_REQUESTS": request.app.state.config.WEB_SEARCH_CONCURRENT_REQUESTS,
             "WEB_SEARCH_DOMAIN_FILTER_LIST": request.app.state.config.WEB_SEARCH_DOMAIN_FILTER_LIST,
             "BYPASS_WEB_SEARCH_EMBEDDING_AND_RETRIEVAL": request.app.state.config.BYPASS_WEB_SEARCH_EMBEDDING_AND_RETRIEVAL,
-            "BYPASS_WEB_SEARCH_WEB_LOADER": request.app.state.config.BYPASS_WEB_SEARCH_WEB_LOADER,
             "SEARXNG_QUERY_URL": request.app.state.config.SEARXNG_QUERY_URL,
             "YACY_QUERY_URL": request.app.state.config.YACY_QUERY_URL,
             "YACY_USERNAME": request.app.state.config.YACY_USERNAME,
@@ -1010,7 +1041,9 @@ def save_docs_to_vector_db(
     if len(docs) == 0:
         raise ValueError(ERROR_MESSAGES.EMPTY_CONTENT)
 
-    texts = [doc.page_content for doc in docs]
+    # Clean text content before embedding
+    texts = [clean_text(doc.page_content) for doc in docs]
+    
     metadatas = [
         {
             **doc.metadata,
@@ -1035,6 +1068,10 @@ def save_docs_to_vector_db(
                 or isinstance(value, dict)
             ):
                 metadata[key] = str(value)
+            
+            # Clean string values in metadata too to prevent issues
+            if isinstance(value, str) and key not in ['hash', 'id']:
+                metadata[key] = clean_text(value)
 
     try:
         if VECTOR_DB_CLIENT.has_collection(collection_name=collection_name):
@@ -1125,9 +1162,12 @@ def process_file(
                 # Audio file upload pipeline
                 pass
 
+            # Clean content early
+            cleaned_content = clean_text(form_data.content.replace("<br/>", "\n"))
+
             docs = [
                 Document(
-                    page_content=form_data.content.replace("<br/>", "\n"),
+                    page_content=cleaned_content,
                     metadata={
                         **file.meta,
                         "name": file.filename,
@@ -1138,7 +1178,7 @@ def process_file(
                 )
             ]
 
-            text_content = form_data.content
+            text_content = cleaned_content
         elif form_data.collection_name:
             # Check if the file has already been processed and save the content
             # Usage: /knowledge/{id}/file/add, /knowledge/{id}/file/update
@@ -1150,15 +1190,17 @@ def process_file(
             if result is not None and len(result.ids[0]) > 0:
                 docs = [
                     Document(
-                        page_content=result.documents[0][idx],
+                        page_content=clean_text(result.documents[0][idx]),
                         metadata=result.metadatas[0][idx],
                     )
                     for idx, id in enumerate(result.ids[0])
                 ]
             else:
+                # Clean content
+                cleaned_content = clean_text(file.data.get("content", ""))
                 docs = [
                     Document(
-                        page_content=file.data.get("content", ""),
+                        page_content=cleaned_content,
                         metadata={
                             **file.meta,
                             "name": file.filename,
@@ -1170,6 +1212,8 @@ def process_file(
                 ]
 
             text_content = file.data.get("content", "")
+            # Clean before saving
+            text_content = clean_text(text_content)
         else:
             # Process the file and save the content
             # Usage: /files/
@@ -1196,7 +1240,7 @@ def process_file(
 
                 docs = [
                     Document(
-                        page_content=doc.page_content,
+                        page_content=clean_text(doc.page_content),
                         metadata={
                             **doc.metadata,
                             "name": file.filename,
@@ -1210,7 +1254,7 @@ def process_file(
             else:
                 docs = [
                     Document(
-                        page_content=file.data.get("content", ""),
+                        page_content=clean_text(file.data.get("content", "")),
                         metadata={
                             **file.meta,
                             "name": file.filename,
@@ -1223,12 +1267,16 @@ def process_file(
             text_content = " ".join([doc.page_content for doc in docs])
 
         log.debug(f"text_content: {text_content}")
+        
+        # Clean again before saving
+        cleaned_text = clean_text(text_content)
+        
         Files.update_file_data_by_id(
             file.id,
-            {"content": text_content},
+            {"content": cleaned_text},
         )
 
-        hash = calculate_sha256_string(text_content)
+        hash = calculate_sha256_string(cleaned_text)
         Files.update_file_hash_by_id(file.id, hash)
 
         if not request.app.state.config.BYPASS_EMBEDDING_AND_RETRIEVAL:
@@ -1300,13 +1348,16 @@ def process_text(
     if collection_name is None:
         collection_name = calculate_sha256_string(form_data.content)
 
+    # Clean text before creating document
+    cleaned_content = clean_text(form_data.content)
+    
     docs = [
         Document(
-            page_content=form_data.content,
+            page_content=cleaned_content,
             metadata={"name": form_data.name, "created_by": user.id},
         )
     ]
-    text_content = form_data.content
+    text_content = cleaned_content
     log.debug(f"text_content: {text_content}")
 
     result = save_docs_to_vector_db(request, docs, collection_name, user=user)
@@ -1338,7 +1389,17 @@ def process_youtube_video(
             proxy_url=request.app.state.config.YOUTUBE_LOADER_PROXY_URL,
         )
 
-        docs = loader.load()
+        raw_docs = loader.load()
+        
+        # Clean each document content
+        docs = [
+            Document(
+                page_content=clean_text(doc.page_content),
+                metadata=doc.metadata
+            )
+            for doc in raw_docs
+        ]
+        
         content = " ".join([doc.page_content for doc in docs])
         log.debug(f"text_content: {content}")
 
@@ -1381,7 +1442,17 @@ def process_web(
             verify_ssl=request.app.state.config.ENABLE_WEB_LOADER_SSL_VERIFICATION,
             requests_per_second=request.app.state.config.WEB_SEARCH_CONCURRENT_REQUESTS,
         )
-        docs = loader.load()
+        raw_docs = loader.load()
+        
+        # Clean each document content
+        docs = [
+            Document(
+                page_content=clean_text(doc.page_content),
+                metadata=doc.metadata
+            )
+            for doc in raw_docs
+        ]
+        
         content = " ".join([doc.page_content for doc in docs])
 
         log.debug(f"text_content: {content}")
@@ -1692,29 +1763,23 @@ async def process_web_search(
         )
 
     try:
-        if request.app.state.config.BYPASS_WEB_SEARCH_WEB_LOADER:
-            docs = [
-                Document(
-                    page_content=result.snippet,
-                    metadata={
-                        "source": result.link,
-                        "title": result.title,
-                        "snippet": result.snippet,
-                        "link": result.link,
-                    },
-                )
-                for result in search_results
-                if hasattr(result, "snippet")
-            ]
-        else:
-            loader = get_web_loader(
-                urls,
-                verify_ssl=request.app.state.config.ENABLE_WEB_LOADER_SSL_VERIFICATION,
-                requests_per_second=request.app.state.config.WEB_SEARCH_CONCURRENT_REQUESTS,
-                trust_env=request.app.state.config.WEB_SEARCH_TRUST_ENV,
+        loader = get_web_loader(
+            urls,
+            verify_ssl=request.app.state.config.ENABLE_WEB_LOADER_SSL_VERIFICATION,
+            requests_per_second=request.app.state.config.WEB_SEARCH_CONCURRENT_REQUESTS,
+            trust_env=request.app.state.config.WEB_SEARCH_TRUST_ENV,
+        )
+        raw_docs = await loader.aload()
+        
+        # Clean each document content
+        docs = [
+            Document(
+                page_content=clean_text(doc.page_content),
+                metadata=doc.metadata
             )
-            docs = await loader.aload()
-
+            for doc in raw_docs
+        ]
+        
         urls = [
             doc.metadata.get("source") for doc in docs if doc.metadata.get("source")
         ]  # only keep the urls returned by the loader
@@ -1804,11 +1869,6 @@ def query_doc_handler(
                     if form_data.r
                     else request.app.state.config.RELEVANCE_THRESHOLD
                 ),
-                hybrid_bm25_weight=(
-                    form_data.hybrid_bm25_weight
-                    if form_data.hybrid_bm25_weight
-                    else request.app.state.config.HYBRID_BM25_WEIGHT
-                ),
                 user=user,
             )
         else:
@@ -1859,11 +1919,6 @@ def query_collection_handler(
                     form_data.r
                     if form_data.r
                     else request.app.state.config.RELEVANCE_THRESHOLD
-                ),
-                hybrid_bm25_weight=(
-                    form_data.hybrid_bm25_weight
-                    if form_data.hybrid_bm25_weight
-                    else request.app.state.config.HYBRID_BM25_WEIGHT
                 ),
             )
         else:
@@ -1989,10 +2044,13 @@ def process_files_batch(
     for file in form_data.files:
         try:
             text_content = file.data.get("content", "")
+            
+            # Clean text content
+            cleaned_content = clean_text(text_content.replace("<br/>", "\n"))
 
             docs: List[Document] = [
                 Document(
-                    page_content=text_content.replace("<br/>", "\n"),
+                    page_content=cleaned_content,
                     metadata={
                         **file.meta,
                         "name": file.filename,
@@ -2003,9 +2061,9 @@ def process_files_batch(
                 )
             ]
 
-            hash = calculate_sha256_string(text_content)
+            hash = calculate_sha256_string(cleaned_content)
             Files.update_file_hash_by_id(file.id, hash)
-            Files.update_file_data_by_id(file.id, {"content": text_content})
+            Files.update_file_data_by_id(file.id, {"content": cleaned_content})
 
             all_docs.extend(docs)
             results.append(BatchProcessFilesResult(file_id=file.id, status="prepared"))
