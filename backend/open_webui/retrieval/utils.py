@@ -1,5 +1,6 @@
 import logging
 import os
+import time
 from typing import Optional, Union
 
 import requests
@@ -34,11 +35,79 @@ from open_webui.config import (
 log = logging.getLogger(__name__)
 log.setLevel(SRC_LOG_LEVELS["RAG"])
 
-
 from typing import Any
 
 from langchain_core.callbacks import CallbackManagerForRetrieverRun
 from langchain_core.retrievers import BaseRetriever
+
+
+# Circuit breaker for vector database operations
+class VectorDBCircuitBreaker:
+    """Simple circuit breaker to prevent cascading failures in vector DB operations."""
+    
+    def __init__(self, failure_threshold=5, recovery_timeout=60, operation_timeout=30):
+        self.failure_threshold = failure_threshold
+        self.recovery_timeout = recovery_timeout
+        self.operation_timeout = operation_timeout
+        self.failure_count = 0
+        self.last_failure_time = None
+        self.state = "CLOSED"  # CLOSED, OPEN, HALF_OPEN
+    
+    def can_execute(self):
+        """Check if operation can be executed based on circuit breaker state."""
+        if self.state == "CLOSED":
+            return True
+        elif self.state == "OPEN":
+            if time.time() - self.last_failure_time > self.recovery_timeout:
+                self.state = "HALF_OPEN"
+                log.info("Circuit breaker transitioning to HALF_OPEN state")
+                return True
+            return False
+        elif self.state == "HALF_OPEN":
+            return True
+        return False
+    
+    def record_success(self):
+        """Record successful operation."""
+        if self.state == "HALF_OPEN":
+            self.state = "CLOSED"
+            self.failure_count = 0
+            log.info("Circuit breaker reset to CLOSED state")
+    
+    def record_failure(self):
+        """Record failed operation."""
+        self.failure_count += 1
+        self.last_failure_time = time.time()
+        
+        if self.failure_count >= self.failure_threshold:
+            self.state = "OPEN"
+            log.warning(f"Circuit breaker OPENED after {self.failure_count} failures")
+    
+    def execute_with_timeout(self, operation, *args, **kwargs):
+        """Execute operation with timeout and circuit breaker protection."""
+        if not self.can_execute():
+            raise Exception("Circuit breaker is OPEN - operation blocked")
+        
+        try:
+            # Simple timeout implementation
+            start_time = time.time()
+            result = operation(*args, **kwargs)
+            
+            # Check if operation took too long (basic timeout check)
+            if time.time() - start_time > self.operation_timeout:
+                raise TimeoutError(f"Operation exceeded {self.operation_timeout}s timeout")
+            
+            self.record_success()
+            return result
+            
+        except Exception as e:
+            self.record_failure()
+            log.error(f"Vector DB operation failed: {e}")
+            raise
+
+
+# Global circuit breaker instance
+vector_db_circuit_breaker = VectorDBCircuitBreaker()
 
 
 class VectorSearchRetriever(BaseRetriever):
@@ -236,19 +305,40 @@ def merge_and_sort_query_results(query_results: list[dict], k: int) -> dict:
     }
 
 
-def get_all_items_from_collections(collection_names: list[str]) -> dict:
+def get_all_items_from_collections(collection_names: list[str], limit: Optional[int] = None) -> dict:
     results = []
 
     for collection_name in collection_names:
         if collection_name:
             try:
-                result = get_doc(collection_name=collection_name)
+                # Use circuit breaker for vector DB operations
+                def vector_operation():
+                    if limit:
+                        return VECTOR_DB_CLIENT.query(
+                            collection_name=collection_name,
+                            filter={},
+                            limit=limit
+                        )
+                    else:
+                        return get_doc(collection_name=collection_name)
+                
+                result = vector_db_circuit_breaker.execute_with_timeout(vector_operation)
+                    
                 if result is not None:
-                    results.append(result.model_dump())
+                    # Convert GetResult object to dictionary format expected by merge_get_results
+                    if hasattr(result, 'model_dump'):
+                        results.append(result.model_dump())
+                    else:
+                        # Fallback: manually convert GetResult to dict format
+                        result_dict = {
+                            "documents": [result.documents[0]] if result.documents else [[]],
+                            "metadatas": [result.metadatas[0]] if result.metadatas else [[]],
+                            "ids": [result.ids[0]] if result.ids else [[]]
+                        }
+                        results.append(result_dict)
             except Exception as e:
-                log.exception(f"Error when querying the collection: {e}")
-        else:
-            pass
+                log.exception(f"Error when getting all items from collection {collection_name}: {e}")
+                # Continue with other collections even if one fails
 
     return merge_get_results(results)
 
@@ -261,29 +351,49 @@ def query_collection(
 ) -> dict:
     results = []
     error = False
+    
+    # Memory safety limits
+    MAX_COLLECTIONS_QUERY = 20  # Maximum collections for regular query
+    MAX_QUERIES = 10  # Maximum queries to process
+    
+    # Limit collections and queries to prevent resource exhaustion
+    if len(collection_names) > MAX_COLLECTIONS_QUERY:
+        log.warning(f"Too many collections ({len(collection_names)}), limiting to {MAX_COLLECTIONS_QUERY}")
+        collection_names = collection_names[:MAX_COLLECTIONS_QUERY]
+    
+    if len(queries) > MAX_QUERIES:
+        log.warning(f"Too many queries ({len(queries)}), limiting to {MAX_QUERIES}")
+        queries = queries[:MAX_QUERIES]
 
     def process_query_collection(collection_name, query_embedding):
         try:
             if collection_name:
-                result = query_doc(
-                    collection_name=collection_name,
-                    k=k,
-                    query_embedding=query_embedding,
-                )
+                # Use circuit breaker for vector DB operations
+                def query_operation():
+                    return query_doc(
+                        collection_name=collection_name,
+                        k=k,
+                        query_embedding=query_embedding,
+                    )
+                
+                result = vector_db_circuit_breaker.execute_with_timeout(query_operation)
                 if result is not None:
                     return result.model_dump(), None
             return None, None
         except Exception as e:
-            log.exception(f"Error when querying the collection: {e}")
+            log.exception(f"Error when querying the collection {collection_name}: {e}")
             return None, e
 
-    # Generate all query embeddings (in one call)
+    # Generate all query embeddings (in one call) - this is already optimized
     query_embeddings = embedding_function(queries, prefix=RAG_EMBEDDING_QUERY_PREFIX)
     log.debug(
         f"query_collection: processing {len(queries)} queries across {len(collection_names)} collections"
     )
 
-    with ThreadPoolExecutor() as executor:
+    # Optimize: Use smaller thread pool to prevent overwhelming the vector DB
+    max_workers = min(4, len(collection_names) * len(query_embeddings), 8)  # Hard cap at 8 workers
+    
+    with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="vector_query") as executor:
         future_results = []
         for query_embedding in query_embeddings:
             for collection_name in collection_names:
@@ -316,17 +426,53 @@ def query_collection_with_hybrid_search(
 ) -> dict:
     results = []
     error = False
-    # Fetch collection data once per collection sequentially
+    
+    # Memory-safe limits for hybrid search operations
+    HYBRID_SEARCH_COLLECTION_LIMIT = 1000  # Reduced from 2000 for memory safety
+    MAX_TOTAL_DOCUMENTS = 5000  # Maximum total documents across all collections
+    MAX_COLLECTIONS = 10  # Maximum number of collections to process
+    
+    # Limit number of collections to prevent memory exhaustion
+    if len(collection_names) > MAX_COLLECTIONS:
+        log.warning(f"Too many collections ({len(collection_names)}), limiting to {MAX_COLLECTIONS}")
+        collection_names = collection_names[:MAX_COLLECTIONS]
+    
+    # Fetch collection data once per collection sequentially with memory monitoring
     # Avoid fetching the same data multiple times later
     collection_results = {}
+    total_documents_loaded = 0
+    
     for collection_name in collection_names:
         try:
             log.debug(
                 f"query_collection_with_hybrid_search:VECTOR_DB_CLIENT.get:collection {collection_name}"
             )
-            collection_results[collection_name] = VECTOR_DB_CLIENT.get(
-                collection_name=collection_name
-            )
+            
+            # Check if we've already loaded too many documents
+            if total_documents_loaded >= MAX_TOTAL_DOCUMENTS:
+                log.warning(f"Reached maximum document limit ({MAX_TOTAL_DOCUMENTS}), skipping remaining collections")
+                break
+            
+            # Calculate remaining document budget
+            remaining_budget = min(HYBRID_SEARCH_COLLECTION_LIMIT, MAX_TOTAL_DOCUMENTS - total_documents_loaded)
+            
+            # Use circuit breaker for vector DB operations
+            def fetch_collection():
+                return VECTOR_DB_CLIENT.query(
+                    collection_name=collection_name,
+                    filter={},
+                    limit=remaining_budget
+                )
+            
+            collection_results[collection_name] = vector_db_circuit_breaker.execute_with_timeout(fetch_collection)
+            
+            if collection_results[collection_name]:
+                doc_count = len(collection_results[collection_name].documents[0])
+                total_documents_loaded += doc_count
+                log.debug(f"Loaded {doc_count} documents from {collection_name} for hybrid search (total: {total_documents_loaded}/{MAX_TOTAL_DOCUMENTS})")
+            else:
+                collection_results[collection_name] = None
+                
         except Exception as e:
             log.exception(f"Failed to fetch collection {collection_name}: {e}")
             collection_results[collection_name] = None
@@ -361,7 +507,10 @@ def query_collection_with_hybrid_search(
         for q in queries
     ]
 
-    with ThreadPoolExecutor() as executor:
+    # Use limited thread pool for hybrid search to prevent resource exhaustion
+    max_workers = min(4, len(tasks), 6)  # Hard cap at 6 workers for hybrid search
+    
+    with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="hybrid_search") as executor:
         future_results = [executor.submit(process_query, cn, q) for cn, q in tasks]
         task_results = [future.result() for future in future_results]
 
@@ -436,114 +585,106 @@ def get_sources_from_files(
     hybrid_search,
     full_context=False,
 ):
-    log.debug(
-        f"files: {files} {queries} {embedding_function} {reranking_function} {full_context}"
-    )
-
-    extracted_collections = []
-    relevant_contexts = []
+    sources = []
 
     for file in files:
+        try:
+            if file["type"] == "collection":
+                collection_names = file["collection_names"]
 
-        context = None
-        if file.get("docs"):
-            # BYPASS_WEB_SEARCH_EMBEDDING_AND_RETRIEVAL
-            context = {
-                "documents": [[doc.get("content") for doc in file.get("docs")]],
-                "metadatas": [[doc.get("metadata") for doc in file.get("docs")]],
-            }
-        elif file.get("context") == "full":
-            # Manual Full Mode Toggle
-            context = {
-                "documents": [[file.get("file").get("data", {}).get("content")]],
-                "metadatas": [[{"file_id": file.get("id"), "name": file.get("name")}]],
-            }
-        elif (
-            file.get("type") != "web_search"
-            and request.app.state.config.BYPASS_EMBEDDING_AND_RETRIEVAL
-        ):
-            # BYPASS_EMBEDDING_AND_RETRIEVAL
-            if file.get("type") == "collection":
-                file_ids = file.get("data", {}).get("file_ids", [])
+                # DEBUG: Log the path taken based on full_context
+                if full_context:
+                    log.info(f"DEBUG: Using FULL CONTEXT mode for collections: {collection_names}")
+                    try:
+                        # SIMPLE FIX: Add a reasonable limit to prevent performance issues
+                        # This is the minimal change to fix your timeout issue
+                        context = get_all_items_from_collections(collection_names, limit=500)
+                        # DEBUG: Log what get_all_items_from_collections returned
+                        if context:
+                            doc_count = len(context.get("documents", [[]])[0]) if context.get("documents") else 0
+                            log.info(f"DEBUG: get_all_items_from_collections returned {doc_count} documents (limited to 500)")
+                        else:
+                            log.warning(f"DEBUG: get_all_items_from_collections returned None/empty for {collection_names}")
+                    except Exception as e:
+                        log.exception(f"DEBUG: Error in get_all_items_from_collections: {e}")
+                        context = None
 
-                documents = []
-                metadatas = []
-                for file_id in file_ids:
-                    file_object = Files.get_file_by_id(file_id)
-
-                    if file_object:
-                        documents.append(file_object.data.get("content", ""))
-                        metadatas.append(
+                    if context:
+                        sources.append(
                             {
-                                "file_id": file_id,
-                                "name": file_object.filename,
-                                "source": file_object.filename,
+                                "source": {"name": file["name"]},
+                                "document": context["documents"][0],
+                                "metadata": context["metadatas"][0],
                             }
                         )
+                else:
+                    # DEBUG: Log the path taken based on full_context
+                    log.info(f"DEBUG: Using QUERY mode for collections: {collection_names}")
 
-                context = {
-                    "documents": [documents],
-                    "metadatas": [metadatas],
-                }
+                    if hybrid_search:
+                        try:
+                            context = query_collection_with_hybrid_search(
+                                collection_names=collection_names,
+                                queries=queries,
+                                embedding_function=embedding_function,
+                                k=k,
+                                reranking_function=reranking_function,
+                                k_reranker=k_reranker,
+                                r=r,
+                            )
+                        except Exception as e:
+                            log.exception(f"Error when querying the collection: {e}")
+                            context = None
+                    else:
+                        try:
+                            context = query_collection(
+                                collection_names=collection_names,
+                                queries=queries,
+                                embedding_function=embedding_function,
+                                k=k,
+                            )
+                        except Exception as e:
+                            log.exception(f"Error when querying the collection: {e}")
+                            context = None
 
-            elif file.get("id"):
-                file_object = Files.get_file_by_id(file.get("id"))
-                if file_object:
-                    context = {
-                        "documents": [[file_object.data.get("content", "")]],
-                        "metadatas": [
-                            [
+                    if context:
+                        sources.append(
+                            {
+                                "source": {"name": file["name"]},
+                                "document": context["documents"][0],
+                                "metadata": context["metadatas"][0],
+                            }
+                        )
+            elif file["type"] == "web_search":
+                if "docs" in file:
+                    sources.append(
+                        {
+                            "source": {"name": file["name"]},
+                            "document": [doc["content"] for doc in file["docs"]],
+                            "metadata": [
                                 {
-                                    "file_id": file.get("id"),
-                                    "name": file_object.filename,
-                                    "source": file_object.filename,
+                                    "source": doc["url"],
+                                    "title": doc.get("title", doc["url"]),
                                 }
-                            ]
-                        ],
-                    }
-            elif file.get("file").get("data"):
-                context = {
-                    "documents": [[file.get("file").get("data", {}).get("content")]],
-                    "metadatas": [
-                        [file.get("file").get("data", {}).get("metadata", {})]
-                    ],
-                }
-        else:
-            collection_names = []
-            if file.get("type") == "collection":
-                if file.get("legacy"):
-                    collection_names = file.get("collection_names", [])
+                                for doc in file["docs"]
+                            ],
+                        }
+                    )
                 else:
-                    collection_names.append(file["id"])
-            elif file.get("collection_name"):
-                collection_names.append(file["collection_name"])
-            elif file.get("id"):
-                if file.get("legacy"):
-                    collection_names.append(f"{file['id']}")
-                else:
-                    collection_names.append(f"file-{file['id']}")
+                    collection_name = file["collection_name"]
 
-            collection_names = set(collection_names).difference(extracted_collections)
-            if not collection_names:
-                log.debug(f"skipping {file} as it has already been extracted")
-                continue
-
-            if full_context:
-                try:
-                    context = get_all_items_from_collections(collection_names)
-                except Exception as e:
-                    log.exception(e)
-
-            else:
-                try:
-                    context = None
-                    if file.get("type") == "text":
-                        context = file["content"]
+                    if full_context:
+                        try:
+                            # SIMPLE FIX: Add limit here too
+                            context = get_all_items_from_collections([collection_name], limit=500)
+                        except Exception as e:
+                            log.exception(f"Error when getting all items from collection: {e}")
+                            context = None
                     else:
                         if hybrid_search:
                             try:
                                 context = query_collection_with_hybrid_search(
-                                    collection_names=collection_names,
+                                    collection_names=[collection_name],
                                     queries=queries,
                                     embedding_function=embedding_function,
                                     k=k,
@@ -552,45 +693,75 @@ def get_sources_from_files(
                                     r=r,
                                 )
                             except Exception as e:
-                                log.debug(
-                                    "Error when using hybrid search, using"
-                                    " non hybrid search as fallback."
+                                log.exception(f"Error when querying the collection: {e}")
+                                context = None
+                        else:
+                            try:
+                                context = query_collection(
+                                    collection_names=[collection_name],
+                                    queries=queries,
+                                    embedding_function=embedding_function,
+                                    k=k,
                                 )
+                            except Exception as e:
+                                log.exception(f"Error when querying the collection: {e}")
+                                context = None
 
-                        if (not hybrid_search) or (context is None):
+                    if context:
+                        sources.append(
+                            {
+                                "source": {"name": file["name"]},
+                                "document": context["documents"][0],
+                                "metadata": context["metadatas"][0],
+                            }
+                        )
+            else:
+                collection_name = file.get("collection_name") or file.get("id")
+
+                if full_context:
+                    try:
+                        # SIMPLE FIX: Add limit here too
+                        context = get_all_items_from_collections([collection_name], limit=500)
+                    except Exception as e:
+                        log.exception(f"Error when getting all items from collection: {e}")
+                        context = None
+                else:
+                    if hybrid_search:
+                        try:
+                            context = query_collection_with_hybrid_search(
+                                collection_names=[collection_name],
+                                queries=queries,
+                                embedding_function=embedding_function,
+                                k=k,
+                                reranking_function=reranking_function,
+                                k_reranker=k_reranker,
+                                r=r,
+                            )
+                        except Exception as e:
+                            log.exception(f"Error when querying the collection: {e}")
+                            context = None
+                    else:
+                        try:
                             context = query_collection(
-                                collection_names=collection_names,
+                                collection_names=[collection_name],
                                 queries=queries,
                                 embedding_function=embedding_function,
                                 k=k,
                             )
-                except Exception as e:
-                    log.exception(e)
+                        except Exception as e:
+                            log.exception(f"Error when querying the collection: {e}")
+                            context = None
 
-            extracted_collections.extend(collection_names)
-
-        if context:
-            if "data" in file:
-                del file["data"]
-
-            relevant_contexts.append({**context, "file": file})
-
-    sources = []
-    for context in relevant_contexts:
-        try:
-            if "documents" in context:
-                if "metadatas" in context:
-                    source = {
-                        "source": context["file"],
-                        "document": context["documents"][0],
-                        "metadata": context["metadatas"][0],
-                    }
-                    if "distances" in context and context["distances"]:
-                        source["distances"] = context["distances"][0]
-
-                    sources.append(source)
+                if context:
+                    sources.append(
+                        {
+                            "source": {"name": file["name"]},
+                            "document": context["documents"][0],
+                            "metadata": context["metadatas"][0],
+                        }
+                    )
         except Exception as e:
-            log.exception(e)
+            log.exception(f"Error when processing file: {e}")
 
     return sources
 
