@@ -3,6 +3,7 @@ import json
 import time
 import uuid
 from typing import Optional
+import traceback
 
 from open_webui.internal.db import Base, get_db
 from open_webui.models.tags import TagModel, Tag, Tags
@@ -12,6 +13,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import BigInteger, Boolean, Column, String, Text, JSON
 from sqlalchemy import or_, func, select, and_, text
 from sqlalchemy.sql import exists
+from sqlalchemy.dialects.postgresql import JSONB
 
 ####################
 # Chat DB Schema
@@ -20,6 +22,47 @@ from sqlalchemy.sql import exists
 log = logging.getLogger(__name__)
 log.setLevel(SRC_LOG_LEVELS["MODELS"])
 
+# Enhanced logging helper functions
+def log_operation(operation: str, chat_id: str = None, user_id: str = None, **kwargs):
+    """Log chat operations with consistent formatting"""
+    context = []
+    if chat_id:
+        context.append(f"chat_id={chat_id}")
+    if user_id:
+        context.append(f"user_id={user_id}")
+    for key, value in kwargs.items():
+        context.append(f"{key}={value}")
+    
+    context_str = f" ({', '.join(context)})" if context else ""
+    log.info(f"💬 {operation}{context_str}")
+
+def log_error(operation: str, error: Exception, chat_id: str = None, user_id: str = None, **kwargs):
+    """Log errors with consistent formatting and context"""
+    context = []
+    if chat_id:
+        context.append(f"chat_id={chat_id}")
+    if user_id:
+        context.append(f"user_id={user_id}")
+    for key, value in kwargs.items():
+        context.append(f"{key}={value}")
+    
+    context_str = f" ({', '.join(context)})" if context else ""
+    log.error(f"❌ {operation} failed{context_str}: {str(error)}")
+    log.debug(f"❌ {operation} traceback{context_str}: {traceback.format_exc()}")
+
+def log_warning(operation: str, message: str, chat_id: str = None, user_id: str = None, **kwargs):
+    """Log warnings with consistent formatting"""
+    context = []
+    if chat_id:
+        context.append(f"chat_id={chat_id}")
+    if user_id:
+        context.append(f"user_id={user_id}")
+    for key, value in kwargs.items():
+        context.append(f"{key}={value}")
+    
+    context_str = f" ({', '.join(context)})" if context else ""
+    log.warning(f"⚠️  {operation}{context_str}: {message}")
+
 
 class Chat(Base):
     __tablename__ = "chat"
@@ -27,7 +70,7 @@ class Chat(Base):
     id = Column(String, primary_key=True)
     user_id = Column(String)
     title = Column(Text)
-    chat = Column(JSON)
+    chat = Column(JSONB)
 
     created_at = Column(BigInteger)
     updated_at = Column(BigInteger)
@@ -36,7 +79,7 @@ class Chat(Base):
     archived = Column(Boolean, default=False)
     pinned = Column(Boolean, default=False, nullable=True)
 
-    meta = Column(JSON, server_default="{}")
+    meta = Column(JSONB, server_default="{}")
     folder_id = Column(Text, nullable=True)
 
 
@@ -106,28 +149,50 @@ class ChatTitleIdResponse(BaseModel):
 
 class ChatTable:
     def insert_new_chat(self, user_id: str, form_data: ChatForm) -> Optional[ChatModel]:
-        with get_db() as db:
-            id = str(uuid.uuid4())
-            chat = ChatModel(
-                **{
-                    "id": id,
-                    "user_id": user_id,
-                    "title": (
-                        form_data.chat["title"]
-                        if "title" in form_data.chat
-                        else "New Chat"
-                    ),
-                    "chat": form_data.chat,
-                    "created_at": int(time.time()),
-                    "updated_at": int(time.time()),
-                }
-            )
+        """Insert a new chat with enhanced error handling and logging"""
+        try:
+            log_operation("Creating new chat", user_id=user_id)
+            
+            with get_db() as db:
+                id = str(uuid.uuid4())
+                
+                # Validate chat data
+                if not form_data.chat:
+                    log_warning("Creating new chat", "Empty chat data provided", user_id=user_id)
+                    return None
+                
+                title = (
+                    form_data.chat.get("title", "New Chat")
+                    if isinstance(form_data.chat, dict)
+                    else "New Chat"
+                )
+                
+                chat = ChatModel(
+                    **{
+                        "id": id,
+                        "user_id": user_id,
+                        "title": title,
+                        "chat": form_data.chat,
+                        "created_at": int(time.time()),
+                        "updated_at": int(time.time()),
+                    }
+                )
 
-            result = Chat(**chat.model_dump())
-            db.add(result)
-            db.commit()
-            db.refresh(result)
-            return ChatModel.model_validate(result) if result else None
+                result = Chat(**chat.model_dump())
+                db.add(result)
+                db.commit()
+                db.refresh(result)
+                
+                if result:
+                    log_operation("Chat created successfully", chat_id=id, user_id=user_id, title=title)
+                    return ChatModel.model_validate(result)
+                else:
+                    log_warning("Creating new chat", "Database operation returned None", user_id=user_id)
+                    return None
+                    
+        except Exception as e:
+            log_error("Creating new chat", e, user_id=user_id)
+            return None
 
     def import_chat(
         self, user_id: str, form_data: ChatImportForm
@@ -210,11 +275,41 @@ class ChatTable:
         return chat.chat.get("title", "New Chat")
 
     def get_messages_by_chat_id(self, id: str) -> Optional[dict]:
-        chat = self.get_chat_by_id(id)
-        if chat is None:
-            return None
+        """Get messages by chat ID with enhanced error handling and logging"""
+        try:
+            log_operation("Retrieving messages", chat_id=id)
+            
+            chat = self.get_chat_by_id(id)
+            if chat is None:
+                log_warning("Retrieving messages", "Chat not found", chat_id=id)
+                return None
 
-        return chat.chat.get("history", {}).get("messages", {}) or {}
+            # Safely extract messages with validation
+            chat_data = chat.chat
+            if not isinstance(chat_data, dict):
+                log_warning("Retrieving messages", "Invalid chat data format", chat_id=id, 
+                           data_type=type(chat_data).__name__)
+                return {}
+            
+            history = chat_data.get("history", {})
+            if not isinstance(history, dict):
+                log_warning("Retrieving messages", "Invalid history format", chat_id=id,
+                           history_type=type(history).__name__)
+                return {}
+            
+            messages = history.get("messages", {})
+            if not isinstance(messages, dict):
+                log_warning("Retrieving messages", "Invalid messages format", chat_id=id,
+                           messages_type=type(messages).__name__)
+                return {}
+            
+            log_operation("Messages retrieved successfully", chat_id=id, 
+                         message_count=len(messages))
+            return messages or {}
+            
+        except Exception as e:
+            log_error("Retrieving messages", e, chat_id=id)
+            return {}
 
     def get_message_by_id_and_message_id(
         self, id: str, message_id: str
@@ -228,25 +323,76 @@ class ChatTable:
     def upsert_message_to_chat_by_id_and_message_id(
         self, id: str, message_id: str, message: dict
     ) -> Optional[ChatModel]:
-        chat = self.get_chat_by_id(id)
-        if chat is None:
+        """Upsert message with enhanced error handling and logging"""
+        try:
+            log_operation("Upserting message", chat_id=id, message_id=message_id)
+            
+            # Validate inputs
+            if not message_id:
+                log_warning("Upserting message", "Empty message_id provided", chat_id=id)
+                return None
+                
+            if not isinstance(message, dict):
+                log_warning("Upserting message", "Invalid message format", chat_id=id, 
+                           message_id=message_id, message_type=type(message).__name__)
+                return None
+            
+            chat = self.get_chat_by_id(id)
+            if chat is None:
+                log_warning("Upserting message", "Chat not found", chat_id=id, message_id=message_id)
+                return None
+
+            # Safely handle chat data structure
+            chat_data = chat.chat
+            if not isinstance(chat_data, dict):
+                log_warning("Upserting message", "Invalid chat data format", chat_id=id, 
+                           message_id=message_id, data_type=type(chat_data).__name__)
+                return None
+                
+            history = chat_data.get("history", {})
+            if not isinstance(history, dict):
+                history = {}
+                log_warning("Upserting message", "Resetting invalid history format", 
+                           chat_id=id, message_id=message_id)
+            
+            # Ensure messages dict exists
+            if "messages" not in history or not isinstance(history["messages"], dict):
+                history["messages"] = {}
+                log_operation("Initializing messages dict", chat_id=id, message_id=message_id)
+
+            # Upsert the message
+            if message_id in history["messages"]:
+                # Update existing message
+                existing_message = history["messages"][message_id]
+                if isinstance(existing_message, dict):
+                    history["messages"][message_id] = {
+                        **existing_message,
+                        **message,
+                    }
+                    log_operation("Updated existing message", chat_id=id, message_id=message_id)
+                else:
+                    history["messages"][message_id] = message
+                    log_warning("Upserting message", "Replaced invalid existing message", 
+                               chat_id=id, message_id=message_id)
+            else:
+                # Insert new message
+                history["messages"][message_id] = message
+                log_operation("Inserted new message", chat_id=id, message_id=message_id)
+
+            history["currentId"] = message_id
+            chat_data["history"] = history
+            
+            result = self.update_chat_by_id(id, chat_data)
+            if result:
+                log_operation("Message upserted successfully", chat_id=id, message_id=message_id)
+            else:
+                log_warning("Upserting message", "Failed to update chat", chat_id=id, message_id=message_id)
+            
+            return result
+            
+        except Exception as e:
+            log_error("Upserting message", e, chat_id=id, message_id=message_id)
             return None
-
-        chat = chat.chat
-        history = chat.get("history", {})
-
-        if message_id in history.get("messages", {}):
-            history["messages"][message_id] = {
-                **history["messages"][message_id],
-                **message,
-            }
-        else:
-            history["messages"][message_id] = message
-
-        history["currentId"] = message_id
-
-        chat["history"] = history
-        return self.update_chat_by_id(id, chat)
 
     def add_message_status_to_chat_by_id_and_message_id(
         self, id: str, message_id: str, status: dict
@@ -377,47 +523,22 @@ class ChatTable:
             return False
 
     def get_archived_chat_list_by_user_id(
-        self,
-        user_id: str,
-        filter: Optional[dict] = None,
-        skip: int = 0,
-        limit: int = 50,
+        self, user_id: str, skip: int = 0, limit: int = 50
     ) -> list[ChatModel]:
-
         with get_db() as db:
-            query = db.query(Chat).filter_by(user_id=user_id, archived=True)
-
-            if filter:
-                query_key = filter.get("query")
-                if query_key:
-                    query = query.filter(Chat.title.ilike(f"%{query_key}%"))
-
-                order_by = filter.get("order_by")
-                direction = filter.get("direction")
-
-                if order_by and direction and getattr(Chat, order_by):
-                    if direction.lower() == "asc":
-                        query = query.order_by(getattr(Chat, order_by).asc())
-                    elif direction.lower() == "desc":
-                        query = query.order_by(getattr(Chat, order_by).desc())
-                    else:
-                        raise ValueError("Invalid direction for ordering")
-            else:
-                query = query.order_by(Chat.updated_at.desc())
-
-            if skip:
-                query = query.offset(skip)
-            if limit:
-                query = query.limit(limit)
-
-            all_chats = query.all()
+            all_chats = (
+                db.query(Chat)
+                .filter_by(user_id=user_id, archived=True)
+                .order_by(Chat.updated_at.desc())
+                # .limit(limit).offset(skip)
+                .all()
+            )
             return [ChatModel.model_validate(chat) for chat in all_chats]
 
     def get_chat_list_by_user_id(
         self,
         user_id: str,
         include_archived: bool = False,
-        filter: Optional[dict] = None,
         skip: int = 0,
         limit: int = 50,
     ) -> list[ChatModel]:
@@ -426,23 +547,7 @@ class ChatTable:
             if not include_archived:
                 query = query.filter_by(archived=False)
 
-            if filter:
-                query_key = filter.get("query")
-                if query_key:
-                    query = query.filter(Chat.title.ilike(f"%{query_key}%"))
-
-                order_by = filter.get("order_by")
-                direction = filter.get("direction")
-
-                if order_by and direction and getattr(Chat, order_by):
-                    if direction.lower() == "asc":
-                        query = query.order_by(getattr(Chat, order_by).asc())
-                    elif direction.lower() == "desc":
-                        query = query.order_by(getattr(Chat, order_by).desc())
-                    else:
-                        raise ValueError("Invalid direction for ordering")
-            else:
-                query = query.order_by(Chat.updated_at.desc())
+            query = query.order_by(Chat.updated_at.desc())
 
             if skip:
                 query = query.offset(skip)
@@ -583,9 +688,7 @@ class ChatTable:
         search_text = search_text.lower().strip()
 
         if not search_text:
-            return self.get_chat_list_by_user_id(
-                user_id, include_archived, filter={}, skip=skip, limit=limit
-            )
+            return self.get_chat_list_by_user_id(user_id, include_archived, skip, limit)
 
         search_text_words = search_text.split(" ")
 
@@ -662,7 +765,7 @@ class ChatTable:
                     )
 
             elif dialect_name == "postgresql":
-                # PostgreSQL relies on proper JSON query for search
+                # PostgreSQL: using JSONB optimized queries
                 query = query.filter(
                     (
                         Chat.title.ilike(
@@ -672,7 +775,7 @@ class ChatTable:
                             """
                             EXISTS (
                                 SELECT 1
-                                FROM json_array_elements(Chat.chat->'messages') AS message
+                                FROM jsonb_array_elements(Chat.chat->'messages') AS message
                                 WHERE LOWER(message->>'content') LIKE '%' || :search_text || '%'
                             )
                             """
@@ -687,7 +790,7 @@ class ChatTable:
                             """
                             NOT EXISTS (
                                 SELECT 1
-                                FROM json_array_elements_text(Chat.meta->'tags') AS tag
+                                FROM jsonb_array_elements_text(Chat.meta->'tags') AS tag
                             )
                             """
                         )
@@ -700,7 +803,7 @@ class ChatTable:
                                     f"""
                                     EXISTS (
                                         SELECT 1
-                                        FROM json_array_elements_text(Chat.meta->'tags') AS tag
+                                        FROM jsonb_array_elements_text(Chat.meta->'tags') AS tag
                                         WHERE tag = :tag_id_{tag_idx}
                                     )
                                     """
@@ -787,10 +890,10 @@ class ChatTable:
                     )
                 ).params(tag_id=tag_id)
             elif db.bind.dialect.name == "postgresql":
-                # PostgreSQL JSON query for tags within the meta JSON field (for `json` type)
+                # PostgreSQL JSONB optimized query with contains operator
                 query = query.filter(
                     text(
-                        "EXISTS (SELECT 1 FROM json_array_elements_text(Chat.meta->'tags') elem WHERE elem = :tag_id)"
+                        "Chat.meta->'tags' ? :tag_id"
                     )
                 ).params(tag_id=tag_id)
             else:
@@ -841,10 +944,10 @@ class ChatTable:
                 ).params(tag_id=tag_id)
 
             elif db.bind.dialect.name == "postgresql":
-                # PostgreSQL JSONB support for querying the tags inside the `meta` JSON field
+                # PostgreSQL JSONB contains operator for better performance
                 query = query.filter(
                     text(
-                        "EXISTS (SELECT 1 FROM json_array_elements_text(Chat.meta->'tags') elem WHERE elem = :tag_id)"
+                        "Chat.meta->'tags' ? :tag_id"
                     )
                 ).params(tag_id=tag_id)
 
