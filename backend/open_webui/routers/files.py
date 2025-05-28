@@ -32,7 +32,7 @@ from open_webui.models.files import (
 from open_webui.models.knowledge import Knowledges
 
 from open_webui.routers.knowledge import get_knowledge, get_knowledge_list
-from open_webui.routers.retrieval import ProcessFileForm, process_file
+from open_webui.routers.retrieval import ProcessFileForm, process_file, delete_file_from_vector_db
 from open_webui.routers.audio import transcribe
 from open_webui.storage.provider import Storage
 from open_webui.utils.auth import get_admin_user, get_verified_user
@@ -553,7 +553,7 @@ async def get_file_content_by_id(id: str, user=Depends(get_verified_user)):
                     detail=ERROR_MESSAGES.NOT_FOUND,
                 )
         else:
-            # File path doesn’t exist, return the content as .txt if possible
+            # File path doesn't exist, return the content as .txt if possible
             file_content = file.content.get("content", "")
             file_name = file.filename
 
@@ -580,39 +580,65 @@ async def get_file_content_by_id(id: str, user=Depends(get_verified_user)):
 
 @router.delete("/{id}")
 async def delete_file_by_id(id: str, user=Depends(get_verified_user)):
+    log.info(f"🗑️  File deletion request received for file: {id} by user: {user.email}")
+    
     file = Files.get_file_by_id(id)
 
     if not file:
+        log.warning(f"❌ File {id} not found for deletion")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=ERROR_MESSAGES.NOT_FOUND,
         )
+
+    log.info(f"📁 File found: {file.filename} (owner: {file.user_id})")
 
     if (
         file.user_id == user.id
         or user.role == "admin"
         or has_access_to_file(id, "write", user)
     ):
-        # We should add Chroma cleanup here
+        log.info(f"✅ User {user.email} has permission to delete file {id}")
+        
+        # Clean up vector embeddings first (before deleting file record)
+        log.info(f"🧹 Starting vector database cleanup for file {id}")
+        try:
+            vector_cleanup_success = delete_file_from_vector_db(id)
+            if vector_cleanup_success:
+                log.info(f"✅ Successfully cleaned up vector embeddings for file {id}")
+            else:
+                log.warning(f"⚠️  Could not clean up vector embeddings for file {id}")
+        except Exception as e:
+            log.error(f"❌ Error cleaning up vector embeddings for file {id}: {e}")
+            # Continue with file deletion even if vector cleanup fails
 
+        log.info(f"🗄️  Deleting file record from database for file {id}")
         result = Files.delete_file_by_id(id)
         if result:
+            log.info(f"✅ File record deleted successfully for file {id}")
+            
+            log.info(f"💾 Deleting physical file from storage for file {id}")
             try:
                 Storage.delete_file(file.path)
+                log.info(f"✅ Physical file deleted successfully for file {id}")
             except Exception as e:
                 log.exception(e)
-                log.error("Error deleting files")
+                log.error(f"❌ Error deleting physical file {id}: {e}")
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=ERROR_MESSAGES.DEFAULT("Error deleting files"),
                 )
+            
+            log.info(f"🎉 File {id} ({file.filename}) completely deleted successfully")
             return {"message": "File deleted successfully"}
         else:
+            log.error(f"❌ Failed to delete file record for file {id}")
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=ERROR_MESSAGES.DEFAULT("Error deleting file"),
             )
     else:
+        log.warning(f"❌ User {user.email} does not have permission to delete file {id}")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=ERROR_MESSAGES.NOT_FOUND,
