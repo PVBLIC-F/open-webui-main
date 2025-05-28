@@ -2273,31 +2273,23 @@ def delete_file_from_vector_db(file_id: str) -> bool:
         bool: True if deletion was successful, False otherwise
     """
     try:
-        log.info(f"🔍 Starting vector cleanup for file {file_id}")
-        
         # Get the file record to access its hash and collection info
         file = Files.get_file_by_id(file_id)
         if not file:
-            log.warning(f"❌ File {file_id} not found in database")
             return False
         
         # Get the file hash for vector deletion
         file_hash = file.hash
         if not file_hash:
-            log.warning(f"❌ No hash found for file {file_id}")
             return False
-        
-        log.info(f"🔑 File hash: {file_hash}")
         
         # Try to get collection name from file metadata
         collection_name = None
         if hasattr(file, 'meta') and file.meta:
             collection_name = file.meta.get('collection_name')
-            log.info(f"📚 Collection from metadata: {collection_name}")
         
         # If no collection name in metadata, try common patterns used by Open WebUI
         if not collection_name:
-            log.info("📚 No collection in metadata, trying common patterns")
             # Open WebUI typically uses these patterns:
             possible_collections = [
                 f"open-webui_file-{file_id}",  # Most common pattern
@@ -2308,25 +2300,17 @@ def delete_file_from_vector_db(file_id: str) -> bool:
             # Try each possible collection name
             for possible_collection in possible_collections:
                 try:
-                    log.info(f"🔍 Checking collection: {possible_collection}")
                     if VECTOR_DB_CLIENT.has_collection(collection_name=possible_collection):
-                        log.info(f"✅ Found collection: {possible_collection}")
                         result = VECTOR_DB_CLIENT.delete(
                             collection_name=possible_collection,
                             filter={"hash": file_hash},
                         )
-                        log.info(f"🗑️ Delete result: {result}")
                         # Pinecone returns None on successful deletion
-                        log.info(f"✅ Successfully deleted from {possible_collection}")
                         return True
-                    else:
-                        log.info(f"❌ Collection not found: {possible_collection}")
                 except Exception as e:
-                    log.error(f"❌ Error checking collection {possible_collection}: {e}")
                     continue
             
             # If none of the standard patterns work, try searching through all collections
-            log.info("🔍 Trying fallback: search all collections")
             try:
                 deleted_count = 0
                 
@@ -2334,7 +2318,6 @@ def delete_file_from_vector_db(file_id: str) -> bool:
                 if hasattr(VECTOR_DB_CLIENT, 'list_collections'):
                     try:
                         collections = VECTOR_DB_CLIENT.list_collections()
-                        log.info(f"📚 Found {len(collections) if collections else 0} collections")
                         
                         for collection in collections:
                             try:
@@ -2345,44 +2328,30 @@ def delete_file_from_vector_db(file_id: str) -> bool:
                                     )
                                     # Pinecone returns None on successful deletion, so any non-exception means success
                                     deleted_count += 1
-                                    log.info(f"✅ Deleted from collection: {collection}")
                             except Exception as e:
                                 continue
                     except Exception as e:
-                        log.error(f"❌ Error listing collections: {e}")
                         pass
                 
-                if deleted_count > 0:
-                    log.info(f"✅ Fallback successful: deleted from {deleted_count} collections")
-                    return True
-                else:
-                    log.warning("⚠️ Fallback found no vectors to delete")
-                    return False
+                return deleted_count > 0
                 
             except Exception as e:
-                log.error(f"❌ Fallback error: {e}")
                 return False
         
         # Delete from the specific collection found in metadata
         if collection_name and VECTOR_DB_CLIENT.has_collection(collection_name=collection_name):
             try:
-                log.info(f"🗑️ Deleting from metadata collection: {collection_name}")
                 result = VECTOR_DB_CLIENT.delete(
                     collection_name=collection_name,
                     filter={"hash": file_hash},
                 )
-                log.info(f"🗑️ Delete result: {result}")
                 # Pinecone returns None on successful deletion, so we check for no exception
                 # rather than checking the return value
-                log.info(f"✅ Successfully deleted from metadata collection: {collection_name}")
                 return True
             except Exception as e:
-                log.error(f"❌ Error deleting from metadata collection {collection_name}: {e}")
                 return False
         else:
-            log.warning(f"❌ Collection {collection_name} not found or invalid")
             return False
             
     except Exception as e:
-        log.error(f"❌ Unexpected error in delete_file_from_vector_db: {e}")
         return False
