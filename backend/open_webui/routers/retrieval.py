@@ -4,7 +4,8 @@ import mimetypes
 import os
 import shutil
 import asyncio
-
+import re
+from typing import List as TypingList
 
 import uuid
 from datetime import datetime
@@ -239,11 +240,6 @@ async def get_embedding_config(request: Request, user=Depends(get_admin_user)):
             "url": request.app.state.config.RAG_OLLAMA_BASE_URL,
             "key": request.app.state.config.RAG_OLLAMA_API_KEY,
         },
-        "azure_openai_config": {
-            "url": request.app.state.config.RAG_AZURE_OPENAI_BASE_URL,
-            "key": request.app.state.config.RAG_AZURE_OPENAI_API_KEY,
-            "version": request.app.state.config.RAG_AZURE_OPENAI_API_VERSION,
-        },
     }
 
 
@@ -257,16 +253,9 @@ class OllamaConfigForm(BaseModel):
     key: str
 
 
-class AzureOpenAIConfigForm(BaseModel):
-    url: str
-    key: str
-    version: str
-
-
 class EmbeddingModelUpdateForm(BaseModel):
     openai_config: Optional[OpenAIConfigForm] = None
     ollama_config: Optional[OllamaConfigForm] = None
-    azure_openai_config: Optional[AzureOpenAIConfigForm] = None
     embedding_engine: str
     embedding_model: str
     embedding_batch_size: Optional[int] = 1
@@ -283,11 +272,7 @@ async def update_embedding_config(
         request.app.state.config.RAG_EMBEDDING_ENGINE = form_data.embedding_engine
         request.app.state.config.RAG_EMBEDDING_MODEL = form_data.embedding_model
 
-        if request.app.state.config.RAG_EMBEDDING_ENGINE in [
-            "ollama",
-            "openai",
-            "azure_openai",
-        ]:
+        if request.app.state.config.RAG_EMBEDDING_ENGINE in ["ollama", "openai"]:
             if form_data.openai_config is not None:
                 request.app.state.config.RAG_OPENAI_API_BASE_URL = (
                     form_data.openai_config.url
@@ -302,17 +287,6 @@ async def update_embedding_config(
                 )
                 request.app.state.config.RAG_OLLAMA_API_KEY = (
                     form_data.ollama_config.key
-                )
-
-            if form_data.azure_openai_config is not None:
-                request.app.state.config.RAG_AZURE_OPENAI_BASE_URL = (
-                    form_data.azure_openai_config.url
-                )
-                request.app.state.config.RAG_AZURE_OPENAI_API_KEY = (
-                    form_data.azure_openai_config.key
-                )
-                request.app.state.config.RAG_AZURE_OPENAI_API_VERSION = (
-                    form_data.azure_openai_config.version
                 )
 
             request.app.state.config.RAG_EMBEDDING_BATCH_SIZE = (
@@ -331,27 +305,14 @@ async def update_embedding_config(
             (
                 request.app.state.config.RAG_OPENAI_API_BASE_URL
                 if request.app.state.config.RAG_EMBEDDING_ENGINE == "openai"
-                else (
-                    request.app.state.config.RAG_OLLAMA_BASE_URL
-                    if request.app.state.config.RAG_EMBEDDING_ENGINE == "ollama"
-                    else request.app.state.config.RAG_AZURE_OPENAI_BASE_URL
-                )
+                else request.app.state.config.RAG_OLLAMA_BASE_URL
             ),
             (
                 request.app.state.config.RAG_OPENAI_API_KEY
                 if request.app.state.config.RAG_EMBEDDING_ENGINE == "openai"
-                else (
-                    request.app.state.config.RAG_OLLAMA_API_KEY
-                    if request.app.state.config.RAG_EMBEDDING_ENGINE == "ollama"
-                    else request.app.state.config.RAG_AZURE_OPENAI_API_KEY
-                )
+                else request.app.state.config.RAG_OLLAMA_API_KEY
             ),
             request.app.state.config.RAG_EMBEDDING_BATCH_SIZE,
-            azure_api_version=(
-                request.app.state.config.RAG_AZURE_OPENAI_API_VERSION
-                if request.app.state.config.RAG_EMBEDDING_ENGINE == "azure_openai"
-                else None
-            ),
         )
 
         return {
@@ -366,11 +327,6 @@ async def update_embedding_config(
             "ollama_config": {
                 "url": request.app.state.config.RAG_OLLAMA_BASE_URL,
                 "key": request.app.state.config.RAG_OLLAMA_API_KEY,
-            },
-            "azure_openai_config": {
-                "url": request.app.state.config.RAG_AZURE_OPENAI_BASE_URL,
-                "key": request.app.state.config.RAG_AZURE_OPENAI_API_KEY,
-                "version": request.app.state.config.RAG_AZURE_OPENAI_API_VERSION,
             },
         }
     except Exception as e:
@@ -398,15 +354,6 @@ async def get_rag_config(request: Request, user=Depends(get_admin_user)):
         # Content extraction settings
         "CONTENT_EXTRACTION_ENGINE": request.app.state.config.CONTENT_EXTRACTION_ENGINE,
         "PDF_EXTRACT_IMAGES": request.app.state.config.PDF_EXTRACT_IMAGES,
-        "DATALAB_MARKER_API_KEY": request.app.state.config.DATALAB_MARKER_API_KEY,
-        "DATALAB_MARKER_LANGS": request.app.state.config.DATALAB_MARKER_LANGS,
-        "DATALAB_MARKER_SKIP_CACHE": request.app.state.config.DATALAB_MARKER_SKIP_CACHE,
-        "DATALAB_MARKER_FORCE_OCR": request.app.state.config.DATALAB_MARKER_FORCE_OCR,
-        "DATALAB_MARKER_PAGINATE": request.app.state.config.DATALAB_MARKER_PAGINATE,
-        "DATALAB_MARKER_STRIP_EXISTING_OCR": request.app.state.config.DATALAB_MARKER_STRIP_EXISTING_OCR,
-        "DATALAB_MARKER_DISABLE_IMAGE_EXTRACTION": request.app.state.config.DATALAB_MARKER_DISABLE_IMAGE_EXTRACTION,
-        "DATALAB_MARKER_USE_LLM": request.app.state.config.DATALAB_MARKER_USE_LLM,
-        "DATALAB_MARKER_OUTPUT_FORMAT": request.app.state.config.DATALAB_MARKER_OUTPUT_FORMAT,
         "EXTERNAL_DOCUMENT_LOADER_URL": request.app.state.config.EXTERNAL_DOCUMENT_LOADER_URL,
         "EXTERNAL_DOCUMENT_LOADER_API_KEY": request.app.state.config.EXTERNAL_DOCUMENT_LOADER_API_KEY,
         "TIKA_SERVER_URL": request.app.state.config.TIKA_SERVER_URL,
@@ -554,15 +501,6 @@ class ConfigForm(BaseModel):
     # Content extraction settings
     CONTENT_EXTRACTION_ENGINE: Optional[str] = None
     PDF_EXTRACT_IMAGES: Optional[bool] = None
-    DATALAB_MARKER_API_KEY: Optional[str] = None
-    DATALAB_MARKER_LANGS: Optional[str] = None
-    DATALAB_MARKER_SKIP_CACHE: Optional[bool] = None
-    DATALAB_MARKER_FORCE_OCR: Optional[bool] = None
-    DATALAB_MARKER_PAGINATE: Optional[bool] = None
-    DATALAB_MARKER_STRIP_EXISTING_OCR: Optional[bool] = None
-    DATALAB_MARKER_DISABLE_IMAGE_EXTRACTION: Optional[bool] = None
-    DATALAB_MARKER_USE_LLM: Optional[bool] = None
-    DATALAB_MARKER_OUTPUT_FORMAT: Optional[str] = None
     EXTERNAL_DOCUMENT_LOADER_URL: Optional[str] = None
     EXTERNAL_DOCUMENT_LOADER_API_KEY: Optional[str] = None
 
@@ -661,51 +599,6 @@ async def update_rag_config(
         form_data.PDF_EXTRACT_IMAGES
         if form_data.PDF_EXTRACT_IMAGES is not None
         else request.app.state.config.PDF_EXTRACT_IMAGES
-    )
-    request.app.state.config.DATALAB_MARKER_API_KEY = (
-        form_data.DATALAB_MARKER_API_KEY
-        if form_data.DATALAB_MARKER_API_KEY is not None
-        else request.app.state.config.DATALAB_MARKER_API_KEY
-    )
-    request.app.state.config.DATALAB_MARKER_LANGS = (
-        form_data.DATALAB_MARKER_LANGS
-        if form_data.DATALAB_MARKER_LANGS is not None
-        else request.app.state.config.DATALAB_MARKER_LANGS
-    )
-    request.app.state.config.DATALAB_MARKER_SKIP_CACHE = (
-        form_data.DATALAB_MARKER_SKIP_CACHE
-        if form_data.DATALAB_MARKER_SKIP_CACHE is not None
-        else request.app.state.config.DATALAB_MARKER_SKIP_CACHE
-    )
-    request.app.state.config.DATALAB_MARKER_FORCE_OCR = (
-        form_data.DATALAB_MARKER_FORCE_OCR
-        if form_data.DATALAB_MARKER_FORCE_OCR is not None
-        else request.app.state.config.DATALAB_MARKER_FORCE_OCR
-    )
-    request.app.state.config.DATALAB_MARKER_PAGINATE = (
-        form_data.DATALAB_MARKER_PAGINATE
-        if form_data.DATALAB_MARKER_PAGINATE is not None
-        else request.app.state.config.DATALAB_MARKER_PAGINATE
-    )
-    request.app.state.config.DATALAB_MARKER_STRIP_EXISTING_OCR = (
-        form_data.DATALAB_MARKER_STRIP_EXISTING_OCR
-        if form_data.DATALAB_MARKER_STRIP_EXISTING_OCR is not None
-        else request.app.state.config.DATALAB_MARKER_STRIP_EXISTING_OCR
-    )
-    request.app.state.config.DATALAB_MARKER_DISABLE_IMAGE_EXTRACTION = (
-        form_data.DATALAB_MARKER_DISABLE_IMAGE_EXTRACTION
-        if form_data.DATALAB_MARKER_DISABLE_IMAGE_EXTRACTION is not None
-        else request.app.state.config.DATALAB_MARKER_DISABLE_IMAGE_EXTRACTION
-    )
-    request.app.state.config.DATALAB_MARKER_OUTPUT_FORMAT = (
-        form_data.DATALAB_MARKER_OUTPUT_FORMAT
-        if form_data.DATALAB_MARKER_OUTPUT_FORMAT is not None
-        else request.app.state.config.DATALAB_MARKER_OUTPUT_FORMAT
-    )
-    request.app.state.config.DATALAB_MARKER_USE_LLM = (
-        form_data.DATALAB_MARKER_USE_LLM
-        if form_data.DATALAB_MARKER_USE_LLM is not None
-        else request.app.state.config.DATALAB_MARKER_USE_LLM
     )
     request.app.state.config.EXTERNAL_DOCUMENT_LOADER_URL = (
         form_data.EXTERNAL_DOCUMENT_LOADER_URL
@@ -961,15 +854,6 @@ async def update_rag_config(
         # Content extraction settings
         "CONTENT_EXTRACTION_ENGINE": request.app.state.config.CONTENT_EXTRACTION_ENGINE,
         "PDF_EXTRACT_IMAGES": request.app.state.config.PDF_EXTRACT_IMAGES,
-        "DATALAB_MARKER_API_KEY": request.app.state.config.DATALAB_MARKER_API_KEY,
-        "DATALAB_MARKER_LANGS": request.app.state.config.DATALAB_MARKER_LANGS,
-        "DATALAB_MARKER_SKIP_CACHE": request.app.state.config.DATALAB_MARKER_SKIP_CACHE,
-        "DATALAB_MARKER_FORCE_OCR": request.app.state.config.DATALAB_MARKER_FORCE_OCR,
-        "DATALAB_MARKER_PAGINATE": request.app.state.config.DATALAB_MARKER_PAGINATE,
-        "DATALAB_MARKER_STRIP_EXISTING_OCR": request.app.state.config.DATALAB_MARKER_STRIP_EXISTING_OCR,
-        "DATALAB_MARKER_DISABLE_IMAGE_EXTRACTION": request.app.state.config.DATALAB_MARKER_DISABLE_IMAGE_EXTRACTION,
-        "DATALAB_MARKER_USE_LLM": request.app.state.config.DATALAB_MARKER_USE_LLM,
-        "DATALAB_MARKER_OUTPUT_FORMAT": request.app.state.config.DATALAB_MARKER_OUTPUT_FORMAT,
         "EXTERNAL_DOCUMENT_LOADER_URL": request.app.state.config.EXTERNAL_DOCUMENT_LOADER_URL,
         "EXTERNAL_DOCUMENT_LOADER_API_KEY": request.app.state.config.EXTERNAL_DOCUMENT_LOADER_API_KEY,
         "TIKA_SERVER_URL": request.app.state.config.TIKA_SERVER_URL,
@@ -1101,28 +985,37 @@ def save_docs_to_vector_db(
                 raise ValueError(ERROR_MESSAGES.DUPLICATE_CONTENT)
 
     if split:
-        if request.app.state.config.TEXT_SPLITTER in ["", "character"]:
-            text_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=request.app.state.config.CHUNK_SIZE,
-                chunk_overlap=request.app.state.config.CHUNK_OVERLAP,
-                add_start_index=True,
+        # Apply advanced content-aware splitting and text cleaning
+        processed_docs = []
+        
+        for doc in docs:
+            # Clean the text content before chunking
+            if not doc.page_content:
+                continue
+            
+            # Apply text cleaning before chunking
+            cleaned_content = clean_text_content(doc.page_content)
+            
+            # Create semantic chunks from cleaned content
+            chunks = create_semantic_chunks(
+                cleaned_content,
+                request.app.state.config.CHUNK_SIZE,
+                request.app.state.config.CHUNK_OVERLAP
             )
-        elif request.app.state.config.TEXT_SPLITTER == "token":
-            log.info(
-                f"Using token text splitter: {request.app.state.config.TIKTOKEN_ENCODING_NAME}"
-            )
-
-            tiktoken.get_encoding(str(request.app.state.config.TIKTOKEN_ENCODING_NAME))
-            text_splitter = TokenTextSplitter(
-                encoding_name=str(request.app.state.config.TIKTOKEN_ENCODING_NAME),
-                chunk_size=request.app.state.config.CHUNK_SIZE,
-                chunk_overlap=request.app.state.config.CHUNK_OVERLAP,
-                add_start_index=True,
-            )
-        else:
-            raise ValueError(ERROR_MESSAGES.DEFAULT("Invalid text splitter"))
-
-        docs = text_splitter.split_documents(docs)
+            
+            # Create new documents for each chunk
+            for i, chunk in enumerate(chunks):
+                chunk_metadata = {
+                    **doc.metadata,
+                    "chunk_index": i,
+                    "total_chunks": len(chunks)
+                }
+                processed_docs.append(Document(
+                    page_content=chunk,
+                    metadata=chunk_metadata
+                ))
+        
+        docs = processed_docs
 
     if len(docs) == 0:
         raise ValueError(ERROR_MESSAGES.EMPTY_CONTENT)
@@ -1174,44 +1067,56 @@ def save_docs_to_vector_db(
             (
                 request.app.state.config.RAG_OPENAI_API_BASE_URL
                 if request.app.state.config.RAG_EMBEDDING_ENGINE == "openai"
-                else (
-                    request.app.state.config.RAG_OLLAMA_BASE_URL
-                    if request.app.state.config.RAG_EMBEDDING_ENGINE == "ollama"
-                    else request.app.state.config.RAG_AZURE_OPENAI_BASE_URL
-                )
+                else request.app.state.config.RAG_OLLAMA_BASE_URL
             ),
             (
                 request.app.state.config.RAG_OPENAI_API_KEY
                 if request.app.state.config.RAG_EMBEDDING_ENGINE == "openai"
-                else (
-                    request.app.state.config.RAG_OLLAMA_API_KEY
-                    if request.app.state.config.RAG_EMBEDDING_ENGINE == "ollama"
-                    else request.app.state.config.RAG_AZURE_OPENAI_API_KEY
-                )
+                else request.app.state.config.RAG_OLLAMA_API_KEY
             ),
             request.app.state.config.RAG_EMBEDDING_BATCH_SIZE,
-            azure_api_version=(
-                request.app.state.config.RAG_AZURE_OPENAI_API_VERSION
-                if request.app.state.config.RAG_EMBEDDING_ENGINE == "azure_openai"
-                else None
-            ),
         )
 
+        # Apply final text cleaning for embedding (text already cleaned during chunking)
+        cleaned_texts = []
+        for i, text in enumerate(texts):
+            # Text is already cleaned, just flatten for embedding (convert line breaks to spaces)
+            cleaned_text = re.sub(r'\n+', ' ', text)
+            cleaned_text = re.sub(r'\s+', ' ', cleaned_text)  # Final whitespace normalization
+            cleaned_text = cleaned_text.strip()
+            cleaned_texts.append(cleaned_text)
+        
         embeddings = embedding_function(
-            list(map(lambda x: x.replace("\n", " "), texts)),
+            cleaned_texts,
             prefix=RAG_EMBEDDING_CONTENT_PREFIX,
             user=user,
         )
 
-        items = [
-            {
+        # Store the fully cleaned text - apply final aggressive cleaning for storage
+        items = []
+        for idx in range(len(texts)):
+            # Apply final aggressive cleaning specifically for storage
+            text_to_store = texts[idx]
+            
+            # Convert ALL newlines to spaces for storage (preserve readability but remove line breaks)
+            text_to_store = re.sub(r'\n+', ' ', text_to_store)
+            text_to_store = re.sub(r'\s+', ' ', text_to_store)  # Normalize all whitespace
+            
+            # Final aggressive quote cleaning for storage
+            text_to_store = re.sub(r'\\+"', '"', text_to_store)     # Multiple backslashes before quotes
+            text_to_store = re.sub(r'\\"', '"', text_to_store)      # Any escaped quotes
+            text_to_store = re.sub(r"\\'", "'", text_to_store)      # Any escaped single quotes
+            text_to_store = re.sub(r'\\&', '&', text_to_store)      # Escaped ampersands
+            text_to_store = re.sub(r'\\([^a-zA-Z0-9\s])', r'\1', text_to_store)  # Any other escaped special chars
+            
+            text_to_store = text_to_store.strip()
+            
+            items.append({
                 "id": str(uuid.uuid4()),
-                "text": text,
+                "text": text_to_store,
                 "vector": embeddings[idx],
                 "metadata": metadatas[idx],
-            }
-            for idx, text in enumerate(texts)
-        ]
+            })
 
         VECTOR_DB_CLIENT.insert(
             collection_name=collection_name,
@@ -1257,7 +1162,7 @@ def process_file(
 
             docs = [
                 Document(
-                    page_content=form_data.content.replace("<br/>", "\n"),
+                    page_content=clean_text_content(form_data.content.replace("<br/>", "\n")),
                     metadata={
                         **file.meta,
                         "name": file.filename,
@@ -1280,7 +1185,7 @@ def process_file(
             if result is not None and len(result.ids[0]) > 0:
                 docs = [
                     Document(
-                        page_content=result.documents[0][idx],
+                        page_content=clean_text_content(result.documents[0][idx]),
                         metadata=result.metadatas[0][idx],
                     )
                     for idx, id in enumerate(result.ids[0])
@@ -1288,7 +1193,7 @@ def process_file(
             else:
                 docs = [
                     Document(
-                        page_content=file.data.get("content", ""),
+                        page_content=clean_text_content(file.data.get("content", "")),
                         metadata={
                             **file.meta,
                             "name": file.filename,
@@ -1308,15 +1213,6 @@ def process_file(
                 file_path = Storage.get_file(file_path)
                 loader = Loader(
                     engine=request.app.state.config.CONTENT_EXTRACTION_ENGINE,
-                    DATALAB_MARKER_API_KEY=request.app.state.config.DATALAB_MARKER_API_KEY,
-                    DATALAB_MARKER_LANGS=request.app.state.config.DATALAB_MARKER_LANGS,
-                    DATALAB_MARKER_SKIP_CACHE=request.app.state.config.DATALAB_MARKER_SKIP_CACHE,
-                    DATALAB_MARKER_FORCE_OCR=request.app.state.config.DATALAB_MARKER_FORCE_OCR,
-                    DATALAB_MARKER_PAGINATE=request.app.state.config.DATALAB_MARKER_PAGINATE,
-                    DATALAB_MARKER_STRIP_EXISTING_OCR=request.app.state.config.DATALAB_MARKER_STRIP_EXISTING_OCR,
-                    DATALAB_MARKER_DISABLE_IMAGE_EXTRACTION=request.app.state.config.DATALAB_MARKER_DISABLE_IMAGE_EXTRACTION,
-                    DATALAB_MARKER_USE_LLM=request.app.state.config.DATALAB_MARKER_USE_LLM,
-                    DATALAB_MARKER_OUTPUT_FORMAT=request.app.state.config.DATALAB_MARKER_OUTPUT_FORMAT,
                     EXTERNAL_DOCUMENT_LOADER_URL=request.app.state.config.EXTERNAL_DOCUMENT_LOADER_URL,
                     EXTERNAL_DOCUMENT_LOADER_API_KEY=request.app.state.config.EXTERNAL_DOCUMENT_LOADER_API_KEY,
                     TIKA_SERVER_URL=request.app.state.config.TIKA_SERVER_URL,
@@ -1333,9 +1229,13 @@ def process_file(
                     file.filename, file.meta.get("content_type"), file_path
                 )
 
-                docs = [
-                    Document(
-                        page_content=doc.page_content,
+                # Clean the loaded documents before processing
+                cleaned_docs = []
+                for doc in docs:
+                    cleaned_content = clean_text_content(doc.page_content)
+                    
+                    cleaned_docs.append(Document(
+                        page_content=cleaned_content,
                         metadata={
                             **doc.metadata,
                             "name": file.filename,
@@ -1343,13 +1243,12 @@ def process_file(
                             "file_id": file.id,
                             "source": file.filename,
                         },
-                    )
-                    for doc in docs
-                ]
+                    ))
+                docs = cleaned_docs
             else:
                 docs = [
                     Document(
-                        page_content=file.data.get("content", ""),
+                        page_content=clean_text_content(file.data.get("content", "")),
                         metadata={
                             **file.meta,
                             "name": file.filename,
@@ -1359,7 +1258,11 @@ def process_file(
                         },
                     )
                 ]
-            text_content = " ".join([doc.page_content for doc in docs])
+            text_content = " ".join([doc.page_content for doc in docs if doc.page_content])
+
+        # Ensure text_content is never None or empty for hash calculation
+        if not text_content:
+            text_content = ""
 
         log.debug(f"text_content: {text_content}")
         Files.update_file_data_by_id(
@@ -1367,7 +1270,9 @@ def process_file(
             {"content": text_content},
         )
 
-        hash = calculate_sha256_string(text_content)
+        # Ensure we always pass a valid string to calculate_sha256_string
+        hash_input = text_content if text_content else ""
+        hash = calculate_sha256_string(hash_input)
         Files.update_file_hash_by_id(file.id, hash)
 
         if not request.app.state.config.BYPASS_EMBEDDING_AND_RETRIEVAL:
@@ -1441,7 +1346,7 @@ def process_text(
 
     docs = [
         Document(
-            page_content=form_data.content,
+            page_content=clean_text_content(form_data.content),
             metadata={"name": form_data.name, "created_by": user.id},
         )
     ]
@@ -1974,7 +1879,6 @@ class QueryCollectionsForm(BaseModel):
     k_reranker: Optional[int] = None
     r: Optional[float] = None
     hybrid: Optional[bool] = None
-    hybrid_bm25_weight: Optional[float] = None
 
 
 @router.post("/query/collection")
@@ -2095,6 +1999,7 @@ if ENV == "dev":
         }
 
 
+
 class BatchProcessFilesForm(BaseModel):
     files: List[FileModel]
     collection_name: str
@@ -2132,7 +2037,7 @@ def process_files_batch(
 
             docs: List[Document] = [
                 Document(
-                    page_content=text_content.replace("<br/>", "\n"),
+                    page_content=clean_text_content(text_content.replace("<br/>", "\n")),
                     metadata={
                         **file.meta,
                         "name": file.filename,
@@ -2143,7 +2048,7 @@ def process_files_batch(
                 )
             ]
 
-            hash = calculate_sha256_string(text_content)
+            hash = calculate_sha256_string(text_content or "")
             Files.update_file_hash_by_id(file.id, hash)
             Files.update_file_data_by_id(file.id, {"content": text_content})
 
@@ -2185,3 +2090,268 @@ def process_files_batch(
                 )
 
     return BatchProcessFilesResponse(results=results, errors=errors)
+
+
+def clean_text_content(text: str) -> str:
+    """Simple, effective text cleaning with special handling for PPTX artifacts"""
+    if not text or text is None:
+        return ""  # Always return empty string instead of None
+    
+    # Ensure we have a string
+    if not isinstance(text, str):
+        text = str(text)
+    
+    # Step 1: PPTX-specific cleaning - handle double-escaped sequences first
+    text = text.replace('\\\\n', '\n')  # Double-escaped newlines in PPTX
+    text = text.replace('\\\\t', ' ')   # Double-escaped tabs in PPTX
+    text = text.replace('\\\\"', '"')   # Double-escaped quotes in PPTX
+    
+    # Step 2: Standard escape sequences
+    text = text.replace('\\n', '\n')    # Single-escaped newlines
+    text = text.replace('\\t', ' ')     # Single-escaped tabs to spaces
+    text = text.replace('\\"', '"')     # Single-escaped quotes
+    text = text.replace('\\\'', "'")    # Single-escaped single quotes
+    text = text.replace('\\r', '')      # Remove escaped carriage returns
+    text = text.replace('\\/', '/')     # Convert escaped slashes
+    text = text.replace('\\\\', '\\')   # Convert double backslashes
+    
+    # Step 3: Remove any remaining backslash artifacts
+    text = re.sub(r'\\[a-zA-Z]', '', text)  # Remove \letter patterns
+    text = re.sub(r'\\[0-9]', '', text)     # Remove \number patterns
+    text = re.sub(r'\\[^a-zA-Z0-9\s]', '', text)  # Remove \symbol patterns
+    
+    # Step 4: PPTX-specific artifacts cleanup
+    text = re.sub(r'\s*\\n\s*', '\n', text)  # Clean up any remaining \\n with spaces
+    text = re.sub(r'\\+', '', text)          # Remove any remaining multiple backslashes
+    
+    # Step 5: Fix Unicode and special characters
+    unicode_replacements = [
+        ('–', '-'),        # En dash to hyphen
+        ('—', '-'),        # Em dash to hyphen  
+        (''', "'"),        # Smart single quotes
+        (''', "'"),        # Smart single quotes
+        ('"', '"'),        # Smart double quotes
+        ('"', '"'),        # Smart double quotes
+        ('…', '...'),      # Ellipsis to three dots
+    ]
+    
+    for old_char, new_char in unicode_replacements:
+        if old_char in text:
+            text = text.replace(old_char, new_char)
+    
+    # Step 6: Clean up spacing and formatting
+    text = re.sub(r'[ \t]+', ' ', text)           # Multiple spaces/tabs -> single space
+    text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text) # Multiple empty lines -> double line break
+    text = re.sub(r'^\s+|\s+$', '', text)         # Remove leading/trailing whitespace
+    
+    # Step 7: Additional quote cleaning
+    text = re.sub(r'\\+"', '"', text)     # Multiple backslashes before quotes
+    text = re.sub(r'\\"', '"', text)      # Any remaining escaped quotes
+    text = re.sub(r"\\'", "'", text)      # Any remaining escaped single quotes
+    
+    # Step 8: Fix orphaned punctuation
+    text = re.sub(r'^\s*[)\]}]+\s*', '', text)    # Remove orphaned closing brackets/parens at start
+    text = re.sub(r'\n\s*[)\]}]+\s*\n', '\n\n', text)  # Remove orphaned closing brackets on their own lines
+    
+    return text
+
+def create_semantic_chunks(text: str, max_chunk_size: int, overlap_size: int) -> TypingList[str]:
+    """Create semantically aware chunks that respect document structure"""
+    if not text or len(text) <= max_chunk_size:
+        return [text] if text else []
+    
+    chunks = []
+    
+    # Split by double line breaks (paragraphs) first
+    paragraphs = text.split('\n\n')
+    
+    current_chunk = ""
+    
+    for paragraph in paragraphs:
+        paragraph = paragraph.strip()
+        if not paragraph:
+            continue
+            
+        # If adding this paragraph would exceed chunk size
+        if current_chunk and len(current_chunk) + len(paragraph) + 2 > max_chunk_size:
+            # Try to split the current chunk at sentence boundaries if it's too long
+            if len(current_chunk) > max_chunk_size:
+                sentence_chunks = split_by_sentences(current_chunk, max_chunk_size, overlap_size)
+                chunks.extend(sentence_chunks)
+            else:
+                chunks.append(current_chunk.strip())
+            
+            # Start new chunk with overlap from previous chunk if applicable
+            if chunks and overlap_size > 0:
+                prev_chunk = chunks[-1]
+                overlap_text = get_text_overlap(prev_chunk, overlap_size)
+                current_chunk = overlap_text + "\n\n" + paragraph if overlap_text else paragraph
+            else:
+                current_chunk = paragraph
+        else:
+            # Add paragraph to current chunk
+            if current_chunk:
+                current_chunk += "\n\n" + paragraph
+            else:
+                current_chunk = paragraph
+    
+    # Add the last chunk
+    if current_chunk:
+        if len(current_chunk) > max_chunk_size:
+            sentence_chunks = split_by_sentences(current_chunk, max_chunk_size, overlap_size)
+            chunks.extend(sentence_chunks)
+        else:
+            chunks.append(current_chunk.strip())
+    
+    return [chunk for chunk in chunks if chunk.strip()]
+
+def split_by_sentences(text: str, max_chunk_size: int, overlap_size: int) -> TypingList[str]:
+    """Split text by sentences when paragraph-level splitting isn't sufficient"""
+    # Split by sentence endings
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+    
+    chunks = []
+    current_chunk = ""
+    
+    for sentence in sentences:
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+            
+        # If adding this sentence would exceed chunk size
+        if current_chunk and len(current_chunk) + len(sentence) + 1 > max_chunk_size:
+            chunks.append(current_chunk.strip())
+            
+            # Start new chunk with overlap
+            if overlap_size > 0:
+                overlap_text = get_text_overlap(current_chunk, overlap_size)
+                current_chunk = overlap_text + " " + sentence if overlap_text else sentence
+            else:
+                current_chunk = sentence
+        else:
+            # Add sentence to current chunk
+            if current_chunk:
+                current_chunk += " " + sentence
+            else:
+                current_chunk = sentence
+    
+    # Add the last chunk
+    if current_chunk:
+        chunks.append(current_chunk.strip())
+    
+    return [chunk for chunk in chunks if chunk.strip()]
+
+def get_text_overlap(text: str, overlap_size: int) -> str:
+    """Get the last overlap_size characters from text, preferring word boundaries"""
+    if not text or overlap_size <= 0:
+        return ""
+    
+    if len(text) <= overlap_size:
+        return text
+    
+    # Try to find a good word boundary within the overlap region
+    overlap_text = text[-overlap_size:]
+    
+    # Find the first space to avoid cutting words
+    space_index = overlap_text.find(' ')
+    if space_index > 0:
+        return overlap_text[space_index:].strip()
+    
+    return overlap_text.strip()
+
+
+def delete_file_from_vector_db(file_id: str) -> bool:
+    """
+    Delete all vector embeddings for a specific file from the vector database.
+    This function works with any vector database (Pinecone, ChromaDB, etc.) and
+    handles the cleanup when a file is deleted from the chat.
+    
+    Args:
+        file_id (str): The ID of the file to delete from vector database
+        
+    Returns:
+        bool: True if deletion was successful, False otherwise
+    """
+    try:
+        # Get the file record to access its hash and collection info
+        file = Files.get_file_by_id(file_id)
+        if not file:
+            return False
+        
+        # Get the file hash for vector deletion
+        file_hash = file.hash
+        if not file_hash:
+            return False
+        
+        # Try to get collection name from file metadata
+        collection_name = None
+        if hasattr(file, 'meta') and file.meta:
+            collection_name = file.meta.get('collection_name')
+        
+        # If no collection name in metadata, try common patterns used by Open WebUI
+        if not collection_name:
+            # Open WebUI typically uses these patterns:
+            possible_collections = [
+                f"open-webui_file-{file_id}",  # Most common pattern
+                f"file-{file_id}",             # Alternative pattern
+                f"open-webui_{file_id}",       # Another possible pattern
+            ]
+            
+            # Try each possible collection name
+            for possible_collection in possible_collections:
+                try:
+                    if VECTOR_DB_CLIENT.has_collection(collection_name=possible_collection):
+                        result = VECTOR_DB_CLIENT.delete(
+                            collection_name=possible_collection,
+                            filter={"hash": file_hash},
+                        )
+                        # Pinecone returns None on successful deletion
+                        return True
+                except Exception as e:
+                    continue
+            
+            # If none of the standard patterns work, try searching through all collections
+            try:
+                deleted_count = 0
+                
+                # Get all collections (this method varies by vector DB implementation)
+                if hasattr(VECTOR_DB_CLIENT, 'list_collections'):
+                    try:
+                        collections = VECTOR_DB_CLIENT.list_collections()
+                        
+                        for collection in collections:
+                            try:
+                                if VECTOR_DB_CLIENT.has_collection(collection_name=collection):
+                                    result = VECTOR_DB_CLIENT.delete(
+                                        collection_name=collection,
+                                        filter={"hash": file_hash},
+                                    )
+                                    # Pinecone returns None on successful deletion, so any non-exception means success
+                                    deleted_count += 1
+                            except Exception as e:
+                                continue
+                    except Exception as e:
+                        pass
+                
+                return deleted_count > 0
+                
+            except Exception as e:
+                return False
+        
+        # Delete from the specific collection found in metadata
+        if collection_name and VECTOR_DB_CLIENT.has_collection(collection_name=collection_name):
+            try:
+                result = VECTOR_DB_CLIENT.delete(
+                    collection_name=collection_name,
+                    filter={"hash": file_hash},
+                )
+                # Pinecone returns None on successful deletion, so we check for no exception
+                # rather than checking the return value
+                return True
+            except Exception as e:
+                return False
+        else:
+            return False
+            
+    except Exception as e:
+        return False
