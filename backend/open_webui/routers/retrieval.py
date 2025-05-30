@@ -993,8 +993,8 @@ def save_docs_to_vector_db(
             if not doc.page_content:
                 continue
             
-            # Apply text cleaning before chunking
-            cleaned_content = clean_text_content(doc.page_content)
+            # Apply text cleaning before chunking using new modular system
+            cleaned_content = TextCleaner.clean_for_chunking(doc.page_content)
             
             # Create semantic chunks from cleaned content
             chunks = create_semantic_chunks(
@@ -1077,14 +1077,8 @@ def save_docs_to_vector_db(
             request.app.state.config.RAG_EMBEDDING_BATCH_SIZE,
         )
 
-        # Apply final text cleaning for embedding (text already cleaned during chunking)
-        cleaned_texts = []
-        for i, text in enumerate(texts):
-            # Text is already cleaned, just flatten for embedding (convert line breaks to spaces)
-            cleaned_text = re.sub(r'\n+', ' ', text)
-            cleaned_text = re.sub(r'\s+', ' ', cleaned_text)  # Final whitespace normalization
-            cleaned_text = cleaned_text.strip()
-            cleaned_texts.append(cleaned_text)
+        # Prepare texts for embedding using the new modular cleaning system
+        cleaned_texts = [TextCleaner.clean_for_embedding(text) for text in texts]
         
         embeddings = embedding_function(
             cleaned_texts,
@@ -1092,24 +1086,11 @@ def save_docs_to_vector_db(
             user=user,
         )
 
-        # Store the fully cleaned text - apply final aggressive cleaning for storage
+        # Store the cleaned text using the new modular cleaning system
         items = []
         for idx in range(len(texts)):
-            # Apply final aggressive cleaning specifically for storage
-            text_to_store = texts[idx]
-            
-            # Convert ALL newlines to spaces for storage (preserve readability but remove line breaks)
-            text_to_store = re.sub(r'\n+', ' ', text_to_store)
-            text_to_store = re.sub(r'\s+', ' ', text_to_store)  # Normalize all whitespace
-            
-            # Final aggressive quote cleaning for storage
-            text_to_store = re.sub(r'\\+"', '"', text_to_store)     # Multiple backslashes before quotes
-            text_to_store = re.sub(r'\\"', '"', text_to_store)      # Any escaped quotes
-            text_to_store = re.sub(r"\\'", "'", text_to_store)      # Any escaped single quotes
-            text_to_store = re.sub(r'\\&', '&', text_to_store)      # Escaped ampersands
-            text_to_store = re.sub(r'\\([^a-zA-Z0-9\s])', r'\1', text_to_store)  # Any other escaped special chars
-            
-            text_to_store = text_to_store.strip()
+            # Apply consistent storage-level cleaning
+            text_to_store = TextCleaner.clean_for_storage(texts[idx])
             
             items.append({
                 "id": str(uuid.uuid4()),
@@ -1162,7 +1143,7 @@ def process_file(
 
             docs = [
                 Document(
-                    page_content=clean_text_content(form_data.content.replace("<br/>", "\n")),
+                    page_content=TextCleaner.clean_for_chunking(form_data.content.replace("<br/>", "\n")),
                     metadata={
                         **file.meta,
                         "name": file.filename,
@@ -1185,7 +1166,7 @@ def process_file(
             if result is not None and len(result.ids[0]) > 0:
                 docs = [
                     Document(
-                        page_content=clean_text_content(result.documents[0][idx]),
+                        page_content=TextCleaner.clean_for_chunking(result.documents[0][idx]),
                         metadata=result.metadatas[0][idx],
                     )
                     for idx, id in enumerate(result.ids[0])
@@ -1193,7 +1174,7 @@ def process_file(
             else:
                 docs = [
                     Document(
-                        page_content=clean_text_content(file.data.get("content", "")),
+                        page_content=TextCleaner.clean_for_chunking(file.data.get("content", "")),
                         metadata={
                             **file.meta,
                             "name": file.filename,
@@ -1232,7 +1213,7 @@ def process_file(
                 # Clean the loaded documents before processing
                 cleaned_docs = []
                 for doc in docs:
-                    cleaned_content = clean_text_content(doc.page_content)
+                    cleaned_content = TextCleaner.clean_for_chunking(doc.page_content)
                     
                     cleaned_docs.append(Document(
                         page_content=cleaned_content,
@@ -1248,7 +1229,7 @@ def process_file(
             else:
                 docs = [
                     Document(
-                        page_content=clean_text_content(file.data.get("content", "")),
+                        page_content=TextCleaner.clean_for_chunking(file.data.get("content", "")),
                         metadata={
                             **file.meta,
                             "name": file.filename,
@@ -1346,7 +1327,7 @@ def process_text(
 
     docs = [
         Document(
-            page_content=clean_text_content(form_data.content),
+            page_content=TextCleaner.clean_for_chunking(form_data.content),
             metadata={"name": form_data.name, "created_by": user.id},
         )
     ]
@@ -2037,7 +2018,7 @@ def process_files_batch(
 
             docs: List[Document] = [
                 Document(
-                    page_content=clean_text_content(text_content.replace("<br/>", "\n")),
+                    page_content=TextCleaner.clean_for_chunking(text_content.replace("<br/>", "\n")),
                     metadata={
                         **file.meta,
                         "name": file.filename,
@@ -2092,68 +2073,182 @@ def process_files_batch(
     return BatchProcessFilesResponse(results=results, errors=errors)
 
 
+# Text cleaning module - modular and efficient text preprocessing
+class TextCleaner:
+    """Modular text cleaning system for document processing and embedding preparation."""
+    
+    @staticmethod
+    def normalize_escape_sequences(text: str) -> str:
+        """Normalize escape sequences from various document formats."""
+        if not text:
+            return ""
+        
+        # Handle double-escaped sequences (common in PPTX)
+        replacements = [
+            ('\\\\n', '\n'),     # Double-escaped newlines
+            ('\\\\t', ' '),      # Double-escaped tabs
+            ('\\\\"', '"'),      # Double-escaped quotes
+            ('\\\\r', ''),       # Double-escaped carriage returns
+            ('\\\\/', '/'),      # Double-escaped slashes
+            ('\\\\', '\\'),      # Convert double backslashes to single
+        ]
+        
+        for old, new in replacements:
+            text = text.replace(old, new)
+        
+        # Handle single-escaped sequences
+        single_replacements = [
+            ('\\n', '\n'),       # Single-escaped newlines
+            ('\\t', ' '),        # Single-escaped tabs
+            ('\\"', '"'),        # Single-escaped quotes
+            ('\\\'', "'"),       # Single-escaped single quotes
+            ('\\r', ''),         # Single-escaped carriage returns
+            ('\\/', '/'),        # Single-escaped slashes
+        ]
+        
+        for old, new in single_replacements:
+            text = text.replace(old, new)
+        
+        # Remove any remaining backslash artifacts
+        text = re.sub(r'\\[a-zA-Z]', '', text)       # Remove \letter patterns
+        text = re.sub(r'\\[0-9]', '', text)          # Remove \number patterns
+        text = re.sub(r'\\[^a-zA-Z0-9\s]', '', text) # Remove \symbol patterns
+        text = re.sub(r'\\+', '', text)              # Remove remaining backslashes
+        
+        return text
+    
+    @staticmethod
+    def normalize_unicode(text: str) -> str:
+        """Convert special Unicode characters to ASCII equivalents."""
+        if not text:
+            return ""
+        
+        unicode_map = {
+            '–': '-',     # En dash
+            '—': '-',     # Em dash
+            ''': "'",     # Smart single quote left
+            ''': "'",     # Smart single quote right
+            '"': '"',     # Smart double quote left
+            '"': '"',     # Smart double quote right
+            '…': '...',   # Ellipsis
+            '™': ' TM',   # Trademark
+            '®': ' R',    # Registered
+            '©': ' C',    # Copyright
+            '°': ' deg',  # Degree symbol
+        }
+        
+        for unicode_char, ascii_char in unicode_map.items():
+            text = text.replace(unicode_char, ascii_char)
+        
+        return text
+    
+    @staticmethod
+    def normalize_quotes(text: str) -> str:
+        """Clean up quote-related artifacts and normalize quote marks."""
+        if not text:
+            return ""
+        
+        # Remove quote artifacts
+        quote_patterns = [
+            (r'\\+"', '"'),           # Multiple backslashes before quotes
+            (r'\\"', '"'),            # Escaped double quotes
+            (r"\\'", "'"),            # Escaped single quotes
+            (r'\\&', '&'),            # Escaped ampersands
+            (r'""', '"'),             # Double quotes
+            (r"''", "'"),             # Double single quotes
+        ]
+        
+        for pattern, replacement in quote_patterns:
+            text = re.sub(pattern, replacement, text)
+        
+        return text
+    
+    @staticmethod
+    def normalize_whitespace(text: str, preserve_paragraphs: bool = True) -> str:
+        """Normalize whitespace while optionally preserving paragraph structure."""
+        if not text:
+            return ""
+        
+        if preserve_paragraphs:
+            # Preserve paragraph breaks (double newlines) but clean up excessive spacing
+            text = re.sub(r'[ \t]+', ' ', text)                    # Multiple spaces/tabs -> single space
+            text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)        # Multiple empty lines -> double line break
+            text = re.sub(r'^\s+|\s+$', '', text, flags=re.MULTILINE)  # Trim line-level whitespace
+        else:
+            # Flatten all whitespace for embedding
+            text = re.sub(r'\n+', ' ', text)                      # All newlines to spaces
+            text = re.sub(r'\s+', ' ', text)                      # All whitespace to single spaces
+        
+        return text.strip()
+    
+    @staticmethod
+    def remove_artifacts(text: str) -> str:
+        """Remove document format artifacts and orphaned elements."""
+        if not text:
+            return ""
+        
+        # Remove orphaned punctuation
+        text = re.sub(r'^\s*[)\]}]+\s*', '', text)               # Orphaned closing brackets at start
+        text = re.sub(r'\n\s*[)\]}]+\s*\n', '\n\n', text)       # Orphaned closing brackets on own lines
+        
+        # Remove excessive punctuation
+        text = re.sub(r'[.]{3,}', '...', text)                   # Multiple dots to ellipsis
+        text = re.sub(r'[-]{3,}', '---', text)                   # Multiple dashes
+        
+        # Remove empty parentheses and brackets
+        text = re.sub(r'\(\s*\)', '', text)                      # Empty parentheses
+        text = re.sub(r'\[\s*\]', '', text)                      # Empty square brackets
+        text = re.sub(r'\{\s*\}', '', text)                      # Empty curly brackets
+        
+        return text
+    
+    @classmethod
+    def clean_for_chunking(cls, text: str) -> str:
+        """Clean text for semantic chunking - preserves structure but normalizes content."""
+        if not text:
+            return ""
+        
+        # Apply all cleaning steps while preserving paragraph structure
+        text = cls.normalize_escape_sequences(text)
+        text = cls.normalize_unicode(text)
+        text = cls.normalize_quotes(text)
+        text = cls.remove_artifacts(text)
+        text = cls.normalize_whitespace(text, preserve_paragraphs=True)
+        
+        return text
+    
+    @classmethod
+    def clean_for_embedding(cls, text: str) -> str:
+        """Clean text for embedding - flattens structure and optimizes for vector similarity."""
+        if not text:
+            return ""
+        
+        # Start with chunking-level cleaning
+        text = cls.clean_for_chunking(text)
+        
+        # Flatten for embedding
+        text = cls.normalize_whitespace(text, preserve_paragraphs=False)
+        
+        return text
+    
+    @classmethod
+    def clean_for_storage(cls, text: str) -> str:
+        """Clean text for storage - most aggressive cleaning for database storage."""
+        if not text:
+            return ""
+        
+        # Start with embedding-level cleaning
+        text = cls.clean_for_embedding(text)
+        
+        # Additional aggressive cleaning for storage
+        text = re.sub(r'\\([^a-zA-Z0-9\s])', r'\1', text)       # Remove any remaining escape sequences
+        
+        return text
+
+
 def clean_text_content(text: str) -> str:
-    """Simple, effective text cleaning with special handling for PPTX artifacts"""
-    if not text or text is None:
-        return ""  # Always return empty string instead of None
-    
-    # Ensure we have a string
-    if not isinstance(text, str):
-        text = str(text)
-    
-    # Step 1: PPTX-specific cleaning - handle double-escaped sequences first
-    text = text.replace('\\\\n', '\n')  # Double-escaped newlines in PPTX
-    text = text.replace('\\\\t', ' ')   # Double-escaped tabs in PPTX
-    text = text.replace('\\\\"', '"')   # Double-escaped quotes in PPTX
-    
-    # Step 2: Standard escape sequences
-    text = text.replace('\\n', '\n')    # Single-escaped newlines
-    text = text.replace('\\t', ' ')     # Single-escaped tabs to spaces
-    text = text.replace('\\"', '"')     # Single-escaped quotes
-    text = text.replace('\\\'', "'")    # Single-escaped single quotes
-    text = text.replace('\\r', '')      # Remove escaped carriage returns
-    text = text.replace('\\/', '/')     # Convert escaped slashes
-    text = text.replace('\\\\', '\\')   # Convert double backslashes
-    
-    # Step 3: Remove any remaining backslash artifacts
-    text = re.sub(r'\\[a-zA-Z]', '', text)  # Remove \letter patterns
-    text = re.sub(r'\\[0-9]', '', text)     # Remove \number patterns
-    text = re.sub(r'\\[^a-zA-Z0-9\s]', '', text)  # Remove \symbol patterns
-    
-    # Step 4: PPTX-specific artifacts cleanup
-    text = re.sub(r'\s*\\n\s*', '\n', text)  # Clean up any remaining \\n with spaces
-    text = re.sub(r'\\+', '', text)          # Remove any remaining multiple backslashes
-    
-    # Step 5: Fix Unicode and special characters
-    unicode_replacements = [
-        ('–', '-'),        # En dash to hyphen
-        ('—', '-'),        # Em dash to hyphen  
-        (''', "'"),        # Smart single quotes
-        (''', "'"),        # Smart single quotes
-        ('"', '"'),        # Smart double quotes
-        ('"', '"'),        # Smart double quotes
-        ('…', '...'),      # Ellipsis to three dots
-    ]
-    
-    for old_char, new_char in unicode_replacements:
-        if old_char in text:
-            text = text.replace(old_char, new_char)
-    
-    # Step 6: Clean up spacing and formatting
-    text = re.sub(r'[ \t]+', ' ', text)           # Multiple spaces/tabs -> single space
-    text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text) # Multiple empty lines -> double line break
-    text = re.sub(r'^\s+|\s+$', '', text)         # Remove leading/trailing whitespace
-    
-    # Step 7: Additional quote cleaning
-    text = re.sub(r'\\+"', '"', text)     # Multiple backslashes before quotes
-    text = re.sub(r'\\"', '"', text)      # Any remaining escaped quotes
-    text = re.sub(r"\\'", "'", text)      # Any remaining escaped single quotes
-    
-    # Step 8: Fix orphaned punctuation
-    text = re.sub(r'^\s*[)\]}]+\s*', '', text)    # Remove orphaned closing brackets/parens at start
-    text = re.sub(r'\n\s*[)\]}]+\s*\n', '\n\n', text)  # Remove orphaned closing brackets on their own lines
-    
-    return text
+    """Legacy function wrapper for backward compatibility."""
+    return TextCleaner.clean_for_chunking(text)
 
 def create_semantic_chunks(text: str, max_chunk_size: int, overlap_size: int) -> TypingList[str]:
     """Create semantically aware chunks that respect document structure"""
