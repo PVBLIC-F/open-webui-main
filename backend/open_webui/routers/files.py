@@ -32,7 +32,7 @@ from open_webui.models.files import (
 from open_webui.models.knowledge import Knowledges
 
 from open_webui.routers.knowledge import get_knowledge, get_knowledge_list
-from open_webui.routers.retrieval import ProcessFileForm, process_file
+from open_webui.routers.retrieval import ProcessFileForm, process_file, delete_file_from_vector_db
 from open_webui.routers.audio import transcribe
 from open_webui.storage.provider import Storage
 from open_webui.utils.auth import get_admin_user, get_verified_user
@@ -553,7 +553,7 @@ async def get_file_content_by_id(id: str, user=Depends(get_verified_user)):
                     detail=ERROR_MESSAGES.NOT_FOUND,
                 )
         else:
-            # File path doesn’t exist, return the content as .txt if possible
+            # File path doesn't exist, return the content as .txt if possible
             file_content = file.content.get("content", "")
             file_name = file.filename
 
@@ -593,7 +593,12 @@ async def delete_file_by_id(id: str, user=Depends(get_verified_user)):
         or user.role == "admin"
         or has_access_to_file(id, "write", user)
     ):
-        # We should add Chroma cleanup here
+        # Clean up vector embeddings first (before deleting file record)
+        try:
+            delete_file_from_vector_db(id)
+        except Exception as e:
+            # Continue with file deletion even if vector cleanup fails
+            pass
 
         result = Files.delete_file_by_id(id)
         if result:
@@ -601,11 +606,11 @@ async def delete_file_by_id(id: str, user=Depends(get_verified_user)):
                 Storage.delete_file(file.path)
             except Exception as e:
                 log.exception(e)
-                log.error("Error deleting files")
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=ERROR_MESSAGES.DEFAULT("Error deleting files"),
                 )
+            
             return {"message": "File deleted successfully"}
         else:
             raise HTTPException(
