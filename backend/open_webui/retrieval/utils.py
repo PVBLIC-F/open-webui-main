@@ -107,9 +107,7 @@ def query_doc(
                     limit=k,
                 )
                 if result:
-                    doc_count = (
-                        len(result.documents[0]) if result.documents[0] else 0
-                    )
+                    doc_count = len(result.documents[0]) if result.documents[0] else 0
                     log.info(f"query_doc: Retrieved {doc_count} documents")
                     log.info(f"query_doc:result {result.ids} {result.metadatas}")
                 return result
@@ -199,7 +197,7 @@ def wait_for_indexing(
 
     start_time = time.time()
     check_interval = 0.5  # Start with 500ms intervals
-    max_interval = 2.0    # Max 2 second intervals
+    max_interval = 2.0  # Max 2 second intervals
     attempt = 1
 
     # Web search stabilization: Wait for document count to stabilize
@@ -209,8 +207,7 @@ def wait_for_indexing(
 
     if use_stabilization:
         log.info(
-            f"Waiting for document indexing to stabilize in "
-            f"'{collection_name}'"
+            f"Waiting for document indexing to stabilize in " f"'{collection_name}'"
         )
         last_count = 0
         stable_count = 0
@@ -262,9 +259,7 @@ def wait_for_indexing(
 
             else:
                 if use_stabilization:
-                    log.info(
-                        f"Stabilization check {attempt}: 0 documents available"
-                    )
+                    log.info(f"Stabilization check {attempt}: 0 documents available")
                 else:
                     log.info(
                         f"Indexing check {attempt}: 0/{expected_count} "
@@ -290,9 +285,7 @@ def wait_for_indexing(
     return False
 
 
-def get_doc(
-    collection_name: str, user: UserModel = None, expected_count: int = None
-):
+def get_doc(collection_name: str, user: UserModel = None, expected_count: int = None):
     """
     Get all documents from collection with intelligent indexing wait.
 
@@ -314,17 +307,14 @@ def get_doc(
                 # Indexing complete, retrieve documents
                 result = VECTOR_DB_CLIENT.get(collection_name=collection_name)
                 if result:
-                    doc_count = (
-                        len(result.documents[0]) if result.documents[0] else 0
-                    )
+                    doc_count = len(result.documents[0]) if result.documents[0] else 0
                     log.info(f"get_doc: Retrieved {doc_count} documents")
                     log.info(f"query_doc:result {result.ids} {result.metadatas}")
                 return result
             else:
                 # Timeout - return empty result
                 log.warning(
-                    f"get_doc: Indexing timeout for collection "
-                    f"'{collection_name}'"
+                    f"get_doc: Indexing timeout for collection " f"'{collection_name}'"
                 )
                 return None
 
