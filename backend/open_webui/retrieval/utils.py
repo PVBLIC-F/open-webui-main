@@ -168,15 +168,29 @@ def query_doc(
         raise e
 
 
+import threading
+import time
+from typing import Dict, Tuple
+
+# Global coordination system for stabilization to prevent parallel redundant checks
+# This prevents multiple concurrent requests from doing duplicate stabilization work
+_stabilization_events: Dict[str, threading.Event] = {}  # collection -> event
+_stabilization_results: Dict[str, Tuple[bool, float, int]] = (
+    {}
+)  # collection -> (success, timestamp, doc_count)
+_coordination_lock = threading.Lock()
+_RESULT_TTL = 10.0  # Cache successful results for 10 seconds
+
+
 def wait_for_indexing(
     collection_name: str, expected_count: int, timeout: float = 10.0
 ) -> bool:
     """
-    Intelligent wait for vector database indexing completion.
+    Optimized wait for vector database indexing with thread coordination.
 
-    Key innovation: Uses stabilization logic for web search collections
-    (waits for 2 consecutive stable document counts) and exponential backoff
-    to avoid race conditions where queries happen before indexing finishes.
+    Uses threading events to coordinate multiple parallel requests for the same
+    collection, ensuring only one thread does the actual stabilization work while
+    others wait for the result. Features smart timing optimizations for web search.
 
     Args:
         collection_name: Collection to check (auto-detects web search by prefix)
@@ -188,6 +202,7 @@ def wait_for_indexing(
     """
     import time
 
+    # Skip wait if no documents expected
     if expected_count == 0:
         log.info(
             f"No documents expected for collection '{collection_name}', "
@@ -195,94 +210,222 @@ def wait_for_indexing(
         )
         return True
 
-    start_time = time.time()
-    check_interval = 0.5  # Start with 500ms intervals
-    max_interval = 2.0  # Max 2 second intervals
-    attempt = 1
+    # Quick cache check - return immediately if we have a recent successful result
+    current_time = time.time()
 
-    # Web search stabilization: Wait for document count to stabilize
-    # (unknown final count, so wait for 2 consecutive identical counts)
-    is_web_search = collection_name.startswith("web-search-")
-    use_stabilization = is_web_search and expected_count == 1
+    # Determine coordination strategy - wait for other thread or do the work
+    should_wait_for_other_thread = False
+    event_to_wait_for = None
 
-    if use_stabilization:
-        log.info(
-            f"Waiting for document indexing to stabilize in " f"'{collection_name}'"
-        )
-        last_count = 0
-        stable_count = 0
-        stable_threshold = 2  # Need 2 consecutive checks with same count
-    else:
-        log.info(
-            f"Waiting for {expected_count} documents to be indexed in "
-            f"'{collection_name}'"
-        )
+    with _coordination_lock:
+        # Check if we have a cached successful result
+        if collection_name in _stabilization_results:
+            success, result_time, doc_count = _stabilization_results[collection_name]
+            if current_time - result_time < _RESULT_TTL and success and doc_count > 0:
+                log.debug(
+                    f"Using cached result for '{collection_name}': "
+                    f"{doc_count} documents "
+                    f"(cached {current_time - result_time:.1f}s ago)"
+                )
+                return True
 
-    while time.time() - start_time < timeout:
-        try:
-            result = VECTOR_DB_CLIENT.get(collection_name=collection_name)
+        # Check if another thread is already doing stabilization work
+        if collection_name in _stabilization_events:
+            # Another thread is working - we'll wait for its result
+            event_to_wait_for = _stabilization_events[collection_name]
+            should_wait_for_other_thread = True
+            log.debug(
+                f"Waiting for another thread to complete stabilization for "
+                f"'{collection_name}'"
+            )
+        else:
+            # We're the first thread - create event and proceed with work
+            event = threading.Event()
+            _stabilization_events[collection_name] = event
 
-            if result and result.documents and result.documents[0]:
-                current_count = len(result.documents[0])
-
-                if use_stabilization:
-                    log.info(
-                        f"Stabilization check {attempt}: {current_count} "
-                        "documents available"
-                    )
-
-                    if current_count == last_count and current_count > 0:
-                        stable_count += 1
-                        if stable_count >= stable_threshold:
-                            elapsed = time.time() - start_time
-                            log.info(
-                                f"Indexing stabilized! {current_count} "
-                                f"documents available after {elapsed:.1f}s"
-                            )
-                            return True
-                    else:
-                        stable_count = 0
-                        last_count = current_count
-                else:
-                    log.info(
-                        f"Indexing check {attempt}: {current_count}/"
-                        f"{expected_count} documents available"
-                    )
-
-                    if current_count >= expected_count:
-                        elapsed = time.time() - start_time
-                        log.info(
-                            f"Indexing completed! {current_count} documents "
-                            f"available after {elapsed:.1f}s"
+    # Wait for another thread's result (happens outside the lock to avoid blocking)
+    if should_wait_for_other_thread and event_to_wait_for:
+        # Wait for the other thread to complete (with timeout)
+        if event_to_wait_for.wait(timeout=min(timeout, 15.0)):
+            # Other thread completed, check if we can use its result
+            with _coordination_lock:
+                if collection_name in _stabilization_results:
+                    success, result_time, doc_count = _stabilization_results[
+                        collection_name
+                    ]
+                    if current_time - result_time < _RESULT_TTL and success:
+                        log.debug(
+                            f"Got result from other thread: {doc_count} documents"
                         )
                         return True
 
-            else:
-                if use_stabilization:
-                    log.info(f"Stabilization check {attempt}: 0 documents available")
-                else:
-                    log.info(
-                        f"Indexing check {attempt}: 0/{expected_count} "
-                        "documents available"
-                    )
-
-        except Exception as e:
-            log.warning(f"Error checking indexing status: {e}")
-
-        # Exponential backoff with max interval
-        time.sleep(check_interval)
-        check_interval = min(check_interval * 1.5, max_interval)
-        attempt += 1
-
-    elapsed = time.time() - start_time
-    if use_stabilization:
-        log.warning(f"Indexing stabilization timeout after {elapsed:.1f}s")
-    else:
-        log.warning(
-            f"Indexing timeout after {elapsed:.1f}s - "
-            f"expected {expected_count} documents"
+        # If we get here, the other thread failed or timed out
+        log.debug(
+            f"Other thread failed/timed out, doing our own check for "
+            f"'{collection_name}'"
         )
-    return False
+
+        # Try to become the worker thread now
+        with _coordination_lock:
+            if collection_name not in _stabilization_events:
+                event = threading.Event()
+                _stabilization_events[collection_name] = event
+            else:
+                # Another thread beat us to it, just return False
+                return False
+
+    try:
+        # We're the thread doing the actual stabilization work
+        start_time = time.time()
+
+        # Optimized timing: fast initial checks, adaptive intervals
+        check_interval = 0.3  # Start with 300ms intervals (faster than 500ms)
+        max_interval = 1.0  # Max 1 second intervals (reduced from 2s)
+        attempt = 1
+
+        # Web search gets special stabilization logic (wait for count to stabilize)
+        # Other collections just wait for expected count
+        is_web_search = collection_name.startswith("web-search-")
+        use_stabilization = is_web_search and expected_count == 1
+
+        if use_stabilization:
+            log.info(
+                f"Waiting for document indexing to stabilize in '{collection_name}'"
+            )
+            last_count = 0
+            stable_count = 0
+            stable_threshold = 2  # Need 2 consecutive checks with same count
+            documents_found = False  # Track when we first find documents
+        else:
+            log.info(
+                f"Waiting for {expected_count} documents to be indexed in "
+                f"'{collection_name}'"
+            )
+
+        # Main stabilization loop with adaptive timing
+        while time.time() - start_time < timeout:
+            try:
+                result = VECTOR_DB_CLIENT.get(collection_name=collection_name)
+
+                if result and result.documents and result.documents[0]:
+                    current_count = len(result.documents[0])
+
+                    if use_stabilization:
+                        log.info(
+                            f"Stabilization check {attempt}: {current_count} "
+                            f"documents available"
+                        )
+
+                        # Optimization: switch to faster checking once docs appear
+                        if current_count > 0 and not documents_found:
+                            documents_found = True
+                            check_interval = (
+                                0.2  # Switch to 200ms intervals once docs appear
+                            )
+                            max_interval = 0.8  # Cap at 800ms for faster stabilization
+                            log.debug(
+                                f"Documents found, switching to faster checking "
+                                f"(200ms intervals)"
+                            )
+
+                        # Check if count has stabilized (same count twice in a row)
+                        if current_count == last_count and current_count > 0:
+                            stable_count += 1
+                            if stable_count >= stable_threshold:
+                                elapsed = time.time() - start_time
+
+                                # Success - cache the result for other threads
+                                with _coordination_lock:
+                                    _stabilization_results[collection_name] = (
+                                        True,
+                                        time.time(),
+                                        current_count,
+                                    )
+
+                                log.info(
+                                    f"Indexing stabilized! {current_count} "
+                                    f"documents available after {elapsed:.1f}s"
+                                )
+                                return True
+                        else:
+                            stable_count = 0
+                            last_count = current_count
+                    else:
+                        # Simple count-based check for non-web-search collections
+                        log.info(
+                            f"Indexing check {attempt}: {current_count}/"
+                            f"{expected_count} documents available"
+                        )
+
+                        if current_count >= expected_count:
+                            elapsed = time.time() - start_time
+
+                            # Success - cache the result
+                            with _coordination_lock:
+                                _stabilization_results[collection_name] = (
+                                    True,
+                                    time.time(),
+                                    current_count,
+                                )
+
+                            log.info(
+                                f"Indexing completed! {current_count} documents "
+                                f"available after {elapsed:.1f}s"
+                            )
+                            return True
+
+                else:
+                    # No documents found yet
+                    if use_stabilization:
+                        log.info(
+                            f"Stabilization check {attempt}: 0 documents available"
+                        )
+                    else:
+                        log.info(
+                            f"Indexing check {attempt}: 0/{expected_count} "
+                            f"documents available"
+                        )
+
+            except Exception as e:
+                log.warning(f"Error checking indexing status: {e}")
+
+            # Smart backoff: faster when stabilizing, slower when waiting
+            if use_stabilization and documents_found:
+                # Fast stabilization mode - much shorter intervals
+                time.sleep(check_interval)
+                check_interval = min(
+                    check_interval * 1.2, max_interval
+                )  # Gentler increase
+            else:
+                # Normal backoff when waiting for initial documents
+                time.sleep(check_interval)
+                check_interval = min(
+                    check_interval * 1.4, max_interval
+                )  # Moderate increase
+
+            attempt += 1
+
+        # Timeout reached - mark as failed and cache the failure
+        elapsed = time.time() - start_time
+        with _coordination_lock:
+            _stabilization_results[collection_name] = (False, time.time(), 0)
+
+        if use_stabilization:
+            log.warning(f"Indexing stabilization timeout after {elapsed:.1f}s")
+        else:
+            log.warning(
+                f"Indexing timeout after {elapsed:.1f}s - "
+                f"expected {expected_count} documents"
+            )
+        return False
+
+    finally:
+        # Always clean up and notify any waiting threads
+        with _coordination_lock:
+            if collection_name in _stabilization_events:
+                event = _stabilization_events[collection_name]
+                del _stabilization_events[collection_name]
+                event.set()  # Wake up any waiting threads
 
 
 def get_doc(collection_name: str, user: UserModel = None, expected_count: int = None):
