@@ -452,3 +452,245 @@ const slowOps = await fetch('/api/cloud-sync/operations?min_duration=60000');
 const conflicts = await fetch('/api/cloud-sync/conflicts?knowledge_id=kb-123');
 // Present resolution options to user
 ```
+
+## 📊 Cloud Sync Database Schema & Sample Records
+
+### 🔄 **Operations Table** - Tracks sync operations and performance metrics
+
+**Schema:**
+```sql
+CREATE TABLE cloud_sync_operation (
+    id TEXT PRIMARY KEY,                    -- Unique operation ID
+    knowledge_id TEXT NOT NULL,             -- Knowledge base being synced
+    user_id TEXT NOT NULL,                  -- User performing the sync
+    provider TEXT NOT NULL,                 -- Cloud provider (google_drive, dropbox, etc.)
+    operation_type TEXT NOT NULL,           -- 'manual', 'auto', 'initial'
+    status TEXT NOT NULL,                   -- 'running', 'completed', 'failed', 'partial'
+    files_processed INTEGER DEFAULT 0,      -- Number of files successfully synced
+    files_skipped INTEGER DEFAULT 0,        -- Files skipped (no changes)
+    files_failed INTEGER DEFAULT 0,         -- Files that failed to sync
+    started_at INTEGER NOT NULL,            -- Unix timestamp (seconds)
+    completed_at INTEGER,                   -- Unix timestamp (seconds)
+    duration_ms INTEGER,                    -- Operation duration in milliseconds
+    data TEXT,                             -- JSON metadata (folders, errors, etc.)
+    meta TEXT,                             -- Additional JSON metadata
+    created_at INTEGER NOT NULL,           -- Record creation timestamp
+    updated_at INTEGER NOT NULL            -- Last update timestamp
+);
+```
+
+**Sample Record:**
+```
+             id = b372213d-6403-4038-9cb2-da7a4d464326
+   knowledge_id = 3e03e405-343b-4b4a-8e42-37ba23084325
+        user_id = unknown
+       provider = google_drive
+ operation_type = manual
+         status = completed
+files_processed = 1
+  files_skipped = 0
+   files_failed = 0
+     started_at = 1749592882
+   completed_at = 1749592903
+    duration_ms = 21000                    ← 21 seconds (fixed timing!)
+           data = {"folders_processed": 1, "folder_names": ["pppsd"]}
+           meta = {}
+     created_at = 1749592882
+     updated_at = 1749592903
+```
+
+### 📁 **Files Table** - Individual file tracking and metadata
+
+**Schema:**
+```sql
+CREATE TABLE cloud_sync_file (
+    id TEXT PRIMARY KEY,                    -- Unique file record ID
+    knowledge_id TEXT NOT NULL,             -- Parent knowledge base
+    file_id TEXT,                          -- OpenWebUI file ID (after sync)
+    user_id TEXT NOT NULL,                 -- File owner
+    provider TEXT NOT NULL,                -- Cloud provider
+    cloud_file_id TEXT NOT NULL,           -- Provider's file ID
+    cloud_folder_id TEXT NOT NULL,         -- Provider's folder ID
+    cloud_folder_name TEXT NOT NULL,       -- Human-readable folder name
+    filename TEXT NOT NULL,                -- File name
+    mime_type TEXT,                        -- MIME type
+    file_size INTEGER,                     -- File size in bytes
+    cloud_checksum TEXT,                   -- Provider's checksum
+    sync_status TEXT NOT NULL,             -- 'pending', 'synced', 'failed', 'conflict'
+    last_sync_time INTEGER,               -- Last successful sync timestamp
+    cloud_modified_time INTEGER,          -- File's cloud modification time
+    local_modified_time INTEGER,          -- File's local modification time
+    data TEXT,                           -- JSON with full cloud metadata
+    meta TEXT,                           -- Additional metadata
+    created_at INTEGER NOT NULL,         -- Record creation
+    updated_at INTEGER NOT NULL          -- Last update
+);
+```
+
+**Sample Record:**
+```
+                 id = 46585cb0-3903-41c2-a44c-25089f64185a
+       knowledge_id = 3e03e405-343b-4b4a-8e42-37ba23084325
+            file_id = (null - will be populated after sync)
+            user_id = unknown
+           provider = google_drive
+      cloud_file_id = 1QkAprQXefDIsPhTu66YNJrTOLhF5Ulb0
+    cloud_folder_id = 1iGVkmMCGSxrwSsN8OEfoJxwgZNtDQj77
+  cloud_folder_name = 
+           filename = pppsd_infrastructure_development.txt
+          mime_type = text/plain
+          file_size = 15447                 ← 15.4 KB file
+     cloud_checksum = 
+        sync_status = pending
+     last_sync_time = 
+cloud_modified_time = 1749618103
+local_modified_time = 
+               data = {"id": "1QkAprQXefDIsPhTu66YNJrTOLhF5Ulb0", ...full Google Drive metadata...}
+               meta = {}
+         created_at = 1749592903
+         updated_at = 1749592903
+```
+
+### ⚠️ **Conflicts Table** - Conflict detection and resolution
+
+**Schema:**
+```sql
+CREATE TABLE cloud_sync_conflict (
+    id TEXT PRIMARY KEY,                    -- Unique conflict ID
+    sync_file_id TEXT NOT NULL,             -- Reference to cloud_sync_file
+    knowledge_id TEXT NOT NULL,             -- Parent knowledge base
+    user_id TEXT NOT NULL,                  -- User affected
+    conflict_type TEXT NOT NULL,            -- 'modified_both', 'deleted_local', 'deleted_cloud'
+    conflict_detected_at INTEGER NOT NULL,  -- When conflict was detected
+    cloud_state TEXT,                      -- JSON snapshot of cloud file state
+    local_state TEXT,                      -- JSON snapshot of local file state
+    resolution_status TEXT NOT NULL DEFAULT 'pending', -- 'pending', 'resolved', 'ignored'
+    resolution_method TEXT,               -- 'cloud-wins', 'local-wins', 'user-choice'
+    resolved_by TEXT,                     -- User who resolved the conflict
+    resolved_at INTEGER,                  -- When conflict was resolved
+    data TEXT,                           -- Additional conflict data
+    meta TEXT,                           -- Metadata
+    created_at INTEGER NOT NULL,         -- Record creation
+    updated_at INTEGER NOT NULL          -- Last update
+);
+```
+
+## 🔍 **Key Features Demonstrated:**
+
+1. **Complete Audit Trail** - Every sync operation tracked with performance metrics
+2. **Individual File Tracking** - Each file's sync status and metadata preserved  
+3. **Conflict Management** - Built-in conflict detection and resolution workflow
+4. **Performance Monitoring** - Accurate timing (duration_ms now correctly calculated!)
+5. **Provider Agnostic** - Schema supports multiple cloud providers
+6. **Rich Metadata** - Full cloud provider metadata preserved in JSON fields
+
+This comprehensive database design provides enterprise-grade sync monitoring and troubleshooting capabilities! 🚀
+
+```sql
+CREATE TABLE cloud_sync_operation (
+    id TEXT PRIMARY KEY,                    -- Unique operation ID
+    knowledge_id TEXT NOT NULL,             -- Knowledge base being synced
+    user_id TEXT NOT NULL,                  -- User performing the sync
+    provider TEXT NOT NULL,                 -- Cloud provider (google_drive, dropbox, etc.)
+    operation_type TEXT NOT NULL,           -- 'manual', 'auto', 'initial'
+    status TEXT NOT NULL,                   -- 'running', 'completed', 'failed', 'partial'
+    files_processed INTEGER DEFAULT 0,      -- Number of files successfully synced
+    files_skipped INTEGER DEFAULT 0,        -- Files skipped (no changes)
+    files_failed INTEGER DEFAULT 0,         -- Files that failed to sync
+    started_at INTEGER NOT NULL,            -- Unix timestamp (seconds)
+    completed_at INTEGER,                   -- Unix timestamp (seconds)
+    duration_ms INTEGER,                    -- Operation duration in milliseconds
+    data TEXT,                             -- JSON metadata (folders, errors, etc.)
+    meta TEXT,                             -- Additional JSON metadata
+    created_at INTEGER NOT NULL,           -- Record creation timestamp
+    updated_at INTEGER NOT NULL            -- Last update timestamp
+);
+```
+
+```plaintext
+             id = b372213d-6403-4038-9cb2-da7a4d464326
+   knowledge_id = 3e03e405-343b-4b4a-8e42-37ba23084325
+        user_id = unknown
+       provider = google_drive
+ operation_type = manual
+         status = completed
+files_processed = 1
+  files_skipped = 0
+   files_failed = 0
+     started_at = 1749592882
+   completed_at = 1749592903
+    duration_ms = 21000                    ← 21 seconds (fixed timing!)
+           data = {"folders_processed": 1, "folder_names": ["pppsd"]}
+           meta = {}
+     created_at = 1749592882
+     updated_at = 1749592903
+```
+
+```sql
+CREATE TABLE cloud_sync_file (
+    id TEXT PRIMARY KEY,                    -- Unique file record ID
+    knowledge_id TEXT NOT NULL,             -- Parent knowledge base
+    file_id TEXT,                          -- OpenWebUI file ID (after sync)
+    user_id TEXT NOT NULL,                 -- File owner
+    provider TEXT NOT NULL,                -- Cloud provider
+    cloud_file_id TEXT NOT NULL,           -- Provider's file ID
+    cloud_folder_id TEXT NOT NULL,         -- Provider's folder ID
+    cloud_folder_name TEXT NOT NULL,       -- Human-readable folder name
+    filename TEXT NOT NULL,                -- File name
+    mime_type TEXT,                        -- MIME type
+    file_size INTEGER,                     -- File size in bytes
+    cloud_checksum TEXT,                   -- Provider's checksum
+    sync_status TEXT NOT NULL,             -- 'pending', 'synced', 'failed', 'conflict'
+    last_sync_time INTEGER,               -- Last successful sync timestamp
+    cloud_modified_time INTEGER,          -- File's cloud modification time
+    local_modified_time INTEGER,          -- File's local modification time
+    data TEXT,                           -- JSON with full cloud metadata
+    meta TEXT,                           -- Additional metadata
+    created_at INTEGER NOT NULL,         -- Record creation
+    updated_at INTEGER NOT NULL          -- Last update
+);
+```
+
+```plaintext
+                 id = 46585cb0-3903-41c2-a44c-25089f64185a
+       knowledge_id = 3e03e405-343b-4b4a-8e42-37ba23084325
+            file_id = (null - will be populated after sync)
+            user_id = unknown
+           provider = google_drive
+      cloud_file_id = 1QkAprQXefDIsPhTu66YNJrTOLhF5Ulb0
+    cloud_folder_id = 1iGVkmMCGSxrwSsN8OEfoJxwgZNtDQj77
+  cloud_folder_name = 
+           filename = pppsd_infrastructure_development.txt
+          mime_type = text/plain
+          file_size = 15447                 ← 15.4 KB file
+     cloud_checksum = 
+        sync_status = pending
+     last_sync_time = 
+cloud_modified_time = 1749618103
+local_modified_time = 
+               data = {"id": "1QkAprQXefDIsPhTu66YNJrTOLhF5Ulb0", ...full Google Drive metadata...}
+               meta = {}
+         created_at = 1749592903
+         updated_at = 1749592903
+```
+
+```sql
+CREATE TABLE cloud_sync_conflict (
+    id TEXT PRIMARY KEY,                    -- Unique conflict ID
+    sync_file_id TEXT NOT NULL,             -- Reference to cloud_sync_file
+    knowledge_id TEXT NOT NULL,             -- Parent knowledge base
+    user_id TEXT NOT NULL,                  -- User affected
+    conflict_type TEXT NOT NULL,            -- 'modified_both', 'deleted_local', 'deleted_cloud'
+    conflict_detected_at INTEGER NOT NULL,  -- When conflict was detected
+    cloud_state TEXT,                      -- JSON snapshot of cloud file state
+    local_state TEXT,                      -- JSON snapshot of local file state
+    resolution_status TEXT NOT NULL DEFAULT 'pending', -- 'pending', 'resolved', 'ignored'
+    resolution_method TEXT,               -- 'cloud-wins', 'local-wins', 'user-choice'
+    resolved_by TEXT,                     -- User who resolved the conflict
+    resolved_at INTEGER,                  -- When conflict was resolved
+    data TEXT,                           -- Additional conflict data
+    meta TEXT,                           -- Metadata
+    created_at INTEGER NOT NULL,         -- Record creation
+    updated_at INTEGER NOT NULL          -- Last update
+);
+```
