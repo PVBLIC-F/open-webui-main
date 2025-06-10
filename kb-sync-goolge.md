@@ -509,3 +509,13 @@ backend/open_webui/routers/
 Configuration:
 sync_google_drive_config.py                    🆕 NEW
 ```
+
+Our Google Drive Auto-Sync feature now consists of only the **actually used files**:
+
+### **🔄 Modified Files: 5**
+- `src/lib/components/workspace/Knowledge/KnowledgeBase.svelte`
+- `src/lib/components/workspace/Knowledge/KnowledgeBase/Files.svelte`
+- `src/lib/components/workspace/Knowledge/KnowledgeBase/AddContentMenu.svelte`
+- `src/lib/components/common/FileItem.svelte`
+- `src/lib/utils/google-drive-picker.ts`
+- `backend/open_webui/routers/knowledge.py`
