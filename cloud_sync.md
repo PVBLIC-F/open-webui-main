@@ -226,7 +226,7 @@ CREATE INDEX IF NOT EXISTS idx_cloud_sync_conflict_status ON cloud_sync_conflict
 ## Flowchart (Mermaid)
 
 ```mermaid
-flowchart TD
+flowchart TD;
     A[User creates Knowledge Base] --> B[User connects Google Drive]
     B --> C[User selects folder(s)]
     C --> D[Front-end calls /folder/register for each folder]
