@@ -14,21 +14,19 @@ Cloud Sync enables OpenWebUI knowledge bases to automatically and continuously s
 
 ## System Flowchart
 
-```mermaid
 flowchart TD
-    A[User creates Knowledge Base] --> B[User connects Google Drive]
-    B --> C[User selects folder(s)]
-    C --> D[Front-end calls /folder/register for each folder]
-    D --> E[Front-end calls /operation/trigger]
-    E --> F[Monitor (cloud_sync/service.py) sees pending operation]
-    F --> G[Monitor downloads new/changed files]
-    G --> H[Monitor uploads files via backend API]
-    H --> I[Backend processes files, vectorizes, updates DB]
-    I --> J[Monitor updates cloud_sync_file and cloud_sync_operation]
-    J --> K[UI polls status endpoint]
-    K --> L[User notified when all files processed]
-    L --> M[Monitor continues periodic sync for new/deleted files]
-```
+    A["User creates Knowledge Base"] --> B["User connects Google Drive"]
+    B --> C["User selects folder(s)"]
+    C --> D["Front-end calls /folder/register for each folder"]
+    D --> E["Front-end calls /operation/trigger"]
+    E --> F["Monitor (cloud_sync/service.py) sees pending operation"]
+    F --> G["Monitor downloads new/changed files"]
+    G --> H["Monitor uploads files via backend API"]
+    H --> I["Backend processes files, vectorizes, updates DB"]
+    I --> J["Monitor updates cloud_sync_file and cloud_sync_operation"]
+    J --> K["UI polls status endpoint"]
+    K --> L["User notified when all files processed"]
+    L --> M["Monitor continues periodic sync for new/deleted files"]
 
 ---
 
