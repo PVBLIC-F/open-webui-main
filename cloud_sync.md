@@ -226,4 +226,106 @@ CREATE INDEX IF NOT EXISTS idx_cloud_sync_conflict_status ON cloud_sync_conflict
 **For contributors:**
 - See the code in `backend/cloud_sync/`, `open_webui/routers/cloud_sync.py`, and the migration scripts.
 - Use the SQL above to create or inspect the sync tables.
-- All sync logic is unified in the monitor—no duplicate code paths. 
+- All sync logic is unified in the monitor—no duplicate code paths.
+
+- Here is a **precise list of all new or modified files** required for the Cloud Sync feature.  
+This list includes only files that were **added** or **changed** as part of this feature.  
+Anything not listed here was not touched or is not required for Cloud Sync.
+
+---
+
+## **Backend**
+
+**New Files:**
+- `backend/cloud_sync/monitor.py`  
+  Main sync orchestration logic.
+- `backend/cloud_sync/service.py`  
+  Entrypoint for running the monitor as a background process.
+- `backend/cloud_sync/providers/google_drive.py`  
+  Google Drive API integration.
+- `backend/cloud_sync/config.py`  
+  Centralized configuration management.
+- `backend/cloud_sync/cli.py`  
+  CLI utilities for sync (if present).
+- `backend/cloud_sync/logs/monitor.log`  
+  Persistent, rotating log file (auto-created).
+- `backend/cloud_sync/README.md`  
+  Developer documentation for cloud sync.
+
+**Modified Files:**
+- `backend/open_webui/routers/cloud_sync.py`  
+  **Added:**  
+  - Endpoints for folder registration and sync operation trigger  
+  - Request models for these endpoints
+- `backend/open_webui/models/cloud_sync.py`  
+  **Added/Updated:**  
+  - SQLAlchemy models for `cloud_sync_file`, `cloud_sync_operation`, `cloud_sync_conflict`
+- `backend/open_webui/models/knowledge.py`  
+  **Updated:**  
+  - Folder metadata support (if not already present)
+- `backend/open_webui/routers/knowledge.py`  
+  **Updated:**  
+  - Cloud sync status and file management logic
+- `backend/open_webui/main.py`  
+  **Updated:**  
+  - Includes the cloud sync router
+- `backend/open_webui/migrations/`  
+  **New/Updated:**  
+  - Migration scripts for new tables
+
+---
+
+## **Frontend**
+
+**Modified Files:**
+- `src/lib/components/workspace/Knowledge/CloudSyncStatus.svelte`  
+  **New/Updated:**  
+  - UI for displaying cloud sync status
+- `src/lib/components/workspace/Knowledge/KnowledgeBase.svelte`  
+  **Updated:**  
+  - Integrates cloud sync status and triggers polling
+- `src/lib/constants.ts`  
+  **Updated:**  
+  - Defines `CLOUD_SYNC_API_BASE_URL` for API calls
+
+---
+
+## **Documentation**
+
+**New Files:**
+- `CLOUD_SYNC.md`  
+  Comprehensive documentation for this feature
+
+---
+
+## **Database**
+
+**Migration Scripts:**
+- `backend/open_webui/migrations/versions/<timestamp>_add_cloud_sync_tables.py`  
+  (Or equivalent SQL migration scripts for the new tables)
+
+---
+
+## **Summary Table**
+
+| File/Directory                                         | Type      | Purpose/Change                                      |
+|--------------------------------------------------------|-----------|-----------------------------------------------------|
+| backend/cloud_sync/monitor.py                          | New       | Main sync orchestration logic                       |
+| backend/cloud_sync/service.py                          | New       | Entrypoint for running the monitor                  |
+| backend/cloud_sync/providers/google_drive.py           | New       | Google Drive API integration                        |
+| backend/cloud_sync/config.py                           | New       | Centralized configuration management                |
+| backend/cloud_sync/cli.py                              | New       | CLI utilities for sync (if present)                 |
+| backend/cloud_sync/logs/monitor.log                    | New       | Persistent, rotating log file (auto-created)        |
+| backend/cloud_sync/README.md                           | New       | Developer documentation                             |
+| backend/open_webui/routers/cloud_sync.py               | Modified  | New endpoints for folder register & sync trigger    |
+| backend/open_webui/models/cloud_sync.py                | Modified  | Models for new tables                               |
+| backend/open_webui/models/knowledge.py                 | Modified  | Folder metadata support                             |
+| backend/open_webui/routers/knowledge.py                | Modified  | Cloud sync status and file management               |
+| backend/open_webui/main.py                             | Modified  | Includes cloud sync router                          |
+| backend/open_webui/migrations/                         | New/Upd   | Migration scripts for new tables                    |
+| src/lib/components/workspace/Knowledge/CloudSyncStatus.svelte | New/Upd | UI for cloud sync status                            |
+| src/lib/components/workspace/Knowledge/KnowledgeBase.svelte   | Modified | Integrates cloud sync status and polling            |
+| src/lib/constants.ts                                   | Modified  | API base URL and config                             |
+| CLOUD_SYNC.md                                          | New       | Documentation for this feature                      |
+
+---
