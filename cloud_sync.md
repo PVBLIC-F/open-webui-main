@@ -16,7 +16,7 @@ Cloud Sync enables OpenWebUI knowledge bases to automatically and continuously s
 
 ```mermaid
 flowchart TD;
-    A["User creates Knowledge Base"] --> B["User connects Google Drive"]
+    A["User creates Knowledge Base"] --> B["User connects Cloud Drive"]
     B --> C["User selects folder(s)"]
     C --> D["Front-end calls /folder/register for each folder"]
     D --> E["Front-end calls /operation/trigger"]
