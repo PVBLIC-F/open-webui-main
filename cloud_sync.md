@@ -14,7 +14,8 @@ Cloud Sync enables OpenWebUI knowledge bases to automatically and continuously s
 
 ## System Flowchart
 
-flowchart TD
+```mermaid
+flowchart TD;
     A["User creates Knowledge Base"] --> B["User connects Google Drive"]
     B --> C["User selects folder(s)"]
     C --> D["Front-end calls /folder/register for each folder"]
@@ -27,6 +28,7 @@ flowchart TD
     J --> K["UI polls status endpoint"]
     K --> L["User notified when all files processed"]
     L --> M["Monitor continues periodic sync for new/deleted files"]
+```
 
 ---
 
