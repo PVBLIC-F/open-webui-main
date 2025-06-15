@@ -38,8 +38,8 @@ graph TB
 **`backend/open_webui/sync/worker.py`**
 - **Purpose**: Main sync worker that runs continuously in the background
 - **Key Functions**:
-  - `sync_worker()`: Main worker loop that runs every 60 seconds
-  - Discovers users with Google Drive tokens
+  - `sync_worker()`: Main worker loop that runs every x seconds defined by CLOUD_SYNC_INTERVAL variable
+  - Discovers users with Google Drive tokens and stores refresh so user only has to auth once.
   - Triggers sync operations for each provider
   - Handles worker-level error recovery
 - **Dependencies**: CloudTokens model, sync providers
@@ -466,7 +466,7 @@ CREATE TABLE file (
 The sync worker runs continuously in the background, triggering sync operations at regular intervals.
 
 **Key Features:**
-- Runs every 60 seconds
+- Runs every x seconds using CLOUD_SYNC_INTERVAL variable
 - Discovers users with Google Drive tokens
 - Triggers sync for each provider
 - Handles errors gracefully
