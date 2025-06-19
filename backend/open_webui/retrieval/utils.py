@@ -75,16 +75,90 @@ class VectorSearchRetriever(BaseRetriever):
 
 
 def query_doc(
-    collection_name: str, query_embedding: list[float], k: int, user: UserModel = None
+    collection_name: str,
+    query_embedding: list[float],
+    k: int,
+    user: UserModel = None,
+    expected_count: int = None,
 ):
+    """
+    Query vector database with intelligent indexing wait for web search collections.
+
+    Fixes race condition where queries happened before indexing completed.
+    Web search collections get longer timeout and stabilization logic.
+    """
+    import time
+
     try:
         log.debug(f"query_doc:doc {collection_name}")
-        result = VECTOR_DB_CLIENT.search(
-            collection_name=collection_name,
-            vectors=[query_embedding],
-            limit=k,
-        )
 
+        # Auto-detect web search collections for intelligent waiting
+        is_web_search = collection_name.startswith("web-search-")
+
+        if is_web_search or (expected_count is not None and expected_count > 0):
+            # Web search gets 15s timeout vs 10s for others
+            timeout = 15.0 if is_web_search else 10.0
+
+            if wait_for_indexing(collection_name, expected_count or 1, timeout):
+                # Indexing complete, perform search with relevance scores
+                result = VECTOR_DB_CLIENT.search(
+                    collection_name=collection_name,
+                    vectors=[query_embedding],
+                    limit=k,
+                )
+                if result:
+                    doc_count = len(result.documents[0]) if result.documents[0] else 0
+                    log.info(f"query_doc: Retrieved {doc_count} documents")
+                    log.info(f"query_doc:result {result.ids} {result.metadatas}")
+                return result
+            else:
+                # Indexing timeout - return empty result
+                log.warning(
+                    f"query_doc: Indexing timeout for collection "
+                    f"'{collection_name}'"
+                )
+                return None
+
+        # Legacy retry mechanism for non-web-search collections
+        max_retries = 4
+        retry_delay = 2.0  # seconds
+
+        for attempt in range(max_retries):
+            log.info(
+                f"query_doc: Attempt {attempt + 1}/{max_retries} "
+                f"for collection '{collection_name}'"
+            )
+
+            result = VECTOR_DB_CLIENT.search(
+                collection_name=collection_name,
+                vectors=[query_embedding],
+                limit=k,
+            )
+
+            # Check if we got meaningful results
+            if result and result.documents and result.documents[0]:
+                log.info(
+                    f"query_doc: SUCCESS on attempt {attempt + 1} - "
+                    f"Found {len(result.documents[0])} documents"
+                )
+                if result:
+                    log.info(f"query_doc:result {result.ids} {result.metadatas}")
+                return result
+
+            # If this is not the last attempt and we got empty results, wait and retry
+            if attempt < max_retries - 1:
+                log.info(
+                    f"query_doc: Empty results on attempt {attempt + 1}, "
+                    f"retrying in {retry_delay}s..."
+                )
+                time.sleep(retry_delay)
+            else:
+                log.warning(
+                    f"query_doc: All {max_retries} attempts failed "
+                    f"for collection '{collection_name}'"
+                )
+
+        # Log final result if all retries completed
         if result:
             log.info(f"query_doc:result {result.ids} {result.metadatas}")
 
@@ -94,11 +168,335 @@ def query_doc(
         raise e
 
 
-def get_doc(collection_name: str, user: UserModel = None):
+import threading
+import time
+from typing import Dict, Tuple
+
+# Global coordination system for stabilization to prevent parallel redundant checks
+# This prevents multiple concurrent requests from doing duplicate stabilization work
+_stabilization_events: Dict[str, threading.Event] = {}  # collection -> event
+_stabilization_results: Dict[str, Tuple[bool, float, int]] = (
+    {}
+)  # collection -> (success, timestamp, doc_count)
+_coordination_lock = threading.Lock()
+_RESULT_TTL = 10.0  # Cache successful results for 10 seconds
+
+
+def wait_for_indexing(
+    collection_name: str, expected_count: int, timeout: float = 10.0
+) -> bool:
+    """
+    Optimized wait for vector database indexing with thread coordination.
+
+    Uses threading events to coordinate multiple parallel requests for the same
+    collection, ensuring only one thread does the actual stabilization work while
+    others wait for the result. Features smart timing optimizations for web search.
+
+    Args:
+        collection_name: Collection to check (auto-detects web search by prefix)
+        expected_count: Expected document count (1 = "any documents")
+        timeout: Max wait time (15s for web search, 10s for others)
+
+    Returns:
+        True if indexing complete, False if timeout
+    """
+    import time
+
+    # Skip wait if no documents expected
+    if expected_count == 0:
+        log.info(
+            f"No documents expected for collection '{collection_name}', "
+            "skipping wait"
+        )
+        return True
+
+    # Quick cache check - return immediately if we have a recent successful result
+    current_time = time.time()
+
+    # Determine coordination strategy - wait for other thread or do the work
+    should_wait_for_other_thread = False
+    event_to_wait_for = None
+
+    with _coordination_lock:
+        # Check if we have a cached successful result
+        if collection_name in _stabilization_results:
+            success, result_time, doc_count = _stabilization_results[collection_name]
+            if current_time - result_time < _RESULT_TTL and success and doc_count > 0:
+                log.debug(
+                    f"Using cached result for '{collection_name}': "
+                    f"{doc_count} documents "
+                    f"(cached {current_time - result_time:.1f}s ago)"
+                )
+                return True
+
+        # Check if another thread is already doing stabilization work
+        if collection_name in _stabilization_events:
+            # Another thread is working - we'll wait for its result
+            event_to_wait_for = _stabilization_events[collection_name]
+            should_wait_for_other_thread = True
+            log.debug(
+                f"Waiting for another thread to complete stabilization for "
+                f"'{collection_name}'"
+            )
+        else:
+            # We're the first thread - create event and proceed with work
+            event = threading.Event()
+            _stabilization_events[collection_name] = event
+
+    # Wait for another thread's result (happens outside the lock to avoid blocking)
+    if should_wait_for_other_thread and event_to_wait_for:
+        # Wait for the other thread to complete (with timeout)
+        if event_to_wait_for.wait(timeout=min(timeout, 15.0)):
+            # Other thread completed, check if we can use its result
+            with _coordination_lock:
+                if collection_name in _stabilization_results:
+                    success, result_time, doc_count = _stabilization_results[
+                        collection_name
+                    ]
+                    if current_time - result_time < _RESULT_TTL and success:
+                        log.debug(
+                            f"Got result from other thread: {doc_count} documents"
+                        )
+                        return True
+
+        # If we get here, the other thread failed or timed out
+        log.debug(
+            f"Other thread failed/timed out, doing our own check for "
+            f"'{collection_name}'"
+        )
+
+        # Try to become the worker thread now
+        with _coordination_lock:
+            if collection_name not in _stabilization_events:
+                event = threading.Event()
+                _stabilization_events[collection_name] = event
+            else:
+                # Another thread beat us to it, just return False
+                return False
+
+    try:
+        # We're the thread doing the actual stabilization work
+        start_time = time.time()
+
+        # Optimized timing: fast initial checks, adaptive intervals
+        check_interval = 0.3  # Start with 300ms intervals (faster than 500ms)
+        max_interval = 1.0  # Max 1 second intervals (reduced from 2s)
+        attempt = 1
+
+        # Web search gets special stabilization logic (wait for count to stabilize)
+        # Other collections just wait for expected count
+        is_web_search = collection_name.startswith("web-search-")
+        use_stabilization = is_web_search and expected_count == 1
+
+        if use_stabilization:
+            log.info(
+                f"Waiting for document indexing to stabilize in '{collection_name}'"
+            )
+            last_count = 0
+            stable_count = 0
+            stable_threshold = 2  # Need 2 consecutive checks with same count
+            documents_found = False  # Track when we first find documents
+        else:
+            log.info(
+                f"Waiting for {expected_count} documents to be indexed in "
+                f"'{collection_name}'"
+            )
+
+        # Main stabilization loop with adaptive timing
+        while time.time() - start_time < timeout:
+            try:
+                result = VECTOR_DB_CLIENT.get(collection_name=collection_name)
+
+                if result and result.documents and result.documents[0]:
+                    current_count = len(result.documents[0])
+
+                    if use_stabilization:
+                        log.info(
+                            f"Stabilization check {attempt}: {current_count} "
+                            f"documents available"
+                        )
+
+                        # Optimization: switch to faster checking once docs appear
+                        if current_count > 0 and not documents_found:
+                            documents_found = True
+                            check_interval = (
+                                0.2  # Switch to 200ms intervals once docs appear
+                            )
+                            max_interval = 0.8  # Cap at 800ms for faster stabilization
+                            log.debug(
+                                f"Documents found, switching to faster checking "
+                                f"(200ms intervals)"
+                            )
+
+                        # Check if count has stabilized (same count twice in a row)
+                        if current_count == last_count and current_count > 0:
+                            stable_count += 1
+                            if stable_count >= stable_threshold:
+                                elapsed = time.time() - start_time
+
+                                # Success - cache the result for other threads
+                                with _coordination_lock:
+                                    _stabilization_results[collection_name] = (
+                                        True,
+                                        time.time(),
+                                        current_count,
+                                    )
+
+                                log.info(
+                                    f"Indexing stabilized! {current_count} "
+                                    f"documents available after {elapsed:.1f}s"
+                                )
+                                return True
+                        else:
+                            stable_count = 0
+                            last_count = current_count
+                    else:
+                        # Simple count-based check for non-web-search collections
+                        log.info(
+                            f"Indexing check {attempt}: {current_count}/"
+                            f"{expected_count} documents available"
+                        )
+
+                        if current_count >= expected_count:
+                            elapsed = time.time() - start_time
+
+                            # Success - cache the result
+                            with _coordination_lock:
+                                _stabilization_results[collection_name] = (
+                                    True,
+                                    time.time(),
+                                    current_count,
+                                )
+
+                            log.info(
+                                f"Indexing completed! {current_count} documents "
+                                f"available after {elapsed:.1f}s"
+                            )
+                            return True
+
+                else:
+                    # No documents found yet
+                    if use_stabilization:
+                        log.info(
+                            f"Stabilization check {attempt}: 0 documents available"
+                        )
+                    else:
+                        log.info(
+                            f"Indexing check {attempt}: 0/{expected_count} "
+                            f"documents available"
+                        )
+
+            except Exception as e:
+                log.warning(f"Error checking indexing status: {e}")
+
+            # Smart backoff: faster when stabilizing, slower when waiting
+            if use_stabilization and documents_found:
+                # Fast stabilization mode - much shorter intervals
+                time.sleep(check_interval)
+                check_interval = min(
+                    check_interval * 1.2, max_interval
+                )  # Gentler increase
+            else:
+                # Normal backoff when waiting for initial documents
+                time.sleep(check_interval)
+                check_interval = min(
+                    check_interval * 1.4, max_interval
+                )  # Moderate increase
+
+            attempt += 1
+
+        # Timeout reached - mark as failed and cache the failure
+        elapsed = time.time() - start_time
+        with _coordination_lock:
+            _stabilization_results[collection_name] = (False, time.time(), 0)
+
+        if use_stabilization:
+            log.warning(f"Indexing stabilization timeout after {elapsed:.1f}s")
+        else:
+            log.warning(
+                f"Indexing timeout after {elapsed:.1f}s - "
+                f"expected {expected_count} documents"
+            )
+        return False
+
+    finally:
+        # Always clean up and notify any waiting threads
+        with _coordination_lock:
+            if collection_name in _stabilization_events:
+                event = _stabilization_events[collection_name]
+                del _stabilization_events[collection_name]
+                event.set()  # Wake up any waiting threads
+
+
+def get_doc(collection_name: str, user: UserModel = None, expected_count: int = None):
+    """
+    Get all documents from collection with intelligent indexing wait.
+
+    Enhanced for web search collections with same race condition fixes as query_doc.
+    """
+    import time
+
     try:
         log.debug(f"get_doc:doc {collection_name}")
-        result = VECTOR_DB_CLIENT.get(collection_name=collection_name)
 
+        # Auto-detect web search collections for intelligent waiting
+        is_web_search = collection_name.startswith("web-search-")
+
+        if is_web_search or (expected_count is not None and expected_count > 0):
+            # Web search gets 15s timeout vs 10s for others
+            timeout = 15.0 if is_web_search else 10.0
+
+            if wait_for_indexing(collection_name, expected_count or 1, timeout):
+                # Indexing complete, retrieve documents
+                result = VECTOR_DB_CLIENT.get(collection_name=collection_name)
+                if result:
+                    doc_count = len(result.documents[0]) if result.documents[0] else 0
+                    log.info(f"get_doc: Retrieved {doc_count} documents")
+                    log.info(f"query_doc:result {result.ids} {result.metadatas}")
+                return result
+            else:
+                # Timeout - return empty result
+                log.warning(
+                    f"get_doc: Indexing timeout for collection " f"'{collection_name}'"
+                )
+                return None
+
+        # Fallback: Legacy retry mechanism for non-web-search collections
+        max_retries = 4
+        retry_delay = 2.0  # seconds
+
+        for attempt in range(max_retries):
+            log.info(
+                f"get_doc: Attempt {attempt + 1}/{max_retries} "
+                f"for collection '{collection_name}'"
+            )
+
+            result = VECTOR_DB_CLIENT.get(collection_name=collection_name)
+
+            # Check if we got meaningful results
+            if result and result.documents and result.documents[0]:
+                log.info(
+                    f"get_doc: SUCCESS on attempt {attempt + 1} - "
+                    f"Found {len(result.documents[0])} documents"
+                )
+                if result:
+                    log.info(f"query_doc:result {result.ids} {result.metadatas}")
+                return result
+
+            # If this is not the last attempt and we got empty results, wait and retry
+            if attempt < max_retries - 1:
+                log.info(
+                    f"get_doc: Empty results on attempt {attempt + 1}, "
+                    f"retrying in {retry_delay}s..."
+                )
+                time.sleep(retry_delay)
+            else:
+                log.warning(
+                    f"get_doc: All {max_retries} attempts failed "
+                    f"for collection '{collection_name}'"
+                )
+
+        # Log final result if all retries completed
         if result:
             log.info(f"query_doc:result {result.ids} {result.metadatas}")
 
@@ -164,7 +562,8 @@ def query_doc_with_hybrid_search(
         documents = [d.page_content for d in result]
         metadatas = [d.metadata for d in result]
 
-        # retrieve only min(k, k_reranker) items, sort and cut by distance if k < k_reranker
+        # retrieve only min(k, k_reranker) items, sort and cut by distance
+        # if k < k_reranker
         if k < k_reranker:
             sorted_items = sorted(
                 zip(distances, metadatas, documents), key=lambda x: x[0], reverse=True
@@ -293,7 +692,8 @@ def query_collection(
     # Generate all query embeddings (in one call)
     query_embeddings = embedding_function(queries, prefix=RAG_EMBEDDING_QUERY_PREFIX)
     log.debug(
-        f"query_collection: processing {len(queries)} queries across {len(collection_names)} collections"
+        f"query_collection: processing {len(queries)} queries across "
+        f"{len(collection_names)} collections"
     )
 
     with ThreadPoolExecutor() as executor:
@@ -336,9 +736,11 @@ def query_collection_with_hybrid_search(
     for collection_name in collection_names:
         try:
             log.debug(
-                f"query_collection_with_hybrid_search:VECTOR_DB_CLIENT.get:collection {collection_name}"
+                f"query_collection_with_hybrid_search:VECTOR_DB_CLIENT.get:"
+                f"collection {collection_name}"
             )
-            collection_results[collection_name] = VECTOR_DB_CLIENT.get(
+            # Use get_doc to benefit from retry mechanism
+            collection_results[collection_name] = get_doc(
                 collection_name=collection_name
             )
         except Exception as e:
@@ -346,7 +748,8 @@ def query_collection_with_hybrid_search(
             collection_results[collection_name] = None
 
     log.info(
-        f"Starting hybrid search for {len(queries)} queries in {len(collection_names)} collections..."
+        f"Starting hybrid search for {len(queries)} queries in "
+        f"{len(collection_names)} collections..."
     )
 
     def process_query(collection_name, query):
@@ -368,7 +771,8 @@ def query_collection_with_hybrid_search(
             return None, e
 
     # Prepare tasks for all collections and queries
-    # Avoid running any tasks for collections that failed to fetch data (have assigned None)
+    # Avoid running any tasks for collections that failed to fetch data
+    # (have assigned None)
     tasks = [
         (cn, q)
         for cn in collection_names
@@ -388,7 +792,8 @@ def query_collection_with_hybrid_search(
 
     if error and not results:
         raise Exception(
-            "Hybrid search failed for all collections. Using Non-hybrid search as fallback."
+            "Hybrid search failed for all collections. "
+            "Using Non-hybrid search as fallback."
         )
 
     return merge_and_sort_query_results(results, k=k)
@@ -455,7 +860,8 @@ def get_sources_from_files(
     full_context=False,
 ):
     log.debug(
-        f"files: {files} {queries} {embedding_function} {reranking_function} {full_context}"
+        f"files: {files} {queries} {embedding_function} "
+        f"{reranking_function} {full_context}"
     )
 
     extracted_collections = []
@@ -480,7 +886,7 @@ def get_sources_from_files(
             file.get("type") != "web_search"
             and request.app.state.config.BYPASS_EMBEDDING_AND_RETRIEVAL
         ):
-            # BYPASS_EMBEDDING_AND_RETRIEVAL
+            # Exclude web_search files from bypass to ensure vector retrieval
             if file.get("type") == "collection":
                 file_ids = file.get("data", {}).get("file_ids", [])
 
@@ -527,64 +933,69 @@ def get_sources_from_files(
                     ],
                 }
         else:
+            # Vector retrieval path - FIXED: Web search files now flow through here
+            # Previous bug: Web search files were blocked from vector retrieval
             collection_names = []
-            if file.get("type") == "collection":
-                if file.get("legacy"):
-                    collection_names = file.get("collection_names", [])
-                else:
-                    collection_names.append(file["id"])
-            elif file.get("collection_name"):
-                collection_names.append(file["collection_name"])
-            elif file.get("id"):
-                if file.get("legacy"):
-                    collection_names.append(f"{file['id']}")
-                else:
-                    collection_names.append(f"file-{file['id']}")
+
+            for file in files:
+                if file.get("type") == "collection":
+                    if file.get("legacy"):
+                        collection_names = file.get("collection_names", [])
+                    else:
+                        collection_names.append(file["id"])
+                elif file.get("collection_name"):
+                    collection_names.append(file["collection_name"])
+                elif file.get("id"):
+                    if file.get("legacy"):
+                        collection_names.append(f"{file['id']}")
+                    else:
+                        collection_names.append(f"file-{file['id']}")
 
             collection_names = set(collection_names).difference(extracted_collections)
             if not collection_names:
-                log.debug(f"skipping {file} as it has already been extracted")
                 continue
 
-            if full_context:
-                try:
-                    context = get_all_items_from_collections(collection_names)
-                except Exception as e:
-                    log.exception(e)
+            # Check if any collection is web search - web search always needs query
+            has_web_search = any(
+                name.startswith("web-search-") for name in collection_names
+            )
 
-            else:
-                try:
-                    context = None
-                    if file.get("type") == "text":
-                        context = file["content"]
-                    else:
-                        if hybrid_search:
-                            try:
-                                context = query_collection_with_hybrid_search(
-                                    collection_names=collection_names,
-                                    queries=queries,
-                                    embedding_function=embedding_function,
-                                    k=k,
-                                    reranking_function=reranking_function,
-                                    k_reranker=k_reranker,
-                                    r=r,
-                                    hybrid_bm25_weight=hybrid_bm25_weight,
-                                )
-                            except Exception as e:
-                                log.debug(
-                                    "Error when using hybrid search, using"
-                                    " non hybrid search as fallback."
-                                )
+            # Key fix: Eliminates inconsistency where web search lost scores
+            # All collections now return results WITH semantic similarity rankings
+            try:
+                effective_k = k
+                if full_context:
+                    # Full context = ALL documents WITH relevance scores (not without!)
+                    effective_k = 1000  # High k ensures all documents returned
 
-                        if (not hybrid_search) or (context is None):
-                            context = query_collection(
-                                collection_names=collection_names,
-                                queries=queries,
-                                embedding_function=embedding_function,
-                                k=k,
-                            )
-                except Exception as e:
-                    log.exception(e)
+                if hybrid_search:
+                    try:
+                        context = query_collection_with_hybrid_search(
+                            collection_names=collection_names,
+                            queries=queries,
+                            embedding_function=embedding_function,
+                            k=effective_k,
+                            reranking_function=reranking_function,
+                            k_reranker=k_reranker,
+                            r=r,
+                            hybrid_bm25_weight=hybrid_bm25_weight,
+                        )
+                    except Exception as e:
+                        log.debug(
+                            "Error when using hybrid search, using"
+                            " non hybrid search as fallback."
+                        )
+                        context = None
+
+                if (not hybrid_search) or (context is None):
+                    context = query_collection(
+                        collection_names=collection_names,
+                        queries=queries,
+                        embedding_function=embedding_function,
+                        k=effective_k,
+                    )
+            except Exception as e:
+                log.exception(e)
 
             extracted_collections.extend(collection_names)
 
@@ -645,7 +1056,8 @@ def get_model_path(model: str, update_model: bool = False):
 
     snapshot_kwargs["repo_id"] = model
 
-    # Attempt to query the huggingface_hub library to determine the local path and/or to update
+    # Attempt to query the huggingface_hub library to determine the local path
+    # and/or to update
     try:
         model_repo_path = snapshot_download(**snapshot_kwargs)
         log.debug(f"model_repo_path: {model_repo_path}")
@@ -711,7 +1123,8 @@ def generate_azure_openai_batch_embeddings(
 ) -> Optional[list[list[float]]]:
     try:
         log.debug(
-            f"generate_azure_openai_batch_embeddings:deployment {model} batch size: {len(texts)}"
+            f"generate_azure_openai_batch_embeddings:deployment {model} "
+            f"batch size: {len(texts)}"
         )
         json_data = {"input": texts}
         if isinstance(RAG_EMBEDDING_PREFIX_FIELD_NAME, str) and isinstance(prefix, str):
