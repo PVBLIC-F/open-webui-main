@@ -133,7 +133,7 @@ CREATE TABLE cloud_sync_folder (
     updated_at BIGINT NOT NULL
 );
 ```
-### Database Schema
+### Database SQL Script
 
 If the tables aren't automatically created in your hosted PostgreSQL database, run this SQL script:
 
