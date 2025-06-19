@@ -1,266 +1,560 @@
-# Open WebUI 👋
+# OpenWebUI with Google Drive Cloud Sync
 
-![GitHub stars](https://img.shields.io/github/stars/open-webui/open-webui?style=social)
-![GitHub forks](https://img.shields.io/github/forks/open-webui/open-webui?style=social)
-![GitHub watchers](https://img.shields.io/github/watchers/open-webui/open-webui?style=social)
-![GitHub repo size](https://img.shields.io/github/repo-size/open-webui/open-webui)
-![GitHub language count](https://img.shields.io/github/languages/count/open-webui/open-webui)
-![GitHub top language](https://img.shields.io/github/languages/top/open-webui/open-webui)
-![GitHub last commit](https://img.shields.io/github/last-commit/open-webui/open-webui?color=red)
-[![Discord](https://img.shields.io/badge/Discord-Open_WebUI-blue?logo=discord&logoColor=white)](https://discord.gg/5rJgQTnV4s)
-[![](https://img.shields.io/static/v1?label=Sponsor&message=%E2%9D%A4&logo=GitHub&color=%23fe8e86)](https://github.com/sponsors/tjbck)
+This is a custom fork of OpenWebUI that adds **Google Drive Cloud Sync** functionality to Knowledge Bases. This feature allows you to automatically sync files from Google Drive folders into your OpenWebUI Knowledge Bases, with real-time notifications and automatic updates when files are added, modified, or removed.
 
-**Open WebUI is an [extensible](https://docs.openwebui.com/features/plugin/), feature-rich, and user-friendly self-hosted AI platform designed to operate entirely offline.** It supports various LLM runners like **Ollama** and **OpenAI-compatible APIs**, with **built-in inference engine** for RAG, making it a **powerful AI deployment solution**.
+## 🌟 Features
 
-![Open WebUI Demo](./demo.gif)
+### **Google Drive Integration**
+- **Folder Sync**: Connect Google Drive folders to Knowledge Bases
+- **Real-time Sync**: Automatic background synchronization every 30 seconds
+- **File Type Support**: PDF, Word docs, spreadsheets, presentations, text files, markdown
+- **Google Workspace Conversion**: Automatically converts Google Docs/Sheets/Slides to standard formats
+- **Bidirectional Sync**: Handles both file additions and deletions
 
-> [!TIP]  
-> **Looking for an [Enterprise Plan](https://docs.openwebui.com/enterprise)?** – **[Speak with Our Sales Team Today!](mailto:sales@openwebui.com)**
->
-> Get **enhanced capabilities**, including **custom theming and branding**, **Service Level Agreement (SLA) support**, **Long-Term Support (LTS) versions**, and **more!**
+### **User Experience**
+- **OAuth Authentication**: Secure Google Drive access with refresh tokens
+- **Folder Picker**: Visual folder selection interface with subfolder support
+- **Real-time Notifications**: Live updates when files are processed
+- **Progress Tracking**: Visual feedback during sync operations
+- **Auto-refresh**: Knowledge Base automatically updates when sync completes
 
-For more information, be sure to check out our [Open WebUI Documentation](https://docs.openwebui.com/).
+### **Technical Features**
+- **Background Processing**: Non-blocking sync operations
+- **Conflict Resolution**: Handles duplicate files and hash conflicts
+- **Error Handling**: Comprehensive error reporting and retry logic
+- **Database Integration**: Full PostgreSQL support with proper schema
+- **Socket Notifications**: Real-time UI updates via WebSocket
 
-## Key Features of Open WebUI ⭐
+## 🚀 Quick Start
 
-- 🚀 **Effortless Setup**: Install seamlessly using Docker or Kubernetes (kubectl, kustomize or helm) for a hassle-free experience with support for both `:ollama` and `:cuda` tagged images.
+### Prerequisites
+- OpenWebUI installation (compatible with latest version)
+- Google Cloud Project with Drive API enabled
+- PostgreSQL database (required for cloud sync tables)
 
-- 🤝 **Ollama/OpenAI API Integration**: Effortlessly integrate OpenAI-compatible APIs for versatile conversations alongside Ollama models. Customize the OpenAI API URL to link with **LMStudio, GroqCloud, Mistral, OpenRouter, and more**.
+### 1. Google Cloud Setup
 
-- 🛡️ **Granular Permissions and User Groups**: By allowing administrators to create detailed user roles and permissions, we ensure a secure user environment. This granularity not only enhances security but also allows for customized user experiences, fostering a sense of ownership and responsibility amongst users.
+1. **Create Google Cloud Project**
+   ```bash
+   # Go to https://console.cloud.google.com/
+   # Create new project or select existing one
+   ```
 
-- 📱 **Responsive Design**: Enjoy a seamless experience across Desktop PC, Laptop, and Mobile devices.
+2. **Enable Google Drive API**
+   ```bash
+   # In Google Cloud Console:
+   # APIs & Services > Library > Search "Google Drive API" > Enable
+   ```
 
-- 📱 **Progressive Web App (PWA) for Mobile**: Enjoy a native app-like experience on your mobile device with our PWA, providing offline access on localhost and a seamless user interface.
+3. **Create OAuth 2.0 Credentials**
+   ```bash
+   # APIs & Services > Credentials > Create Credentials > OAuth 2.0 Client ID
+   # Application type: Web application
+   # Authorized redirect URIs: http://localhost:8080/oauth/google-drive/callback
+   # (Replace localhost:8080 with your domain)
+   ```
 
-- ✒️🔢 **Full Markdown and LaTeX Support**: Elevate your LLM experience with comprehensive Markdown and LaTeX capabilities for enriched interaction.
+4. **Get Client ID and Secret**
+   ```bash
+   # Download the JSON credentials file
+   # Note the client_id and client_secret values
+   ```
 
-- 🎤📹 **Hands-Free Voice/Video Call**: Experience seamless communication with integrated hands-free voice and video call features, allowing for a more dynamic and interactive chat environment.
+### 2. Environment Configuration
 
-- 🛠️ **Model Builder**: Easily create Ollama models via the Web UI. Create and add custom characters/agents, customize chat elements, and import models effortlessly through [Open WebUI Community](https://openwebui.com/) integration.
+Add these environment variables to your OpenWebUI installation:
 
-- 🐍 **Native Python Function Calling Tool**: Enhance your LLMs with built-in code editor support in the tools workspace. Bring Your Own Function (BYOF) by simply adding your pure Python functions, enabling seamless integration with LLMs.
+```bash
+# Google Drive Integration
+ENABLE_GOOGLE_DRIVE_INTEGRATION=true
+GOOGLE_DRIVE_CLIENT_ID=your_client_id_here
+GOOGLE_DRIVE_CLIENT_SECRET=your_client_secret_here
 
-- 📚 **Local RAG Integration**: Dive into the future of chat interactions with groundbreaking Retrieval Augmented Generation (RAG) support. This feature seamlessly integrates document interactions into your chat experience. You can load documents directly into the chat or add files to your document library, effortlessly accessing them using the `#` command before a query.
+# Required for cloud sync
+DATABASE_URL=postgresql://user:password@host:port/database
+```
 
-- 🔍 **Web Search for RAG**: Perform web searches using providers like `SearXNG`, `Google PSE`, `Brave Search`, `serpstack`, `serper`, `Serply`, `DuckDuckGo`, `TavilySearch`, `SearchApi` and `Bing` and inject the results directly into your chat experience.
+### 3. Installation
 
-- 🌐 **Web Browsing Capability**: Seamlessly integrate websites into your chat experience using the `#` command followed by a URL. This feature allows you to incorporate web content directly into your conversations, enhancing the richness and depth of your interactions.
+#### Option A: Direct Installation (Recommended)
 
-- 🎨 **Image Generation Integration**: Seamlessly incorporate image generation capabilities using options such as AUTOMATIC1111 API or ComfyUI (local), and OpenAI's DALL-E (external), enriching your chat experience with dynamic visual content.
+1. **Clone this repository**
+   ```bash
+   git clone https://github.com/your-username/open-webui-google-drive-sync.git
+   cd open-webui-google-drive-sync
+   ```
 
-- ⚙️ **Many Models Conversations**: Effortlessly engage with various models simultaneously, harnessing their unique strengths for optimal responses. Enhance your experience by leveraging a diverse set of models in parallel.
+2. **Install dependencies**
+   ```bash
+   # Backend
+   cd backend
+   pip install -r requirements.txt
 
-- 🔐 **Role-Based Access Control (RBAC)**: Ensure secure access with restricted permissions; only authorized individuals can access your Ollama, and exclusive model creation/pulling rights are reserved for administrators.
+   # Frontend
+   cd ../
+   npm install
+   ```
 
-- 🌐🌍 **Multilingual Support**: Experience Open WebUI in your preferred language with our internationalization (i18n) support. Join us in expanding our supported languages! We're actively seeking contributors!
+3. **Run the application**
+   ```bash
+   # Development mode
+   npm run dev
 
-- 🧩 **Pipelines, Open WebUI Plugin Support**: Seamlessly integrate custom logic and Python libraries into Open WebUI using [Pipelines Plugin Framework](https://github.com/open-webui/pipelines). Launch your Pipelines instance, set the OpenAI URL to the Pipelines URL, and explore endless possibilities. [Examples](https://github.com/open-webui/pipelines/tree/main/examples) include **Function Calling**, User **Rate Limiting** to control access, **Usage Monitoring** with tools like Langfuse, **Live Translation with LibreTranslate** for multilingual support, **Toxic Message Filtering** and much more.
+   # Production mode
+   npm run build
+   npm run start
+   ```
 
-- 🌟 **Continuous Updates**: We are committed to improving Open WebUI with regular updates, fixes, and new features.
+#### Option B: Add to Existing OpenWebUI
 
-Want to learn more about Open WebUI's features? Check out our [Open WebUI documentation](https://docs.openwebui.com/features) for a comprehensive overview!
+1. **Copy the files from this repository to your existing OpenWebUI installation:**
 
-## Sponsors 🙌
+   **Backend Files:**
+   ```bash
+   # Core sync functionality
+   backend/open_webui/models/cloud_sync.py
+   backend/open_webui/models/cloud_tokens.py
+   backend/open_webui/routers/cloud_sync.py
+   backend/open_webui/routers/oauth.py
+   backend/open_webui/sync/providers.py
+   backend/open_webui/sync/worker.py
+   backend/open_webui/utils/cloud_sync_utils.py
+   backend/open_webui/utils/knowledge.py
 
-#### Emerald
+   # Modified existing files
+   backend/open_webui/config.py
+   backend/open_webui/main.py
+   backend/open_webui/socket/main.py
+   backend/open_webui/routers/knowledge.py
+   backend/open_webui/routers/users.py
+   backend/open_webui/utils/oauth.py
+   ```
 
-<table>
-  <tr>
-    <td>
-      <a href="https://n8n.io/" target="_blank">
-        <img src="https://docs.openwebui.com/sponsors/logos/n8n.png" alt="n8n" style="width: 8rem; height: 8rem; border-radius: .75rem;" />
-      </a>
-    </td>
-    <td>
-      <a href="https://n8n.io/">n8n</a> • Does your interface have a backend yet?<br>Try <a href="https://n8n.io/">n8n</a>
-    </td>
-  </tr>
-  <tr>
-    <td>
-      <a href="https://warp.dev/open-webui" target="_blank">
-        <img src="https://docs.openwebui.com/sponsors/logos/warp.png" alt="Warp" style="width: 8rem; height: 8rem; border-radius: .75rem;" />
-      </a>
-    </td>
-    <td>
-      <a href="https://warp.dev/open-webui">Warp</a> • The intelligent terminal for developers
-    </td>
-  </tr>
-  <tr>
-    <td>
-      <a href="https://tailscale.com/blog/self-host-a-local-ai-stack/?utm_source=OpenWebUI&utm_medium=paid-ad-placement&utm_campaign=OpenWebUI-Docs" target="_blank">
-        <img src="https://docs.openwebui.com/sponsors/logos/tailscale.png" alt="Tailscale" style="width: 8rem; height: 8rem; border-radius: .75rem;" />
-      </a>
-    </td>
-    <td>
-      <a href="https://tailscale.com/blog/self-host-a-local-ai-stack/?utm_source=OpenWebUI&utm_medium=paid-ad-placement&utm_campaign=OpenWebUI-Docs">Tailscale</a> • Connect self-hosted AI to any device with Tailscale
-    </td>
-  </tr>
-</table>
+   **Frontend Files:**
+   ```bash
+   # New components
+   src/lib/components/drive/GoogleDrivePicker.svelte
+   src/lib/components/workspace/Knowledge/KnowledgeBase/FilesWithFolders.svelte
+   src/lib/components/workspace/Knowledge/KnowledgeBase/FolderCard.svelte
+   src/lib/components/workspace/Knowledge/KnowledgeBase/GroupedFiles.svelte
+   src/lib/utils/config.ts
+   src/lib/utils/google-drive-api.ts
+
+   # Modified existing files
+   src/lib/components/workspace/Knowledge/KnowledgeBase.svelte
+   src/lib/components/workspace/Knowledge/KnowledgeBase/AddContentMenu.svelte
+   src/lib/constants.ts
+   src/lib/utils/google-drive-picker.ts
+   ```
+
+2. **Install additional Python dependencies:**
+   ```bash
+   pip install aiohttp
+   ```
+
+3. **Create local vite.config.ts (for development):**
+   ```typescript
+   import { sveltekit } from '@sveltejs/kit/vite';
+   import { defineConfig } from 'vite';
+
+   export default defineConfig({
+     plugins: [sveltekit()],
+     server: {
+       proxy: {
+         '/api': {
+           target: 'http://localhost:8080',
+           changeOrigin: true
+         },
+         '/oauth': {
+           target: 'http://localhost:8080',
+           changeOrigin: true
+         }
+       }
+     }
+   });
+   ```
+
+## 📖 Usage Guide
+
+### 1. First-Time Setup
+
+1. **Access Knowledge Base**
+   - Go to Workspace > Knowledge
+   - Create or select a Knowledge Base
+
+2. **Connect Google Drive**
+   - Click "Add Content" > "Google Drive"
+   - Authenticate with your Google account
+   - Grant necessary permissions
+
+3. **Select Folders**
+   - Use the folder picker to select Google Drive folders
+   - You can select multiple folders and subfolders
+   - Click "Save" to start syncing
+
+### 2. Managing Sync
+
+**View Connected Folders:**
+- Connected folders appear as cards in the Knowledge Base
+- Each card shows folder name and file count
+
+**Sync Status:**
+- Real-time notifications show sync progress
+- Blue notifications indicate processing
+- Green notifications indicate completion
+- Red notifications indicate errors
+
+**Manual Sync:**
+- Sync happens automatically every 30 seconds
+- Manual sync triggers when connecting new folders
+
+### 3. File Management
+
+**Supported File Types:**
+- PDF documents
+- Microsoft Office files (Word, Excel, PowerPoint)
+- Google Workspace files (Docs, Sheets, Slides)
+- Text files (.txt, .md)
+
+**File Processing:**
+- Files are automatically converted to searchable text
+- Content is indexed for semantic search
+- Metadata is preserved (filename, size, modification date)
+
+**File Updates:**
+- Modified files are automatically re-synced
+- Deleted files are removed from Knowledge Base
+- New files are added automatically
+
+## 🔧 Configuration
+
+### Environment Variables
+
+```bash
+# Google Drive Integration (Required)
+ENABLE_GOOGLE_DRIVE_INTEGRATION=true
+GOOGLE_DRIVE_CLIENT_ID=your_google_client_id
+GOOGLE_DRIVE_CLIENT_SECRET=your_google_client_secret
+
+# Sync Settings (Optional)
+CLOUD_SYNC_INTERVAL=30  # Sync interval in seconds (default: 30)
+CLOUD_SYNC_BATCH_SIZE=10  # Files to process per batch (default: 10)
+
+# Database (Required for cloud sync)
+DATABASE_URL=postgresql://user:password@host:port/database
+
+# OAuth Redirect URL (Optional - auto-detected)
+OAUTH_REDIRECT_URL=https://yourdomain.com/oauth/google-drive/callback
+```
+
+### Database Schema
+
+The following tables are automatically created:
+
+```sql
+-- OAuth tokens storage
+CREATE TABLE cloud_tokens (
+    id SERIAL PRIMARY KEY,
+    user_id VARCHAR NOT NULL,
+    provider VARCHAR NOT NULL,
+    access_token VARCHAR NOT NULL,
+    refresh_token VARCHAR,
+    expires_at INTEGER,
+    created_at TIMESTAMP,
+    UNIQUE(user_id, provider)
+);
+
+-- Folder connections
+CREATE TABLE cloud_sync_folder (
+    id VARCHAR PRIMARY KEY,
+    knowledge_id VARCHAR NOT NULL,
+    user_id VARCHAR NOT NULL,
+    provider VARCHAR NOT NULL,
+    cloud_folder_id VARCHAR NOT NULL,
+    folder_name VARCHAR,
+    last_successful_sync BIGINT,
+    last_sync_attempt BIGINT,
+    sync_enabled BOOLEAN DEFAULT true,
+    folder_token VARCHAR,
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL
+);
+
+-- File sync tracking
+CREATE TABLE cloud_sync_file (
+    id VARCHAR PRIMARY KEY,
+    knowledge_id VARCHAR NOT NULL,
+    file_id VARCHAR,
+    user_id VARCHAR NOT NULL,
+    provider VARCHAR NOT NULL,
+    cloud_file_id VARCHAR NOT NULL,
+    cloud_folder_id VARCHAR NOT NULL,
+    cloud_folder_name VARCHAR,
+    filename VARCHAR NOT NULL,
+    mime_type VARCHAR,
+    file_size INTEGER,
+    cloud_modified_time VARCHAR,
+    sync_status VARCHAR NOT NULL DEFAULT 'pending',
+    last_sync_time BIGINT,
+    meta TEXT,
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL,
+    content_hash VARCHAR,
+    cloud_version VARCHAR,
+    error_count INTEGER DEFAULT 0,
+    last_error TEXT,
+    next_retry_at BIGINT
+);
+
+-- Sync operations tracking
+CREATE TABLE cloud_sync_operation (
+    id VARCHAR PRIMARY KEY,
+    knowledge_id VARCHAR NOT NULL,
+    user_id VARCHAR NOT NULL,
+    provider VARCHAR NOT NULL,
+    operation_type VARCHAR NOT NULL,
+    status VARCHAR NOT NULL DEFAULT 'pending',
+    started_at BIGINT,
+    finished_at BIGINT,
+    duration_ms INTEGER,
+    files_processed INTEGER DEFAULT 0,
+    files_skipped INTEGER DEFAULT 0,
+    files_failed INTEGER DEFAULT 0,
+    stats_json TEXT,
+    data TEXT,
+    meta TEXT,
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL
+);
+```
+
+## 🛠️ Development
+
+### Project Structure
+
+```
+backend/
+├── open_webui/
+│   ├── models/
+│   │   ├── cloud_sync.py          # Database models for sync
+│   │   └── cloud_tokens.py        # OAuth token management
+│   ├── routers/
+│   │   ├── cloud_sync.py          # Sync API endpoints
+│   │   └── oauth.py               # OAuth endpoints
+│   ├── sync/
+│   │   ├── providers.py           # Google Drive sync logic
+│   │   └── worker.py              # Background sync worker
+│   └── utils/
+│       ├── cloud_sync_utils.py    # Utility functions
+│       └── knowledge.py           # Knowledge Base utilities
+
+src/lib/
+├── components/
+│   ├── drive/
+│   │   └── GoogleDrivePicker.svelte    # Folder selection UI
+│   └── workspace/Knowledge/KnowledgeBase/
+│       ├── AddContentMenu.svelte       # Google Drive option
+│       ├── FilesWithFolders.svelte     # File display with folders
+│       ├── FolderCard.svelte           # Folder card component
+│       └── GroupedFiles.svelte         # File grouping component
+└── utils/
+    ├── google-drive-api.ts             # Google Drive API client
+    └── config.ts                       # Configuration utilities
+```
+
+### API Endpoints
+
+**OAuth Endpoints:**
+- `GET /oauth/google-drive/login` - Initiate OAuth flow
+- `GET /oauth/google-drive/callback` - OAuth callback handler
+- `GET /api/oauth/google-drive/status` - Check token status
+
+**Sync Endpoints:**
+- `POST /api/v1/cloud-sync/connect-folders` - Connect folders to KB
+- `POST /api/v1/cloud-sync/disconnect-folders` - Disconnect folders
+- `GET /api/v1/cloud-sync/connected-folders/{kb_id}` - List connected folders
+- `GET /api/v1/cloud-sync/status/{kb_id}` - Get sync status
+- `POST /api/v1/cloud-sync/manual-sync/{kb_id}` - Trigger manual sync
+
+### Socket Events
+
+**Sync Notifications:**
+```javascript
+// File processing events
+socket.on('sync_notification', (data) => {
+  switch(data.event_type) {
+    case 'file_processing':
+      // File is being processed
+      break;
+    case 'file_completed':
+      // File processing completed
+      break;
+    case 'file_error':
+      // File processing failed
+      break;
+    case 'sync_completed':
+      // Entire sync operation completed
+      break;
+    case 'sync_error':
+      // Sync operation failed
+      break;
+  }
+});
+```
+
+### Testing
+
+**Backend Tests:**
+```bash
+cd backend
+python -m pytest tests/
+```
+
+**Frontend Tests:**
+```bash
+npm run test
+```
+
+**Integration Tests:**
+```bash
+# Test Google Drive connection
+curl -X GET "http://localhost:8080/api/oauth/google-drive/status" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"
+
+# Test folder connection
+curl -X POST "http://localhost:8080/api/v1/cloud-sync/connect-folders" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -d '{
+    "knowledge_id": "kb_id",
+    "folders": [{"id": "folder_id", "name": "My Folder"}],
+    "provider": "google_drive"
+  }'
+```
+
+## 🔒 Security
+
+### OAuth Security
+- Secure token storage with encryption
+- Refresh token rotation
+- Scope limitation (read-only access to Drive files)
+- CSRF protection on OAuth callbacks
+
+### Data Privacy
+- Files are processed locally (not sent to external services)
+- Only metadata is stored in database
+- User consent required for each folder connection
+- Easy disconnection and data cleanup
+
+### Access Control
+- User-specific folder connections
+- Knowledge Base permissions respected
+- Admin can disable Google Drive integration
+- Rate limiting on API endpoints
+
+## 🐛 Troubleshooting
+
+### Common Issues
+
+**"Import Error: cannot import name 'get_active_user_ids'"**
+- Ensure you've copied the correct version of `backend/open_webui/routers/users.py`
+- This file has compatible imports for the socket functions
+
+**"404 Not Found on /api/oauth/google-drive/status"**
+- Check that `vite.config.ts` exists locally with proxy configuration
+- Ensure backend server is running on port 8080
+- Verify OAuth router is registered in `main.py`
+
+**"Google Drive authentication fails"**
+- Verify `GOOGLE_DRIVE_CLIENT_ID` and `GOOGLE_DRIVE_CLIENT_SECRET` are set
+- Check OAuth redirect URL matches Google Cloud Console settings
+- Ensure Google Drive API is enabled in Google Cloud Console
+
+**"Sync notifications not appearing"**
+- Verify WebSocket connection is established
+- Check browser console for socket errors
+- Ensure `backend/open_webui/socket/main.py` has EventEmitter functionality
+
+**"Files not syncing"**
+- Check sync worker is running (logs should show periodic sync attempts)
+- Verify folder permissions in Google Drive
+- Check database for sync operation records
+- Look for error messages in backend logs
+
+### Debug Mode
+
+Enable debug logging:
+```bash
+export LOG_LEVEL=DEBUG
+export SRC_LOG_LEVELS='{"MODELS": "DEBUG", "SOCKET": "DEBUG"}'
+```
+
+### Database Cleanup
+
+If you need to reset sync data:
+```sql
+-- Remove all sync data (keeps refresh tokens)
+DELETE FROM cloud_sync_file;
+DELETE FROM cloud_sync_operation;
+DELETE FROM cloud_sync_folder;
+
+-- Remove everything including tokens
+DELETE FROM cloud_sync_file;
+DELETE FROM cloud_sync_operation;
+DELETE FROM cloud_sync_folder;
+DELETE FROM cloud_tokens WHERE provider = 'google_drive';
+```
+
+## 🤝 Contributing
+
+### Development Setup
+
+1. Fork this repository
+2. Create a feature branch
+3. Make your changes
+4. Test thoroughly
+5. Submit a pull request
+
+### Code Style
+
+- Follow existing code patterns
+- Use TypeScript for frontend
+- Use Python type hints for backend
+- Add comprehensive error handling
+- Include unit tests for new features
+
+### Pull Request Guidelines
+
+- Describe the feature/fix in detail
+- Include screenshots for UI changes
+- Test with multiple Google accounts
+- Verify database migrations work
+- Check that existing functionality isn't broken
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 🙏 Acknowledgments
+
+- [OpenWebUI](https://github.com/open-webui/open-webui) - The amazing base platform
+- [Google Drive API](https://developers.google.com/drive) - For providing the sync capabilities
+- [SvelteKit](https://kit.svelte.dev/) - For the frontend framework
+- [FastAPI](https://fastapi.tiangolo.com/) - For the backend framework
+
+## 📞 Support
+
+If you encounter issues:
+
+1. Check the [Troubleshooting](#-troubleshooting) section
+2. Search existing [GitHub Issues](https://github.com/your-username/open-webui-google-drive-sync/issues)
+3. Create a new issue with:
+   - Detailed description of the problem
+   - Steps to reproduce
+   - Environment details (OS, browser, OpenWebUI version)
+   - Relevant log messages
+   - Screenshots if applicable
 
 ---
 
-We are incredibly grateful for the generous support of our sponsors. Their contributions help us to maintain and improve our project, ensuring we can continue to deliver quality work to our community. Thank you!
-
-## How to Install 🚀
-
-### Installation via Python pip 🐍
-
-Open WebUI can be installed using pip, the Python package installer. Before proceeding, ensure you're using **Python 3.11** to avoid compatibility issues.
-
-1. **Install Open WebUI**:
-   Open your terminal and run the following command to install Open WebUI:
-
-   ```bash
-   pip install open-webui
-   ```
-
-2. **Running Open WebUI**:
-   After installation, you can start Open WebUI by executing:
-
-   ```bash
-   open-webui serve
-   ```
-
-This will start the Open WebUI server, which you can access at [http://localhost:8080](http://localhost:8080)
-
-### Quick Start with Docker 🐳
-
-> [!NOTE]  
-> Please note that for certain Docker environments, additional configurations might be needed. If you encounter any connection issues, our detailed guide on [Open WebUI Documentation](https://docs.openwebui.com/) is ready to assist you.
-
-> [!WARNING]
-> When using Docker to install Open WebUI, make sure to include the `-v open-webui:/app/backend/data` in your Docker command. This step is crucial as it ensures your database is properly mounted and prevents any loss of data.
-
-> [!TIP]  
-> If you wish to utilize Open WebUI with Ollama included or CUDA acceleration, we recommend utilizing our official images tagged with either `:cuda` or `:ollama`. To enable CUDA, you must install the [Nvidia CUDA container toolkit](https://docs.nvidia.com/dgx/nvidia-container-runtime-upgrade/) on your Linux/WSL system.
-
-### Installation with Default Configuration
-
-- **If Ollama is on your computer**, use this command:
-
-  ```bash
-  docker run -d -p 3000:8080 --add-host=host.docker.internal:host-gateway -v open-webui:/app/backend/data --name open-webui --restart always ghcr.io/open-webui/open-webui:main
-  ```
-
-- **If Ollama is on a Different Server**, use this command:
-
-  To connect to Ollama on another server, change the `OLLAMA_BASE_URL` to the server's URL:
-
-  ```bash
-  docker run -d -p 3000:8080 -e OLLAMA_BASE_URL=https://example.com -v open-webui:/app/backend/data --name open-webui --restart always ghcr.io/open-webui/open-webui:main
-  ```
-
-- **To run Open WebUI with Nvidia GPU support**, use this command:
-
-  ```bash
-  docker run -d -p 3000:8080 --gpus all --add-host=host.docker.internal:host-gateway -v open-webui:/app/backend/data --name open-webui --restart always ghcr.io/open-webui/open-webui:cuda
-  ```
-
-### Installation for OpenAI API Usage Only
-
-- **If you're only using OpenAI API**, use this command:
-
-  ```bash
-  docker run -d -p 3000:8080 -e OPENAI_API_KEY=your_secret_key -v open-webui:/app/backend/data --name open-webui --restart always ghcr.io/open-webui/open-webui:main
-  ```
-
-### Installing Open WebUI with Bundled Ollama Support
-
-This installation method uses a single container image that bundles Open WebUI with Ollama, allowing for a streamlined setup via a single command. Choose the appropriate command based on your hardware setup:
-
-- **With GPU Support**:
-  Utilize GPU resources by running the following command:
-
-  ```bash
-  docker run -d -p 3000:8080 --gpus=all -v ollama:/root/.ollama -v open-webui:/app/backend/data --name open-webui --restart always ghcr.io/open-webui/open-webui:ollama
-  ```
-
-- **For CPU Only**:
-  If you're not using a GPU, use this command instead:
-
-  ```bash
-  docker run -d -p 3000:8080 -v ollama:/root/.ollama -v open-webui:/app/backend/data --name open-webui --restart always ghcr.io/open-webui/open-webui:ollama
-  ```
-
-Both commands facilitate a built-in, hassle-free installation of both Open WebUI and Ollama, ensuring that you can get everything up and running swiftly.
-
-After installation, you can access Open WebUI at [http://localhost:3000](http://localhost:3000). Enjoy! 😄
-
-### Other Installation Methods
-
-We offer various installation alternatives, including non-Docker native installation methods, Docker Compose, Kustomize, and Helm. Visit our [Open WebUI Documentation](https://docs.openwebui.com/getting-started/) or join our [Discord community](https://discord.gg/5rJgQTnV4s) for comprehensive guidance.
-
-Look at the [Local Development Guide](https://docs.openwebui.com/getting-started/advanced-topics/development) for instructions on setting up a local development environment.
-
-### Troubleshooting
-
-Encountering connection issues? Our [Open WebUI Documentation](https://docs.openwebui.com/troubleshooting/) has got you covered. For further assistance and to join our vibrant community, visit the [Open WebUI Discord](https://discord.gg/5rJgQTnV4s).
-
-#### Open WebUI: Server Connection Error
-
-If you're experiencing connection issues, it’s often due to the WebUI docker container not being able to reach the Ollama server at 127.0.0.1:11434 (host.docker.internal:11434) inside the container . Use the `--network=host` flag in your docker command to resolve this. Note that the port changes from 3000 to 8080, resulting in the link: `http://localhost:8080`.
-
-**Example Docker Command**:
-
-```bash
-docker run -d --network=host -v open-webui:/app/backend/data -e OLLAMA_BASE_URL=http://127.0.0.1:11434 --name open-webui --restart always ghcr.io/open-webui/open-webui:main
-```
-
-### Keeping Your Docker Installation Up-to-Date
-
-In case you want to update your local Docker installation to the latest version, you can do it with [Watchtower](https://containrrr.dev/watchtower/):
-
-```bash
-docker run --rm --volume /var/run/docker.sock:/var/run/docker.sock containrrr/watchtower --run-once open-webui
-```
-
-In the last part of the command, replace `open-webui` with your container name if it is different.
-
-Check our Updating Guide available in our [Open WebUI Documentation](https://docs.openwebui.com/getting-started/updating).
-
-### Using the Dev Branch 🌙
-
-> [!WARNING]
-> The `:dev` branch contains the latest unstable features and changes. Use it at your own risk as it may have bugs or incomplete features.
-
-If you want to try out the latest bleeding-edge features and are okay with occasional instability, you can use the `:dev` tag like this:
-
-```bash
-docker run -d -p 3000:8080 -v open-webui:/app/backend/data --name open-webui --add-host=host.docker.internal:host-gateway --restart always ghcr.io/open-webui/open-webui:dev
-```
-
-### Offline Mode
-
-If you are running Open WebUI in an offline environment, you can set the `HF_HUB_OFFLINE` environment variable to `1` to prevent attempts to download models from the internet.
-
-```bash
-export HF_HUB_OFFLINE=1
-```
-
-## What's Next? 🌟
-
-Discover upcoming features on our roadmap in the [Open WebUI Documentation](https://docs.openwebui.com/roadmap/).
-
-## License 📜
-
-This project is licensed under the [Open WebUI License](LICENSE), a revised BSD-3-Clause license. You receive all the same rights as the classic BSD-3 license: you can use, modify, and distribute the software, including in proprietary and commercial products, with minimal restrictions. The only additional requirement is to preserve the "Open WebUI" branding, as detailed in the LICENSE file. For full terms, see the [LICENSE](LICENSE) document. 📄
-
-## Support 💬
-
-If you have any questions, suggestions, or need assistance, please open an issue or join our
-[Open WebUI Discord community](https://discord.gg/5rJgQTnV4s) to connect with us! 🤝
-
-## Star History
-
-<a href="https://star-history.com/#open-webui/open-webui&Date">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=open-webui/open-webui&type=Date&theme=dark" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=open-webui/open-webui&type=Date" />
-    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=open-webui/open-webui&type=Date" />
-  </picture>
-</a>
-
----
-
-Created by [Timothy Jaeryang Baek](https://github.com/tjbck) - Let's make Open WebUI even more amazing together! 💪
+**Happy syncing! 🚀**

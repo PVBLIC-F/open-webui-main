@@ -135,6 +135,11 @@ async def periodic_usage_pool_cleanup():
                     USAGE_POOL[model_id] = connections
 
                 send_usage = True
+
+            if send_usage:
+                # Emit updated usage information after cleaning
+                await sio.emit("usage", {"models": get_models_in_use()})
+
             await asyncio.sleep(TIMEOUT_DURATION)
     finally:
         release_func()
@@ -152,43 +157,6 @@ def get_models_in_use():
     return models_in_use
 
 
-def get_active_user_ids():
-    """Get the list of active user IDs."""
-    return list(USER_POOL.keys())
-
-
-def get_user_active_status(user_id):
-    """Check if a user is currently active."""
-    return user_id in USER_POOL
-
-
-def get_user_id_from_session_pool(sid):
-    user = SESSION_POOL.get(sid)
-    if user:
-        return user["id"]
-    return None
-
-
-def get_user_ids_from_room(room):
-    active_session_ids = sio.manager.get_participants(
-        namespace="/",
-        room=room,
-    )
-
-    active_user_ids = list(
-        set(
-            [SESSION_POOL.get(session_id[0])["id"] for session_id in active_session_ids]
-        )
-    )
-    return active_user_ids
-
-
-def get_active_status_by_user_id(user_id):
-    if user_id in USER_POOL:
-        return True
-    return False
-
-
 @sio.on("usage")
 async def usage(sid, data):
     if sid in SESSION_POOL:
@@ -201,6 +169,9 @@ async def usage(sid, data):
             **(USAGE_POOL[model_id] if model_id in USAGE_POOL else {}),
             sid: {"updated_at": current_time},
         }
+
+        # Broadcast the usage data to all clients
+        await sio.emit("usage", {"models": get_models_in_use()})
 
 
 @sio.event
@@ -218,6 +189,10 @@ async def connect(sid, environ, auth):
                 USER_POOL[user.id] = USER_POOL[user.id] + [sid]
             else:
                 USER_POOL[user.id] = [sid]
+
+            # print(f"user {user.name}({user.id}) connected with session ID {sid}")
+            await sio.emit("user-list", {"user_ids": list(USER_POOL.keys())})
+            await sio.emit("usage", {"models": get_models_in_use()})
 
 
 @sio.on("user-join")
@@ -246,6 +221,10 @@ async def user_join(sid, data):
     log.debug(f"{channels=}")
     for channel in channels:
         await sio.enter_room(sid, f"channel:{channel.id}")
+
+    # print(f"user {user.name}({user.id}) connected with session ID {sid}")
+
+    await sio.emit("user-list", {"user_ids": list(USER_POOL.keys())})
     return {"id": user.id, "name": user.name}
 
 
@@ -298,6 +277,12 @@ async def channel_events(sid, data):
         )
 
 
+@sio.on("user-list")
+async def user_list(sid):
+    if sid in SESSION_POOL:
+        await sio.emit("user-list", {"user_ids": list(USER_POOL.keys())})
+
+
 @sio.event
 async def disconnect(sid):
     if sid in SESSION_POOL:
@@ -309,6 +294,8 @@ async def disconnect(sid):
 
         if len(USER_POOL[user_id]) == 0:
             del USER_POOL[user_id]
+
+        await sio.emit("user-list", {"user_ids": list(USER_POOL.keys())})
     else:
         pass
         # print(f"Unknown session ID {sid} disconnected")
@@ -401,3 +388,66 @@ def get_event_call(request_info):
 
 
 get_event_caller = get_event_call
+
+
+def get_user_id_from_session_pool(sid):
+    user = SESSION_POOL.get(sid)
+    if user:
+        return user["id"]
+    return None
+
+
+def get_user_ids_from_room(room):
+    active_session_ids = sio.manager.get_participants(
+        namespace="/",
+        room=room,
+    )
+
+    active_user_ids = list(
+        set(
+            [SESSION_POOL.get(session_id[0])["id"] for session_id in active_session_ids]
+        )
+    )
+    return active_user_ids
+
+
+def get_active_status_by_user_id(user_id):
+    if user_id in USER_POOL:
+        return True
+    return False
+
+
+class EventEmitter:
+    """Event emitter for sync notifications"""
+    
+    async def emit_to_user(self, user_id: str, event_type: str, data: dict):
+        """Emit event to all sessions of a specific user"""
+        session_ids = USER_POOL.get(user_id, [])
+        if not session_ids:
+            log.debug(f"No active sessions found for user {user_id}")
+            return
+        
+        # Deduplicate session IDs to prevent duplicate notifications
+        unique_session_ids = list(set(session_ids))
+        
+        if len(unique_session_ids) != len(session_ids):
+            log.warning(f"🔔 SOCKET: Found duplicate sessions for user {user_id}. Original: {session_ids}, Deduplicated: {unique_session_ids}")
+        
+        log.info(f"🔔 SOCKET: Emitting {event_type} to user {user_id} with {len(unique_session_ids)} unique sessions: {unique_session_ids}")
+        
+        emit_tasks = [
+            sio.emit(event_type, data, to=session_id)
+            for session_id in unique_session_ids
+        ]
+        
+        await asyncio.gather(*emit_tasks)
+        log.info(f"🔔 SOCKET: Completed emission of {event_type} to {len(unique_session_ids)} sessions for user {user_id}")
+
+
+# Global event emitter instance
+_event_emitter = EventEmitter()
+
+
+def get_event_emitter():
+    """Get the global event emitter instance"""
+    return _event_emitter

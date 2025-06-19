@@ -17,6 +17,9 @@ export const WEBUI_VERSION = APP_VERSION;
 export const WEBUI_BUILD_HASH = APP_BUILD_HASH;
 export const REQUIRED_OLLAMA_VERSION = '0.1.16';
 
+// Google Drive constants
+export const GOOGLE_DRIVE_FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder';
+
 export const SUPPORTED_FILE_TYPE = [
 	'application/epub+zip',
 	'application/pdf',

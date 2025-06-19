@@ -15,7 +15,8 @@
 		knowledge as _knowledge,
 		config,
 		user,
-		settings
+		settings,
+		socket
 	} from '$lib/stores';
 
 	import {
@@ -36,7 +37,7 @@
 	import { blobToFile } from '$lib/utils';
 
 	import Spinner from '$lib/components/common/Spinner.svelte';
-	import Files from './KnowledgeBase/Files.svelte';
+	import FilesWithFolders from './KnowledgeBase/FilesWithFolders.svelte';
 	import AddFilesPlaceholder from '$lib/components/AddFilesPlaceholder.svelte';
 
 	import AddContentMenu from './KnowledgeBase/AddContentMenu.svelte';
@@ -75,6 +76,7 @@
 	let showAccessControlModal = false;
 
 	let inputFiles = null;
+	let connectedGoogleDriveFolders: string[] = []; // Track connected Google Drive folder IDs
 
 	let filteredItems = [];
 	$: if (knowledge && knowledge.files) {
@@ -533,6 +535,38 @@
 		}
 	};
 
+	// Handle sync notifications
+	const handleSyncNotification = (data) => {
+		// Only handle notifications for this knowledge base
+		if (data.knowledge_id !== id) return;
+		
+		const { event_type, error } = data;
+		
+		switch (event_type) {
+			case 'sync_completed':
+				// Show completion summary - the only notification we want
+				const { new_files_count, total_files_processed, folder_names, folders_count } = data;
+				if (total_files_processed > 0) {
+					const folderText = folders_count === 1 
+						? `1 folder` 
+						: `${folders_count} folders`;
+					toast.success(`Sync completed for ${folderText}: ${new_files_count} files processed`);
+				}
+				
+				// Refresh knowledge data
+				refreshKnowledgeData();
+				break;
+				
+			case 'sync_error':
+				const { folder_names: errorFolders, errors } = data;
+				const errorFolderText = errorFolders?.length === 1 
+					? `1 folder` 
+					: `${errorFolders?.length || 1} folders`;
+				toast.error(`Sync error for ${errorFolderText}: ${error || errors?.join(', ')}`);
+				break;
+		}
+	};
+
 	onMount(async () => {
 		// listen to resize 1024px
 		mediaQuery = window.matchMedia('(min-width: 1024px)');
@@ -579,8 +613,30 @@
 
 		if (res) {
 			knowledge = res;
+			
+			// Load existing Google Drive folder connections
+			try {
+				const foldersResponse = await fetch(`/api/v1/cloud-sync/connected-folders/${id}`, {
+					headers: {
+						'Authorization': `Bearer ${localStorage.token}`
+					}
+				});
+				
+				if (foldersResponse.ok) {
+					const foldersData = await foldersResponse.json();
+					connectedGoogleDriveFolders = foldersData.folders.map(folder => folder.id);
+					console.log('Loaded existing connected folders:', connectedGoogleDriveFolders);
+				}
+			} catch (error) {
+				console.error('Error loading connected folders:', error);
+			}
 		} else {
 			goto('/workspace/knowledge');
+		}
+
+		// Set up sync notification listener
+		if ($socket) {
+			$socket.on('sync_notification', handleSyncNotification);
 		}
 
 		const dropZone = document.querySelector('body');
@@ -595,7 +651,227 @@
 		dropZone?.removeEventListener('dragover', onDragOver);
 		dropZone?.removeEventListener('drop', onDrop);
 		dropZone?.removeEventListener('dragleave', onDragLeave);
+		
+		// Clean up sync notification listener
+		if ($socket) {
+			$socket.off('sync_notification', handleSyncNotification);
+		}
 	});
+
+	const refreshKnowledgeData = async () => {
+		try {
+			// Refresh knowledge base data
+			const refreshedKnowledge = await getKnowledgeById(localStorage.token, id);
+			if (refreshedKnowledge) {
+				knowledge = refreshedKnowledge;
+			}
+			
+			// Refresh connected folders list
+			const foldersResponse = await fetch(`/api/v1/cloud-sync/connected-folders/${id}`, {
+				headers: {
+					'Authorization': `Bearer ${localStorage.token}`
+				}
+			});
+			
+			if (foldersResponse.ok) {
+				const foldersData = await foldersResponse.json();
+				connectedGoogleDriveFolders = foldersData.folders.map(folder => folder.id);
+			}
+		} catch (error) {
+			console.error('Error refreshing knowledge data:', error);
+		}
+	};
+
+	const pollForSyncCompletion = async (folderNames) => {
+		const maxAttempts = 30; // Maximum 30 attempts (60 seconds)
+		const pollInterval = 2000; // Poll every 2 seconds
+		let attempts = 0;
+		let initialFileCount = knowledge.files ? knowledge.files.length : 0;
+		let lastFileCount = initialFileCount;
+		let stableCount = 0; // Track how many polls the file count has been stable
+		
+		const poll = async () => {
+			attempts++;
+			
+			try {
+				// Refresh knowledge data
+				await refreshKnowledgeData();
+				
+				const currentFileCount = knowledge.files ? knowledge.files.length : 0;
+				const hasNewFiles = currentFileCount > initialFileCount;
+				
+				// Check for active operations and pending files
+				const statusResponse = await fetch(`/api/v1/cloud-sync/status/${id}`, {
+					headers: {
+						'Authorization': `Bearer ${localStorage.token}`
+					}
+				});
+				
+				let hasActiveOperations = false;
+				let pendingFiles = 0;
+				if (statusResponse.ok) {
+					const statusData = await statusResponse.json();
+					hasActiveOperations = statusData.pending_files > 0;
+					pendingFiles = statusData.pending_files;
+				}
+				
+				// Track file count stability
+				if (currentFileCount === lastFileCount) {
+					stableCount++;
+				} else {
+					stableCount = 0; // Reset if count changed
+					lastFileCount = currentFileCount;
+				}
+				
+				console.log(`Poll ${attempts}: Files ${currentFileCount}, Pending ${pendingFiles}, Stable ${stableCount}`);
+				
+				// We're done if:
+				// 1. We have new files AND
+				// 2. No pending operations AND
+				// 3. File count has been stable for at least 2 polls (4 seconds)
+				if (hasNewFiles && !hasActiveOperations && stableCount >= 2) {
+					toast.dismiss('folder-sync');
+					toast.success(`Successfully synced ${currentFileCount - initialFileCount} files from ${folderNames}`);
+					return;
+				}
+				
+				// If we've reached max attempts, stop polling but refresh once more
+				if (attempts >= maxAttempts) {
+					toast.dismiss('folder-sync');
+					await refreshKnowledgeData();
+					const finalFileCount = knowledge.files ? knowledge.files.length : 0;
+					if (finalFileCount > initialFileCount) {
+						toast.success(`Sync completed: ${finalFileCount - initialFileCount} files from ${folderNames}`);
+					} else {
+						toast.info(`Sync may still be processing for ${folderNames}`);
+					}
+					return;
+				}
+				
+				// Continue polling
+				setTimeout(poll, pollInterval);
+				
+			} catch (error) {
+				console.error('Error polling for sync completion:', error);
+				// On error, stop polling and refresh once
+				toast.dismiss('folder-sync');
+				await refreshKnowledgeData();
+			}
+		};
+		
+		// Start polling after a short delay
+		setTimeout(poll, pollInterval);
+	};
+
+	const handleGoogleDriveFoldersSelected = async (event) => {
+		const { folders, access_token } = event.detail;
+		
+		try {
+			console.log('Google Drive folder selection changed:', folders);
+			
+			// Calculate changes
+			const newSelection = folders.map(folder => folder.id);
+			const previousSelection = connectedGoogleDriveFolders;
+			
+			console.log('Previous selection:', previousSelection);
+			console.log('New selection:', newSelection);
+			
+			const addedFolders = newSelection.filter(id => !previousSelection.includes(id));
+			const removedFolders = previousSelection.filter(id => !newSelection.includes(id));
+			
+			console.log('Added folders:', addedFolders);
+			console.log('Removed folders:', removedFolders);
+			
+			// Connect new folders to database
+			if (addedFolders.length > 0) {
+				const foldersToConnect = folders.filter(folder => addedFolders.includes(folder.id));
+				const folderNames = foldersToConnect.map(f => f.name).join(', ');
+				
+				// Show persistent blue info toast
+				toast.info(
+					`Connecting ${addedFolders.length === 1 ? 'folder' : 'folders'} "${folderNames}" and syncing files...`,
+					{
+						duration: Infinity, // Keep showing until manually dismissed
+						id: 'folder-sync' // Use ID to update this specific toast
+					}
+				);
+				
+				const response = await fetch('/api/v1/cloud-sync/connect-folders', {
+					method: 'POST',
+					headers: {
+						'Content-Type': 'application/json',
+						'Authorization': `Bearer ${localStorage.token}`
+					},
+					body: JSON.stringify({
+						knowledge_id: id,
+						folders: foldersToConnect.map(folder => ({
+							id: folder.id,
+							name: folder.name
+						})),
+						provider: 'google_drive'
+					})
+				});
+				
+				if (!response.ok) {
+					toast.dismiss('folder-sync');
+					throw new Error(`Failed to connect folders: ${response.statusText}`);
+				}
+				
+				// Update toast to show sync in progress - keep it simple until files are actually processed
+				toast.info(
+					`${folderNames} connected. Processing files...`,
+					{
+						duration: Infinity,
+						id: 'folder-sync'
+					}
+				);
+				
+				// Poll for completion instead of using fixed timeout
+				// This ensures we refresh when files are actually ready
+				pollForSyncCompletion(folderNames);
+			}
+			
+			// Disconnect removed folders from database
+			if (removedFolders.length > 0) {
+				const disconnectResponse = await fetch('/api/v1/cloud-sync/disconnect-folders', {
+					method: 'POST',
+					headers: {
+						'Content-Type': 'application/json',
+						'Authorization': `Bearer ${localStorage.token}`
+					},
+					body: JSON.stringify({
+						knowledge_id: id,
+						folder_ids: removedFolders,
+						provider: 'google_drive'
+					})
+				});
+				
+				if (!disconnectResponse.ok) {
+					throw new Error(`Failed to disconnect folders: ${disconnectResponse.statusText}`);
+				}
+				
+				const disconnectResult = await disconnectResponse.json();
+				console.log('Disconnected folders:', disconnectResult);
+				
+				// Refresh knowledge base data to reflect file cleanup
+				await refreshKnowledgeData();
+			}
+			
+			// Update tracking list to match current selection (this should be the final state)
+			connectedGoogleDriveFolders = newSelection;
+			
+			// Only show success message for disconnections (immediate effect)
+			// For connections, the blue processing toast will handle feedback
+			if (removedFolders.length > 0 && addedFolders.length === 0) {
+				toast.success(`Removed ${removedFolders.length} folder${removedFolders.length === 1 ? '' : 's'} from sync`);
+			}
+			
+		} catch (error) {
+			console.error('Error updating Google Drive folder sync:', error);
+			toast.dismiss('folder-sync'); // Dismiss any loading toast
+			toast.error('Failed to update Google Drive folder sync');
+		}
+	};
 
 	const decodeString = (str: string) => {
 		try {
@@ -885,6 +1161,7 @@
 
 								<div>
 									<AddContentMenu
+										connectedFolderIds={connectedGoogleDriveFolders}
 										on:upload={(e) => {
 											if (e.detail.type === 'directory') {
 												uploadDirectoryHandler();
@@ -897,6 +1174,7 @@
 										on:sync={(e) => {
 											showSyncConfirmModal = true;
 										}}
+										on:google-drive-folders-selected={handleGoogleDriveFoldersSelected}
 									/>
 								</div>
 							</div>
@@ -904,10 +1182,11 @@
 
 						{#if filteredItems.length > 0}
 							<div class=" flex overflow-y-auto h-full w-full scrollbar-hidden text-xs">
-								<Files
+								<FilesWithFolders
 									small
 									files={filteredItems}
 									{selectedFileId}
+									connectedFolderIds={connectedGoogleDriveFolders}
 									on:click={(e) => {
 										selectedFileId = selectedFileId === e.detail ? null : e.detail;
 									}}
