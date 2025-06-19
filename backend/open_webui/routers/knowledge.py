@@ -33,6 +33,14 @@ log.setLevel(SRC_LOG_LEVELS["MODELS"])
 
 router = APIRouter()
 
+# Cloud Sync Enhancement Note:
+# This router has been enhanced to support cloud synchronization by using shared
+# utility functions from open_webui.utils.knowledge for consistent file operations.
+# The shared functions ensure that both manual file operations and automated cloud
+# sync operations follow the same cleanup and processing patterns, preventing
+# issues like orphaned files and hash conflicts that were resolved in the cloud
+# sync implementation.
+
 ############################
 # getKnowledgeBases
 ############################
@@ -367,47 +375,31 @@ def add_file_to_knowledge_by_id(
             detail=ERROR_MESSAGES.FILE_NOT_PROCESSED,
         )
 
-    # Add content to the vector database
+    # Cloud Sync Integration: Use shared utility function for consistent behavior
+    # This ensures that both manual file additions and cloud sync operations
+    # follow the same validation, processing, and error handling patterns
+    from open_webui.utils.knowledge import add_file_to_knowledge_base
+
     try:
-        process_file(
-            request,
-            ProcessFileForm(file_id=form_data.file_id, collection_name=id),
-            user=user,
-        )
+        add_file_to_knowledge_base(request, id, form_data.file_id, user)
     except Exception as e:
-        log.debug(e)
+        log.error(f"Error adding file to knowledge base: {e}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
         )
 
-    if knowledge:
-        data = knowledge.data or {}
+    # Return updated knowledge base with files
+    updated_knowledge = Knowledges.get_knowledge_by_id(id=id)
+    if updated_knowledge:
+        data = updated_knowledge.data or {}
         file_ids = data.get("file_ids", [])
+        files = Files.get_file_metadatas_by_ids(file_ids)
 
-        if form_data.file_id not in file_ids:
-            file_ids.append(form_data.file_id)
-            data["file_ids"] = file_ids
-
-            knowledge = Knowledges.update_knowledge_data_by_id(id=id, data=data)
-
-            if knowledge:
-                files = Files.get_file_metadatas_by_ids(file_ids)
-
-                return KnowledgeFilesResponse(
-                    **knowledge.model_dump(),
-                    files=files,
-                )
-            else:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=ERROR_MESSAGES.DEFAULT("knowledge"),
-                )
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=ERROR_MESSAGES.DEFAULT("file_id"),
-            )
+        return KnowledgeFilesResponse(
+            **updated_knowledge.model_dump(),
+            files=files,
+        )
     else:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -517,56 +509,32 @@ def remove_file_from_knowledge_by_id(
             detail=ERROR_MESSAGES.NOT_FOUND,
         )
 
-    # Remove content from the vector database
+    # Cloud Sync Integration: Use shared utility function for consistent cleanup
+    # This ensures comprehensive cleanup including vector DB, physical files,
+    # and database records - critical for preventing orphaned files that
+    # caused issues in cloud sync operations
+    from open_webui.utils.knowledge import remove_file_from_knowledge_base
+
     try:
-        VECTOR_DB_CLIENT.delete(
-            collection_name=knowledge.id, filter={"file_id": form_data.file_id}
+        remove_file_from_knowledge_base(id, form_data.file_id)
+    except Exception as e:
+        log.error(f"Error removing file from knowledge base: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
         )
-    except Exception as e:
-        log.debug("This was most likely caused by bypassing embedding processing")
-        log.debug(e)
-        pass
 
-    try:
-        # Remove the file's collection from vector database
-        file_collection = f"file-{form_data.file_id}"
-        if VECTOR_DB_CLIENT.has_collection(collection_name=file_collection):
-            VECTOR_DB_CLIENT.delete_collection(collection_name=file_collection)
-    except Exception as e:
-        log.debug("This was most likely caused by bypassing embedding processing")
-        log.debug(e)
-        pass
-
-    # Delete file from database
-    Files.delete_file_by_id(form_data.file_id)
-
-    if knowledge:
-        data = knowledge.data or {}
+    # Return updated knowledge base with remaining files
+    updated_knowledge = Knowledges.get_knowledge_by_id(id=id)
+    if updated_knowledge:
+        data = updated_knowledge.data or {}
         file_ids = data.get("file_ids", [])
+        files = Files.get_file_metadatas_by_ids(file_ids)
 
-        if form_data.file_id in file_ids:
-            file_ids.remove(form_data.file_id)
-            data["file_ids"] = file_ids
-
-            knowledge = Knowledges.update_knowledge_data_by_id(id=id, data=data)
-
-            if knowledge:
-                files = Files.get_file_metadatas_by_ids(file_ids)
-
-                return KnowledgeFilesResponse(
-                    **knowledge.model_dump(),
-                    files=files,
-                )
-            else:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=ERROR_MESSAGES.DEFAULT("knowledge"),
-                )
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=ERROR_MESSAGES.DEFAULT("file_id"),
-            )
+        return KnowledgeFilesResponse(
+            **updated_knowledge.model_dump(),
+            files=files,
+        )
     else:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
