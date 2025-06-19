@@ -249,44 +249,48 @@ OAUTH_REDIRECT_URL=https://yourdomain.com/oauth/google-drive/callback
 
 ### Database Schema
 
-The following tables are automatically created:
+If the tables aren't automatically created in your hosted PostgreSQL database, run this SQL script:
 
 ```sql
--- OAuth tokens storage
-CREATE TABLE cloud_tokens (
+-- Cloud Sync Database Tables and Indexes
+-- Run this SQL script in your PostgreSQL database to create all required tables
+
+-- ============================================================================
+-- Cloud Tokens Table
+-- Stores OAuth tokens for cloud providers (Google Drive, OneDrive, etc.)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS cloud_tokens (
     id SERIAL PRIMARY KEY,
     user_id VARCHAR NOT NULL,
     provider VARCHAR NOT NULL,
     access_token VARCHAR NOT NULL,
     refresh_token VARCHAR,
-    expires_at INTEGER,
+    expires_at BIGINT,
     created_at TIMESTAMP,
-    UNIQUE(user_id, provider)
+    
+    -- Ensure only one token per user per provider
+    CONSTRAINT uq_user_provider UNIQUE (user_id, provider)
 );
 
--- Folder connections
-CREATE TABLE cloud_sync_folder (
-    id VARCHAR PRIMARY KEY,
-    knowledge_id VARCHAR NOT NULL,
-    user_id VARCHAR NOT NULL,
-    provider VARCHAR NOT NULL,
-    cloud_folder_id VARCHAR NOT NULL,
-    folder_name VARCHAR,
-    last_successful_sync BIGINT,
-    last_sync_attempt BIGINT,
-    sync_enabled BOOLEAN DEFAULT true,
-    folder_token VARCHAR,
-    created_at BIGINT NOT NULL,
-    updated_at BIGINT NOT NULL
-);
+-- Indexes for cloud_tokens
+CREATE INDEX IF NOT EXISTS idx_cloud_tokens_user_provider ON cloud_tokens (user_id, provider);
+CREATE INDEX IF NOT EXISTS idx_cloud_tokens_provider ON cloud_tokens (provider);
+CREATE INDEX IF NOT EXISTS idx_cloud_tokens_expires_at ON cloud_tokens (expires_at);
 
--- File sync tracking
-CREATE TABLE cloud_sync_file (
+-- ============================================================================
+-- Cloud Sync File Table
+-- Tracks individual cloud files and their sync status
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS cloud_sync_file (
     id VARCHAR PRIMARY KEY,
     knowledge_id VARCHAR NOT NULL,
     file_id VARCHAR,
     user_id VARCHAR NOT NULL,
     provider VARCHAR NOT NULL,
+    
+    -- Cloud provider metadata
     cloud_file_id VARCHAR NOT NULL,
     cloud_folder_id VARCHAR NOT NULL,
     cloud_folder_name VARCHAR,
@@ -294,11 +298,15 @@ CREATE TABLE cloud_sync_file (
     mime_type VARCHAR,
     file_size INTEGER,
     cloud_modified_time VARCHAR,
+    
+    -- Sync status and timing
     sync_status VARCHAR NOT NULL DEFAULT 'pending',
     last_sync_time BIGINT,
     meta TEXT,
     created_at BIGINT NOT NULL,
     updated_at BIGINT NOT NULL,
+    
+    -- Enhanced tracking for reliability
     content_hash VARCHAR,
     cloud_version VARCHAR,
     error_count INTEGER DEFAULT 0,
@@ -306,26 +314,110 @@ CREATE TABLE cloud_sync_file (
     next_retry_at BIGINT
 );
 
--- Sync operations tracking
-CREATE TABLE cloud_sync_operation (
+-- Indexes for cloud_sync_file
+CREATE INDEX IF NOT EXISTS idx_cloud_sync_file_knowledge_id ON cloud_sync_file (knowledge_id);
+CREATE INDEX IF NOT EXISTS idx_cloud_sync_file_user_id ON cloud_sync_file (user_id);
+CREATE INDEX IF NOT EXISTS idx_cloud_sync_file_provider ON cloud_sync_file (provider);
+CREATE INDEX IF NOT EXISTS idx_cloud_sync_file_sync_status ON cloud_sync_file (sync_status);
+CREATE INDEX IF NOT EXISTS idx_cloud_sync_file_cloud_file_id ON cloud_sync_file (cloud_file_id);
+CREATE INDEX IF NOT EXISTS idx_cloud_sync_file_cloud_folder_id ON cloud_sync_file (cloud_folder_id);
+CREATE INDEX IF NOT EXISTS idx_cloud_sync_file_knowledge_cloud_file ON cloud_sync_file (knowledge_id, cloud_file_id);
+CREATE INDEX IF NOT EXISTS idx_cloud_sync_file_next_retry_at ON cloud_sync_file (next_retry_at);
+CREATE INDEX IF NOT EXISTS idx_cloud_sync_file_error_count ON cloud_sync_file (error_count);
+
+-- ============================================================================
+-- Cloud Sync Operation Table
+-- Tracks sync operations and their performance metrics
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS cloud_sync_operation (
     id VARCHAR PRIMARY KEY,
     knowledge_id VARCHAR NOT NULL,
     user_id VARCHAR NOT NULL,
     provider VARCHAR NOT NULL,
     operation_type VARCHAR NOT NULL,
+    
+    -- Operation status and timing
     status VARCHAR NOT NULL DEFAULT 'pending',
     started_at BIGINT,
     finished_at BIGINT,
     duration_ms INTEGER,
+    
+    -- Performance metrics
     files_processed INTEGER DEFAULT 0,
     files_skipped INTEGER DEFAULT 0,
     files_failed INTEGER DEFAULT 0,
+    
+    -- Additional data
     stats_json TEXT,
     data TEXT,
     meta TEXT,
     created_at BIGINT NOT NULL,
     updated_at BIGINT NOT NULL
 );
+
+-- Indexes for cloud_sync_operation
+CREATE INDEX IF NOT EXISTS idx_cloud_sync_operation_knowledge_id ON cloud_sync_operation (knowledge_id);
+CREATE INDEX IF NOT EXISTS idx_cloud_sync_operation_user_id ON cloud_sync_operation (user_id);
+CREATE INDEX IF NOT EXISTS idx_cloud_sync_operation_provider ON cloud_sync_operation (provider);
+CREATE INDEX IF NOT EXISTS idx_cloud_sync_operation_status ON cloud_sync_operation (status);
+CREATE INDEX IF NOT EXISTS idx_cloud_sync_operation_operation_type ON cloud_sync_operation (operation_type);
+CREATE INDEX IF NOT EXISTS idx_cloud_sync_operation_created_at ON cloud_sync_operation (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_cloud_sync_operation_status_created ON cloud_sync_operation (status, created_at ASC);
+
+-- ============================================================================
+-- Cloud Sync Folder Table
+-- Tracks folder-level sync configuration and state
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS cloud_sync_folder (
+    id VARCHAR PRIMARY KEY,
+    knowledge_id VARCHAR NOT NULL,
+    user_id VARCHAR NOT NULL,
+    provider VARCHAR NOT NULL,
+    cloud_folder_id VARCHAR NOT NULL,
+    folder_name VARCHAR,
+    
+    -- Sync status and preferences
+    last_successful_sync BIGINT,
+    last_sync_attempt BIGINT,
+    sync_enabled BOOLEAN DEFAULT TRUE,
+    folder_token VARCHAR,
+    
+    -- Timestamps
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL
+);
+
+-- Indexes for cloud_sync_folder
+CREATE INDEX IF NOT EXISTS idx_cloud_sync_folder_knowledge_id ON cloud_sync_folder (knowledge_id);
+CREATE INDEX IF NOT EXISTS idx_cloud_sync_folder_user_id ON cloud_sync_folder (user_id);
+CREATE INDEX IF NOT EXISTS idx_cloud_sync_folder_provider ON cloud_sync_folder (provider);
+CREATE INDEX IF NOT EXISTS idx_cloud_sync_folder_cloud_folder_id ON cloud_sync_folder (cloud_folder_id);
+CREATE INDEX IF NOT EXISTS idx_cloud_sync_folder_knowledge_cloud_folder ON cloud_sync_folder (knowledge_id, cloud_folder_id);
+CREATE INDEX IF NOT EXISTS idx_cloud_sync_folder_sync_enabled ON cloud_sync_folder (sync_enabled);
+CREATE INDEX IF NOT EXISTS idx_cloud_sync_folder_last_successful_sync ON cloud_sync_folder (last_successful_sync);
+
+-- ============================================================================
+-- Verify Tables Created
+-- ============================================================================
+
+-- Check if all tables were created successfully
+SELECT 
+    tablename,
+    schemaname
+FROM pg_tables 
+WHERE tablename IN ('cloud_tokens', 'cloud_sync_file', 'cloud_sync_operation', 'cloud_sync_folder')
+ORDER BY tablename;
+
+-- Check indexes created
+SELECT 
+    indexname,
+    tablename,
+    indexdef
+FROM pg_indexes 
+WHERE tablename IN ('cloud_tokens', 'cloud_sync_file', 'cloud_sync_operation', 'cloud_sync_folder')
+ORDER BY tablename, indexname;
 ```
 
 ## 🛠️ Development
