@@ -256,9 +256,7 @@ class Chat(Base):
     # Human-readable chat title for UI display
     title = Column(Text)
     # Full chat data including messages, history, and configuration
-    chat = Column(
-        JSON
-    )  # For JSONB support, change to: Column(JSONB) if JSONB else Column(JSON)
+    chat = Column(JSONB if JSONB else JSON)
 
     # Timestamp fields (Unix epoch for efficiency and timezone independence)
     created_at = Column(BigInteger)  # Creation timestamp
@@ -271,9 +269,7 @@ class Chat(Base):
     pinned = Column(Boolean, default=False, nullable=True)  # Pinned to top
 
     # Extensible metadata storage (tags, custom fields, etc.)
-    # For JSONB support, change to:
-    # Column(JSONB, server_default="{}") if JSONB else Column(JSON, server_default="{}")
-    meta = Column(JSON, server_default="{}")
+    meta = Column(JSONB if JSONB else JSON, server_default="{}")
     # Optional folder organization
     folder_id = Column(Text, nullable=True)
 
@@ -485,6 +481,28 @@ class ChatTable:
         except Exception as e:
             log.error(f"Error checking database compatibility: {e}")
             return {"error": str(e), "database_type": "unknown"}
+
+    def ensure_indexes(self) -> bool:
+        """Ensure critical indexes exist for performance"""
+        try:
+            with get_db() as db:
+                # Create essential indexes for all database types
+                db.execute(text("CREATE INDEX IF NOT EXISTS idx_chat_user_id ON chat(user_id)"))
+                db.execute(text("CREATE INDEX IF NOT EXISTS idx_chat_updated_at ON chat(updated_at DESC)"))
+                db.execute(text("CREATE INDEX IF NOT EXISTS idx_chat_archived ON chat(archived)"))
+                db.execute(text("CREATE INDEX IF NOT EXISTS idx_chat_folder_id ON chat(folder_id)"))
+                
+                # PostgreSQL-specific JSONB indexes
+                if db.bind.dialect.name == "postgresql":
+                    adapter = self._get_adapter(db)
+                    if adapter.get_database_type("chat") == DatabaseType.POSTGRESQL_JSONB:
+                        db.execute(text("CREATE INDEX IF NOT EXISTS idx_chat_meta_tags_gin ON chat USING GIN ((meta->'tags'))"))
+                        db.execute(text("CREATE INDEX IF NOT EXISTS idx_chat_follow_ups_gin ON chat USING GIN ((chat->'history'->'messages'))"))
+                
+                db.commit()
+                return True
+        except Exception:
+            return False
 
     def create_gin_indexes(self) -> bool:
         """Create GIN indexes on JSONB columns for better query performance"""
@@ -994,6 +1012,86 @@ class ChatTable:
         chat["history"] = history
         return self.update_chat_by_id(id, chat)
 
+    def update_chat_follow_ups_by_id_and_message_id(
+        self, chat_id: str, message_id: str, follow_ups: list[str]
+    ) -> bool:
+        """Ultra-fast follow-up update using direct SQL without loading full chat"""
+        try:
+            with get_db() as db:
+                # Skip adapter overhead - detect database type directly from URL
+                db_url = str(db.get_bind().url)
+                
+                if "postgresql" in db_url and JSONB:  # PostgreSQL with JSONB
+                    # PostgreSQL JSONB - direct path update
+                    result = db.execute(
+                        text("""
+                            UPDATE chat 
+                            SET chat = jsonb_set(
+                                chat, 
+                                :path, 
+                                :follow_ups::jsonb
+                            ),
+                            updated_at = :timestamp
+                            WHERE id = :chat_id 
+                            AND chat->'history'->'messages' ? :message_id
+                        """),
+                        {
+                            "path": f"{{history,messages,{message_id},followUps}}",
+                            "follow_ups": json.dumps(follow_ups),
+                            "timestamp": int(time.time()),
+                            "chat_id": chat_id,
+                            "message_id": message_id
+                        }
+                    )
+                elif "postgresql" in db_url:  # PostgreSQL with JSON
+                    # PostgreSQL JSON - direct path update
+                    result = db.execute(
+                        text("""
+                            UPDATE chat 
+                            SET chat = json_set(
+                                chat, 
+                                :path, 
+                                :follow_ups::json
+                            ),
+                            updated_at = :timestamp
+                            WHERE id = :chat_id 
+                            AND chat->'history'->'messages' ? :message_id
+                        """),
+                        {
+                            "path": f"{{history,messages,{message_id},followUps}}",
+                            "follow_ups": json.dumps(follow_ups),
+                            "timestamp": int(time.time()),
+                            "chat_id": chat_id,
+                            "message_id": message_id
+                        }
+                    )
+                else:
+                    # SQLite or fallback - still faster than full object load
+                    result = db.execute(
+                        text("""
+                            UPDATE chat 
+                            SET chat = json_set(
+                                chat, 
+                                '$.history.messages.' || :message_id || '.followUps', 
+                                json(:follow_ups)
+                            ),
+                            updated_at = :timestamp
+                            WHERE id = :chat_id 
+                            AND json_extract(chat, '$.history.messages.' || :message_id) IS NOT NULL
+                        """),
+                        {
+                            "follow_ups": json.dumps(follow_ups),
+                            "timestamp": int(time.time()),
+                            "chat_id": chat_id,
+                            "message_id": message_id
+                        }
+                    )
+                
+                db.commit()
+                return result.rowcount > 0
+        except Exception:
+            return False
+
     def add_message_status_to_chat_by_id_and_message_id(
         self, id: str, message_id: str, status: dict
     ) -> Optional[ChatModel]:
@@ -1012,6 +1110,31 @@ class ChatTable:
 
         chat["history"] = history
         return self.update_chat_by_id(id, chat)
+
+    def get_recent_follow_ups_by_content_hash(self, content_hash: str, limit: int = 5) -> list[str]:
+        """Get recent follow-ups for similar content to enable caching"""
+        try:
+            with get_db() as db:
+                # Query recent chats with similar content patterns
+                recent_chats = (
+                    db.query(Chat)
+                    .order_by(Chat.updated_at.desc())
+                    .limit(100)  # Check last 100 chats
+                    .all()
+                )
+                
+                follow_ups = []
+                for chat in recent_chats:
+                    messages = chat.chat.get("history", {}).get("messages", {})
+                    for msg in messages.values():
+                        if msg.get("followUps") and len(msg.get("followUps", [])) > 0:
+                            follow_ups.extend(msg["followUps"])
+                            if len(follow_ups) >= limit:
+                                return follow_ups[:limit]
+                
+                return follow_ups
+        except Exception:
+            return []
 
     def insert_shared_chat_by_chat_id(self, chat_id: str) -> Optional[ChatModel]:
         with get_db() as db:
@@ -1299,6 +1422,7 @@ class ChatTable:
                 db.query(Chat)
                 .filter_by(user_id=user_id)
                 .order_by(Chat.updated_at.desc())
+                .all()
             )
             return [ChatModel.model_validate(chat) for chat in all_chats]
 
@@ -1308,6 +1432,7 @@ class ChatTable:
                 db.query(Chat)
                 .filter_by(user_id=user_id, pinned=True, archived=False)
                 .order_by(Chat.updated_at.desc())
+                .all()
             )
             return [ChatModel.model_validate(chat) for chat in all_chats]
 
@@ -1317,6 +1442,7 @@ class ChatTable:
                 db.query(Chat)
                 .filter_by(user_id=user_id, archived=True)
                 .order_by(Chat.updated_at.desc())
+                .all()
             )
             return [ChatModel.model_validate(chat) for chat in all_chats]
 
@@ -1439,8 +1565,14 @@ class ChatTable:
     def get_chat_tags_by_id_and_user_id(self, id: str, user_id: str) -> list[TagModel]:
         with get_db() as db:
             chat = db.get(Chat, id)
-            tags = chat.meta.get("tags", [])
-            return [Tags.get_tag_by_name_and_user_id(tag, user_id) for tag in tags]
+            if not chat:
+                return []
+            tag_names = chat.meta.get("tags", [])
+            if not tag_names:
+                return []
+            # Batch load all tags in single query instead of N+1
+            tags = db.query(Tag).filter(Tag.name.in_(tag_names), Tag.user_id == user_id).all()
+            return [TagModel.model_validate(tag) for tag in tags]
 
     def get_chat_list_by_user_id_and_tag_name(
         self, user_id: str, tag_name: str, skip: int = 0, limit: int = 50
@@ -1453,7 +1585,7 @@ class ChatTable:
             # Use adapter to build tag filter
             tag_filter = adapter.build_tag_filter("meta", [tag_id], match_all=True)
             if tag_filter is not None:
-                query = query.filter(tag_filter)
+                query = query.filter(tag_filter).order_by(Chat.updated_at.desc()).offset(skip).limit(limit)
                 all_chats = query.all()
                 return [ChatModel.model_validate(chat) for chat in all_chats]
             else:
