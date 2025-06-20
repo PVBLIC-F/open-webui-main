@@ -256,9 +256,7 @@ class Chat(Base):
     # Human-readable chat title for UI display
     title = Column(Text)
     # Full chat data including messages, history, and configuration
-    chat = Column(
-        JSON
-    )  # For JSONB support, change to: Column(JSONB) if JSONB else Column(JSON)
+    chat = Column(JSONB if JSONB else JSON)
 
     # Timestamp fields (Unix epoch for efficiency and timezone independence)
     created_at = Column(BigInteger)  # Creation timestamp
@@ -271,9 +269,7 @@ class Chat(Base):
     pinned = Column(Boolean, default=False, nullable=True)  # Pinned to top
 
     # Extensible metadata storage (tags, custom fields, etc.)
-    # For JSONB support, change to:
-    # Column(JSONB, server_default="{}") if JSONB else Column(JSON, server_default="{}")
-    meta = Column(JSON, server_default="{}")
+    meta = Column(JSONB if JSONB else JSON, server_default="{}")
     # Optional folder organization
     folder_id = Column(Text, nullable=True)
 
@@ -418,6 +414,10 @@ class ChatTable:
         """Get database adapter for the current session"""
         return DatabaseAdapter(db)
 
+    # ==========================================
+    # DATABASE SETUP & COMPATIBILITY METHODS
+    # ==========================================
+
     # Legacy methods for backward compatibility
     def _is_jsonb_column(self, db, column_name: str) -> bool:
         """Legacy method - use adapter instead"""
@@ -485,6 +485,32 @@ class ChatTable:
         except Exception as e:
             log.error(f"Error checking database compatibility: {e}")
             return {"error": str(e), "database_type": "unknown"}
+
+    def ensure_indexes(self) -> bool:
+        """Ensure critical indexes exist for performance"""
+        try:
+            with get_db() as db:
+                # Create essential indexes for all database types
+                db.execute(text("CREATE INDEX IF NOT EXISTS idx_chat_user_id ON chat(user_id)"))
+                db.execute(text("CREATE INDEX IF NOT EXISTS idx_chat_updated_at ON chat(updated_at DESC)"))
+                db.execute(text("CREATE INDEX IF NOT EXISTS idx_chat_archived ON chat(archived)"))
+                db.execute(text("CREATE INDEX IF NOT EXISTS idx_chat_folder_id ON chat(folder_id)"))
+                
+                # PostgreSQL-specific JSONB indexes
+                if db.bind.dialect.name == "postgresql":
+                    adapter = self._get_adapter(db)
+                    if adapter.get_database_type("chat") == DatabaseType.POSTGRESQL_JSONB:
+                        db.execute(text("CREATE INDEX IF NOT EXISTS idx_chat_meta_tags_gin ON chat USING GIN ((meta->'tags'))"))
+                        db.execute(text("CREATE INDEX IF NOT EXISTS idx_chat_follow_ups_gin ON chat USING GIN ((chat->'history'->'messages'))"))
+                
+                db.commit()
+                return True
+        except Exception:
+            return False
+
+    # ==========================================
+    # GIN INDEX MANAGEMENT METHODS
+    # ==========================================
 
     def create_gin_indexes(self) -> bool:
         """Create GIN indexes on JSONB columns for better query performance"""
@@ -656,6 +682,10 @@ class ChatTable:
 
         except Exception:
             return False
+
+    # ==========================================
+    # TAG INDEX & OPTIMIZATION METHODS
+    # ==========================================
 
     def create_tag_indexes(self) -> bool:
         """
@@ -846,6 +876,10 @@ class ChatTable:
             log.error(f"Error analyzing tag queries: {e}")
             return {"error": str(e)}
 
+    # ==========================================
+    # CORE CHAT CRUD METHODS
+    # ==========================================
+
     def insert_new_chat(self, user_id: str, form_data: ChatForm) -> Optional[ChatModel]:
         with get_db() as db:
             id = str(uuid.uuid4())
@@ -994,6 +1028,86 @@ class ChatTable:
         chat["history"] = history
         return self.update_chat_by_id(id, chat)
 
+    def update_chat_follow_ups_by_id_and_message_id(
+        self, chat_id: str, message_id: str, follow_ups: list[str]
+    ) -> bool:
+        """Ultra-fast follow-up update using direct SQL without loading full chat"""
+        try:
+            with get_db() as db:
+                # Skip adapter overhead - detect database type directly from URL
+                db_url = str(db.get_bind().url)
+                
+                if "postgresql" in db_url and JSONB:  # PostgreSQL with JSONB
+                    # PostgreSQL JSONB - direct path update
+                    result = db.execute(
+                        text("""
+                            UPDATE chat 
+                            SET chat = jsonb_set(
+                                chat, 
+                                :path, 
+                                :follow_ups::jsonb
+                            ),
+                            updated_at = :timestamp
+                            WHERE id = :chat_id 
+                            AND chat->'history'->'messages' ? :message_id
+                        """),
+                        {
+                            "path": f"{{history,messages,{message_id},followUps}}",
+                            "follow_ups": json.dumps(follow_ups),
+                            "timestamp": int(time.time()),
+                            "chat_id": chat_id,
+                            "message_id": message_id
+                        }
+                    )
+                elif "postgresql" in db_url:  # PostgreSQL with JSON
+                    # PostgreSQL JSON - direct path update
+                    result = db.execute(
+                        text("""
+                            UPDATE chat 
+                            SET chat = json_set(
+                                chat, 
+                                :path, 
+                                :follow_ups::json
+                            ),
+                            updated_at = :timestamp
+                            WHERE id = :chat_id 
+                            AND chat->'history'->'messages' ? :message_id
+                        """),
+                        {
+                            "path": f"{{history,messages,{message_id},followUps}}",
+                            "follow_ups": json.dumps(follow_ups),
+                            "timestamp": int(time.time()),
+                            "chat_id": chat_id,
+                            "message_id": message_id
+                        }
+                    )
+                else:
+                    # SQLite or fallback - still faster than full object load
+                    result = db.execute(
+                        text("""
+                            UPDATE chat 
+                            SET chat = json_set(
+                                chat, 
+                                '$.history.messages.' || :message_id || '.followUps', 
+                                json(:follow_ups)
+                            ),
+                            updated_at = :timestamp
+                            WHERE id = :chat_id 
+                            AND json_extract(chat, '$.history.messages.' || :message_id) IS NOT NULL
+                        """),
+                        {
+                            "follow_ups": json.dumps(follow_ups),
+                            "timestamp": int(time.time()),
+                            "chat_id": chat_id,
+                            "message_id": message_id
+                        }
+                    )
+                
+                db.commit()
+                return result.rowcount > 0
+        except Exception:
+            return False
+
     def add_message_status_to_chat_by_id_and_message_id(
         self, id: str, message_id: str, status: dict
     ) -> Optional[ChatModel]:
@@ -1012,6 +1126,35 @@ class ChatTable:
 
         chat["history"] = history
         return self.update_chat_by_id(id, chat)
+
+    def get_recent_follow_ups_by_content_hash(self, content_hash: str, limit: int = 5) -> list[str]:
+        """Get recent follow-ups for similar content to enable caching"""
+        try:
+            with get_db() as db:
+                # Query recent chats with similar content patterns
+                recent_chats = (
+                    db.query(Chat)
+                    .order_by(Chat.updated_at.desc())
+                    .limit(100)  # Check last 100 chats
+                    .all()
+                )
+                
+                follow_ups = []
+                for chat in recent_chats:
+                    messages = chat.chat.get("history", {}).get("messages", {})
+                    for msg in messages.values():
+                        if msg.get("followUps") and len(msg.get("followUps", [])) > 0:
+                            follow_ups.extend(msg["followUps"])
+                            if len(follow_ups) >= limit:
+                                return follow_ups[:limit]
+                
+                return follow_ups
+        except Exception:
+            return []
+
+    # ==========================================
+    # CHAT SHARING METHODS
+    # ==========================================
 
     def insert_shared_chat_by_chat_id(self, chat_id: str) -> Optional[ChatModel]:
         with get_db() as db:
@@ -1090,6 +1233,10 @@ class ChatTable:
         except Exception:
             return None
 
+    # ==========================================
+    # CHAT STATE MANAGEMENT METHODS
+    # ==========================================
+
     def toggle_chat_pinned_by_id(self, id: str) -> Optional[ChatModel]:
         try:
             with get_db() as db:
@@ -1122,6 +1269,10 @@ class ChatTable:
                 return True
         except Exception:
             return False
+
+    # ==========================================
+    # CHAT RETRIEVAL METHODS
+    # ==========================================
 
     def get_archived_chat_list_by_user_id(
         self,
@@ -1251,12 +1402,312 @@ class ChatTable:
             )
             return [ChatModel.model_validate(chat) for chat in all_chats]
 
+    # ==========================================
+    # PERFORMANCE OPTIMIZED RETRIEVAL METHODS
+    # ==========================================
+
     def get_chat_by_id(self, id: str) -> Optional[ChatModel]:
         try:
             with get_db() as db:
                 chat = db.get(Chat, id)
                 return ChatModel.model_validate(chat)
         except Exception:
+            return None
+
+    def get_chat_metadata_by_id(self, id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get only chat metadata without full message history for performance.
+        
+        Loads essential fields while excluding the potentially large chat content,
+        resulting in significantly faster queries for chat list operations.
+        
+        Args:
+            id: Chat identifier
+            
+        Returns:
+            Dictionary with chat metadata or None if not found
+        """
+        try:
+            with get_db() as db:
+                # Select only essential fields to minimize data transfer
+                result = db.query(
+                    Chat.id, Chat.user_id, Chat.title, Chat.created_at,
+                    Chat.updated_at, Chat.share_id, Chat.archived,
+                    Chat.pinned, Chat.meta, Chat.folder_id
+                ).filter_by(id=id).first()
+                
+                if result:
+                    return {
+                        "id": result[0],
+                        "user_id": result[1],
+                        "title": result[2],
+                        "created_at": result[3],
+                        "updated_at": result[4],
+                        "share_id": result[5],
+                        "archived": result[6],
+                        "pinned": result[7],
+                        "meta": result[8],
+                        "folder_id": result[9],
+                        "chat": {}  # Empty for metadata-only loading
+                    }
+                return None
+        except Exception as e:
+            log.error(f"Error loading chat metadata {id}: {e}")
+            return None
+
+    def get_chat_messages_paginated(
+        self, id: str, skip: int = 0, limit: int = 50
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get chat messages with pagination to avoid loading massive histories.
+        
+        Note: This method still loads the full chat to extract messages.
+        For better performance with large chats, use get_chat_with_recent_messages().
+        
+        Args:
+            id: Chat identifier
+            skip: Number of messages to skip
+            limit: Maximum number of messages to return
+            
+        Returns:
+            Dictionary with paginated messages and metadata
+        """
+        try:
+            with get_db() as db:
+                chat = db.get(Chat, id)
+                if not chat:
+                    return None
+                
+                messages = chat.chat.get("history", {}).get("messages", {})
+                
+                # Convert to list for pagination
+                message_items = list(messages.items())
+                total_messages = len(message_items)
+                
+                # Apply pagination
+                paginated_items = message_items[skip:skip + limit]
+                paginated_messages = dict(paginated_items)
+                
+                return {
+                    "messages": paginated_messages,
+                    "total_count": total_messages,
+                    "has_more": skip + limit < total_messages,
+                    "next_skip": skip + limit if skip + limit < total_messages else None
+                }
+        except Exception as e:
+            log.error(f"Error paginating chat messages {id}: {e}")
+            return None
+
+    def get_chat_with_recent_messages(
+        self, id: str, message_limit: int = 20
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get chat with only recent messages for fast initial loading.
+        
+        This method provides optimal performance for large chat histories by loading
+        only the most recent messages. Uses database-specific optimizations when available.
+        
+        Args:
+            id: Chat identifier
+            message_limit: Maximum number of recent messages to load (default: 20)
+            
+        Returns:
+            Dictionary with chat data containing only recent messages
+        """
+        try:
+            with get_db() as db:
+                adapter = self._get_adapter(db)
+                db_type = adapter.get_database_type("chat")
+                
+                if db_type == DatabaseType.POSTGRESQL_JSONB:
+                    # Use JSONB operations for optimal performance
+                    result = db.execute(text("""
+                        SELECT 
+                            id, user_id, title, created_at, updated_at, share_id,
+                            archived, pinned, meta, folder_id,
+                            jsonb_build_object(
+                                'history', jsonb_build_object(
+                                    'messages', (
+                                        SELECT jsonb_object_agg(key, value)
+                                        FROM (
+                                            SELECT key, value 
+                                            FROM jsonb_each(chat->'history'->'messages')
+                                            ORDER BY (value->>'timestamp')::bigint DESC
+                                            LIMIT :limit
+                                        ) recent_msgs
+                                    ),
+                                    'currentId', chat->'history'->'currentId'
+                                )
+                            ) as limited_chat
+                        FROM chat 
+                        WHERE id = :chat_id
+                    """), {"chat_id": id, "limit": message_limit})
+                    
+                    row = result.fetchone()
+                    if row:
+                        return {
+                            "id": row[0],
+                            "user_id": row[1],
+                            "title": row[2],
+                            "created_at": row[3],
+                            "updated_at": row[4],
+                            "share_id": row[5],
+                            "archived": row[6],
+                            "pinned": row[7],
+                            "meta": row[8],
+                            "folder_id": row[9],
+                            "chat": row[10]
+                        }
+                else:
+                    # Fallback for non-JSONB databases
+                    return self._get_chat_with_recent_messages_fallback(id, message_limit)
+                    
+                return None
+        except Exception as e:
+            log.error(f"Error loading chat with recent messages {id}: {e}")
+            return None
+
+    def _get_chat_with_recent_messages_fallback(
+        self, id: str, message_limit: int
+    ) -> Optional[Dict[str, Any]]:
+        """Fallback method for databases without JSONB support"""
+        try:
+            with get_db() as db:
+                chat = db.get(Chat, id)
+                if not chat:
+                    return None
+                
+                messages = chat.chat.get("history", {}).get("messages", {})
+                
+                # Sort by timestamp and take recent messages
+                sorted_messages = sorted(
+                    messages.items(),
+                    key=lambda x: x[1].get("timestamp", 0),
+                    reverse=True
+                )[:message_limit]
+                
+                limited_messages = dict(sorted_messages)
+                
+                limited_chat = {
+                    **chat.chat,
+                    "history": {
+                        **chat.chat.get("history", {}),
+                        "messages": limited_messages
+                    }
+                }
+                
+                return {
+                    "id": chat.id,
+                    "user_id": chat.user_id,
+                    "title": chat.title,
+                    "created_at": chat.created_at,
+                    "updated_at": chat.updated_at,
+                    "share_id": chat.share_id,
+                    "archived": chat.archived,
+                    "pinned": chat.pinned,
+                    "meta": chat.meta,
+                    "folder_id": chat.folder_id,
+                    "chat": limited_chat
+                }
+        except Exception as e:
+            log.error(f"Error in fallback recent messages loading {id}: {e}")
+            return None
+
+    def get_chat_messages_before_timestamp(
+        self, id: str, before_timestamp: int, limit: int = 20
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get older messages before a specific timestamp for infinite scroll.
+        
+        Enables progressive loading of chat history as users scroll back through
+        older messages, providing smooth infinite scroll experience.
+        
+        Args:
+            id: Chat identifier
+            before_timestamp: Unix timestamp to load messages before
+            limit: Maximum number of messages to return (default: 20)
+            
+        Returns:
+            Dictionary with older messages and pagination metadata
+        """
+        try:
+            with get_db() as db:
+                adapter = self._get_adapter(db)
+                db_type = adapter.get_database_type("chat")
+                
+                if db_type == DatabaseType.POSTGRESQL_JSONB:
+                    # Use JSONB operations for efficient querying
+                    result = db.execute(text("""
+                        SELECT jsonb_object_agg(key, value) as older_messages
+                        FROM (
+                            SELECT key, value 
+                            FROM jsonb_each((
+                                SELECT chat->'history'->'messages' 
+                                FROM chat 
+                                WHERE id = :chat_id
+                            ))
+                            WHERE (value->>'timestamp')::bigint < :before_timestamp
+                            ORDER BY (value->>'timestamp')::bigint DESC
+                            LIMIT :limit
+                        ) older_msgs
+                    """), {
+                        "chat_id": id,
+                        "before_timestamp": before_timestamp,
+                        "limit": limit
+                    })
+                    
+                    row = result.fetchone()
+                    if row and row[0]:
+                        messages = row[0]
+                        return {
+                            "messages": messages,
+                            "count": len(messages),
+                            "has_more": len(messages) == limit
+                        }
+                else:
+                    # Fallback for non-JSONB databases
+                    return self._get_messages_before_timestamp_fallback(
+                        id, before_timestamp, limit
+                    )
+                    
+                return {"messages": {}, "count": 0, "has_more": False}
+        except Exception as e:
+            log.error(f"Error loading messages before timestamp {id}: {e}")
+            return None
+
+    def _get_messages_before_timestamp_fallback(
+        self, id: str, before_timestamp: int, limit: int
+    ) -> Optional[Dict[str, Any]]:
+        """Fallback method for databases without JSONB support"""
+        try:
+            with get_db() as db:
+                chat = db.get(Chat, id)
+                if not chat:
+                    return None
+                
+                messages = chat.chat.get("history", {}).get("messages", {})
+                
+                # Filter messages before timestamp and sort
+                older_messages = {
+                    k: v for k, v in messages.items()
+                    if v.get("timestamp", 0) < before_timestamp
+                }
+                
+                sorted_messages = sorted(
+                    older_messages.items(),
+                    key=lambda x: x[1].get("timestamp", 0),
+                    reverse=True
+                )[:limit]
+                
+                result_messages = dict(sorted_messages)
+                
+                return {
+                    "messages": result_messages,
+                    "count": len(result_messages),
+                    "has_more": len(result_messages) == limit
+                }
+        except Exception as e:
+            log.error(f"Error in fallback timestamp loading {id}: {e}")
             return None
 
     def get_chat_by_share_id(self, id: str) -> Optional[ChatModel]:
@@ -1299,6 +1750,7 @@ class ChatTable:
                 db.query(Chat)
                 .filter_by(user_id=user_id)
                 .order_by(Chat.updated_at.desc())
+                .all()
             )
             return [ChatModel.model_validate(chat) for chat in all_chats]
 
@@ -1308,6 +1760,7 @@ class ChatTable:
                 db.query(Chat)
                 .filter_by(user_id=user_id, pinned=True, archived=False)
                 .order_by(Chat.updated_at.desc())
+                .all()
             )
             return [ChatModel.model_validate(chat) for chat in all_chats]
 
@@ -1317,6 +1770,7 @@ class ChatTable:
                 db.query(Chat)
                 .filter_by(user_id=user_id, archived=True)
                 .order_by(Chat.updated_at.desc())
+                .all()
             )
             return [ChatModel.model_validate(chat) for chat in all_chats]
 
@@ -1436,11 +1890,21 @@ class ChatTable:
         except Exception:
             return None
 
+    # ==========================================
+    # TAG MANAGEMENT METHODS
+    # ==========================================
+
     def get_chat_tags_by_id_and_user_id(self, id: str, user_id: str) -> list[TagModel]:
         with get_db() as db:
             chat = db.get(Chat, id)
-            tags = chat.meta.get("tags", [])
-            return [Tags.get_tag_by_name_and_user_id(tag, user_id) for tag in tags]
+            if not chat:
+                return []
+            tag_names = chat.meta.get("tags", [])
+            if not tag_names:
+                return []
+            # Batch load all tags in single query instead of N+1
+            tags = db.query(Tag).filter(Tag.name.in_(tag_names), Tag.user_id == user_id).all()
+            return [TagModel.model_validate(tag) for tag in tags]
 
     def get_chat_list_by_user_id_and_tag_name(
         self, user_id: str, tag_name: str, skip: int = 0, limit: int = 50
@@ -1453,7 +1917,7 @@ class ChatTable:
             # Use adapter to build tag filter
             tag_filter = adapter.build_tag_filter("meta", [tag_id], match_all=True)
             if tag_filter is not None:
-                query = query.filter(tag_filter)
+                query = query.filter(tag_filter).order_by(Chat.updated_at.desc()).offset(skip).limit(limit)
                 all_chats = query.all()
                 return [ChatModel.model_validate(chat) for chat in all_chats]
             else:
@@ -1578,6 +2042,10 @@ class ChatTable:
                 return True
         except Exception:
             return False
+
+    # ==========================================
+    # BULK DELETION METHODS
+    # ==========================================
 
     def delete_chat_by_id(self, id: str) -> bool:
         try:
