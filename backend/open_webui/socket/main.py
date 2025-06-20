@@ -448,6 +448,6 @@ class EventEmitter:
 _event_emitter = EventEmitter()
 
 
-def get_event_emitter():
+def get_global_event_emitter():
     """Get the global event emitter instance"""
     return _event_emitter

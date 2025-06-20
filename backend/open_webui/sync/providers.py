@@ -1587,7 +1587,7 @@ class GoogleDriveProvider(CloudProvider):
         """
         try:
             # Import here to avoid circular imports
-            from open_webui.socket.main import get_event_emitter
+            from open_webui.socket.main import get_global_event_emitter
 
             # Create notification event
             notification_data = {
@@ -1599,8 +1599,8 @@ class GoogleDriveProvider(CloudProvider):
                 **data,
             }
 
-            # Emit to specific user
-            event_emitter = get_event_emitter()
+            # Emit to specific user using the global event emitter
+            event_emitter = get_global_event_emitter()
             if event_emitter:
                 await event_emitter.emit_to_user(
                     user_id, "sync_notification", notification_data
