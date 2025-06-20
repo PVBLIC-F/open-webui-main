@@ -414,6 +414,10 @@ class ChatTable:
         """Get database adapter for the current session"""
         return DatabaseAdapter(db)
 
+    # ==========================================
+    # DATABASE SETUP & COMPATIBILITY METHODS
+    # ==========================================
+
     # Legacy methods for backward compatibility
     def _is_jsonb_column(self, db, column_name: str) -> bool:
         """Legacy method - use adapter instead"""
@@ -503,6 +507,10 @@ class ChatTable:
                 return True
         except Exception:
             return False
+
+    # ==========================================
+    # GIN INDEX MANAGEMENT METHODS
+    # ==========================================
 
     def create_gin_indexes(self) -> bool:
         """Create GIN indexes on JSONB columns for better query performance"""
@@ -674,6 +682,10 @@ class ChatTable:
 
         except Exception:
             return False
+
+    # ==========================================
+    # TAG INDEX & OPTIMIZATION METHODS
+    # ==========================================
 
     def create_tag_indexes(self) -> bool:
         """
@@ -863,6 +875,10 @@ class ChatTable:
         except Exception as e:
             log.error(f"Error analyzing tag queries: {e}")
             return {"error": str(e)}
+
+    # ==========================================
+    # CORE CHAT CRUD METHODS
+    # ==========================================
 
     def insert_new_chat(self, user_id: str, form_data: ChatForm) -> Optional[ChatModel]:
         with get_db() as db:
@@ -1136,6 +1152,10 @@ class ChatTable:
         except Exception:
             return []
 
+    # ==========================================
+    # CHAT SHARING METHODS
+    # ==========================================
+
     def insert_shared_chat_by_chat_id(self, chat_id: str) -> Optional[ChatModel]:
         with get_db() as db:
             # Get the existing chat to share
@@ -1213,6 +1233,10 @@ class ChatTable:
         except Exception:
             return None
 
+    # ==========================================
+    # CHAT STATE MANAGEMENT METHODS
+    # ==========================================
+
     def toggle_chat_pinned_by_id(self, id: str) -> Optional[ChatModel]:
         try:
             with get_db() as db:
@@ -1245,6 +1269,10 @@ class ChatTable:
                 return True
         except Exception:
             return False
+
+    # ==========================================
+    # CHAT RETRIEVAL METHODS
+    # ==========================================
 
     def get_archived_chat_list_by_user_id(
         self,
@@ -1562,6 +1590,10 @@ class ChatTable:
         except Exception:
             return None
 
+    # ==========================================
+    # TAG MANAGEMENT METHODS
+    # ==========================================
+
     def get_chat_tags_by_id_and_user_id(self, id: str, user_id: str) -> list[TagModel]:
         with get_db() as db:
             chat = db.get(Chat, id)
@@ -1710,6 +1742,10 @@ class ChatTable:
                 return True
         except Exception:
             return False
+
+    # ==========================================
+    # BULK DELETION METHODS
+    # ==========================================
 
     def delete_chat_by_id(self, id: str) -> bool:
         try:
