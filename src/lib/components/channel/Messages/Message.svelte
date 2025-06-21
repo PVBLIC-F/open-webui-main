@@ -47,6 +47,13 @@
 	// Check if this is a bot message using metadata
 	$: isBot = message?.data?.bot === true;
 	$: botName = message?.data?.bot_name || 'AI Assistant';
+	$: aiProvider = message?.data?.ai_provider;
+	$: aiModel = message?.data?.ai_model;
+	
+	// Create display name with model info
+	$: displayName = isBot && aiModel 
+		? botName
+		: botName;
 
 	// Generate user initials for user messages
 	$: userInitials = message?.user?.name ? message.user.name.split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2) : 'U';
@@ -145,9 +152,12 @@
 				<!-- Bot message content -->
 				<div class="flex-1">
 					<div class="font-medium text-gray-900 dark:text-gray-100 mb-1">
-						AI Assistant
+						{displayName}
+						{#if isBot && aiModel}
+							<span class="text-xs text-gray-500 dark:text-gray-400 font-normal ml-1">({aiModel})</span>
+						{/if}
 					</div>
-					<div class="text-gray-700 dark:text-gray-300">
+					<div class="text-gray-700 dark:text-gray-300 prose prose-sm max-w-none dark:prose-invert prose-headings:font-semibold prose-headings:text-gray-900 dark:prose-headings:text-gray-100 prose-p:mb-2 prose-ul:space-y-1 prose-li:text-gray-700 dark:prose-li:text-gray-300">
 						<Markdown id={message.id} content={message.content} />
 					</div>
 				</div>
@@ -165,7 +175,7 @@
 					<div class="font-medium text-gray-900 dark:text-gray-100 mb-1">
 						{message?.user?.name}
 					</div>
-					<div class="text-gray-700 dark:text-gray-300">
+					<div class="text-gray-700 dark:text-gray-300 prose prose-sm max-w-none dark:prose-invert prose-headings:font-semibold prose-headings:text-gray-900 dark:prose-headings:text-gray-100 prose-p:mb-2 prose-ul:space-y-1 prose-li:text-gray-700 dark:prose-li:text-gray-300">
 						<Markdown id={message.id} content={message.content} />
 					</div>
 				</div>
