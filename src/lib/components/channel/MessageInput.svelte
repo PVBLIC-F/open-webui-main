@@ -12,6 +12,7 @@
 	import Tooltip from '../common/Tooltip.svelte';
 	import RichTextInput from '../common/RichTextInput.svelte';
 	import VoiceRecording from '../chat/MessageInput/VoiceRecording.svelte';
+	import Commands from '../chat/MessageInput/Commands.svelte';
 	import InputMenu from './MessageInput/InputMenu.svelte';
 	import { uploadFile } from '$lib/apis/files';
 	import { WEBUI_API_BASE_URL } from '$lib/constants';
@@ -32,6 +33,7 @@
 
 	let filesInputElement;
 	let inputFiles;
+	let commandsElement;
 
 	export let typingUsers = [];
 
@@ -487,6 +489,38 @@
 									on:keydown={async (e) => {
 										e = e.detail.event;
 										const isCtrlPressed = e.ctrlKey || e.metaKey; // metaKey is for Cmd key on Mac
+										const commandsContainerElement = document.getElementById('commands-container');
+
+										// Handle Commands navigation
+										if (commandsContainerElement) {
+											if (e.key === 'ArrowUp') {
+												e.preventDefault();
+												commandsElement.selectUp();
+												return;
+											}
+											if (e.key === 'ArrowDown') {
+												e.preventDefault();
+												commandsElement.selectDown();
+												return;
+											}
+											if (e.key === 'Tab') {
+												e.preventDefault();
+												const commandOptionButton = document.querySelector('.selected-command-option-button');
+												commandOptionButton?.click();
+												return;
+											}
+											if (e.key === 'Enter') {
+												e.preventDefault();
+												const commandOptionButton = document.querySelector('.selected-command-option-button');
+												if (commandOptionButton) {
+													commandOptionButton.click();
+												} else {
+													submitHandler();
+												}
+												return;
+											}
+										}
+
 										if (
 											!$mobile ||
 											!(
@@ -625,6 +659,21 @@
 					</div>
 				</form>
 			{/if}
+
+			<Commands
+				bind:this={commandsElement}
+				bind:prompt={content}
+				bind:files
+				on:upload={(e) => {
+					// Handle upload events from Commands (YouTube, web URLs)
+					console.log('Upload event:', e.detail);
+				}}
+				on:select={(e) => {
+					// Handle knowledge base file selection
+					const chatInputElement = document.getElementById(`chat-input-${id}`);
+					chatInputElement?.focus();
+				}}
+			/>
 		</div>
 	</div>
 </div>

@@ -2937,6 +2937,12 @@ AUDIO_STT_AZURE_MAX_SPEAKERS = PersistentConfig(
     os.getenv("AUDIO_STT_AZURE_MAX_SPEAKERS", ""),
 )
 
+STT_SUPPORTED_CONTENT_TYPES = PersistentConfig(
+    "STT_SUPPORTED_CONTENT_TYPES",
+    "audio.stt.supported_content_types",
+    ["audio/mpeg", "audio/mp3", "audio/wav", "audio/flac", "audio/m4a", "audio/ogg", "video/mp4", "video/avi", "video/mov", "video/mkv"],
+)
+
 AUDIO_TTS_OPENAI_API_BASE_URL = PersistentConfig(
     "AUDIO_TTS_OPENAI_API_BASE_URL",
     "audio.tts.openai.api_base_url",
