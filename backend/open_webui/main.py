@@ -59,6 +59,7 @@ from open_webui.socket.main import (
     periodic_usage_pool_cleanup,
 )
 from open_webui.sync.worker import start_sync_worker
+from open_webui.bot_launcher import start_bot_worker
 from open_webui.routers import (
     audio,
     images,
@@ -530,6 +531,9 @@ async def lifespan(app: FastAPI):
     # Start cloud sync worker
     app.state.sync_worker_task = start_sync_worker()
 
+    # Start bot worker
+    app.state.bot_worker_process = start_bot_worker()
+
     yield
 
     if hasattr(app.state, "redis_task_command_listener"):
@@ -537,6 +541,9 @@ async def lifespan(app: FastAPI):
     
     if hasattr(app.state, "sync_worker_task") and app.state.sync_worker_task:
         app.state.sync_worker_task.cancel()
+    
+    if hasattr(app.state, "bot_worker_process") and app.state.bot_worker_process:
+        app.state.bot_worker_process.terminate()
 
 
 app = FastAPI(

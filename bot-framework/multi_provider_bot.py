@@ -163,11 +163,8 @@ class MultiProviderAIBot:
                     "bot_name": self.bot_name
                 }
             }
-            print(f"🔧 Sending payload: {payload}")
             url = f"{self.webui_url}/api/v1/channels/{channel_id}/messages/post"
             async with session.post(url, headers=self.webui_headers, json=payload) as response:
-                response_text = await response.text()
-                print(f"🔧 API Response ({response.status}): {response_text}")
                 return response.status == 200
     
     async def get_ai_response(self, message: str) -> str:
@@ -311,7 +308,7 @@ class MultiProviderAIBot:
                 await asyncio.sleep(5)
 
 def main():
-    """Main entry point"""
+    """Main entry point for standalone execution"""
     try:
         bot = MultiProviderAIBot()
         asyncio.run(bot.run())
