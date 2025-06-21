@@ -403,10 +403,11 @@
 
 <ChannelModal
 	bind:show={showCreateChannel}
-	onSubmit={async ({ name, access_control }) => {
+	onSubmit={async ({ name, access_control, data }) => {
 		const res = await createNewChannel(localStorage.token, {
 			name: name,
-			access_control: access_control
+			access_control: access_control,
+			data: data
 		}).catch((error) => {
 			toast.error(`${error}`);
 			return null;

@@ -59,6 +59,7 @@ from open_webui.socket.main import (
     periodic_usage_pool_cleanup,
 )
 from open_webui.sync.worker import start_sync_worker
+from open_webui.bot_launcher import start_bot_worker
 from open_webui.routers import (
     audio,
     images,
@@ -167,6 +168,7 @@ from open_webui.config import (
     AUDIO_STT_AZURE_LOCALES,
     AUDIO_STT_AZURE_BASE_URL,
     AUDIO_STT_AZURE_MAX_SPEAKERS,
+    STT_SUPPORTED_CONTENT_TYPES,
     AUDIO_TTS_API_KEY,
     AUDIO_TTS_ENGINE,
     AUDIO_TTS_MODEL,
@@ -530,6 +532,9 @@ async def lifespan(app: FastAPI):
     # Start cloud sync worker
     app.state.sync_worker_task = start_sync_worker()
 
+    # Start bot worker
+    app.state.bot_worker_process = start_bot_worker()
+
     yield
 
     if hasattr(app.state, "redis_task_command_listener"):
@@ -537,6 +542,9 @@ async def lifespan(app: FastAPI):
     
     if hasattr(app.state, "sync_worker_task") and app.state.sync_worker_task:
         app.state.sync_worker_task.cancel()
+    
+    if hasattr(app.state, "bot_worker_process") and app.state.bot_worker_process:
+        app.state.bot_worker_process.terminate()
 
 
 app = FastAPI(
@@ -970,6 +978,7 @@ app.state.config.AUDIO_STT_AZURE_REGION = AUDIO_STT_AZURE_REGION
 app.state.config.AUDIO_STT_AZURE_LOCALES = AUDIO_STT_AZURE_LOCALES
 app.state.config.AUDIO_STT_AZURE_BASE_URL = AUDIO_STT_AZURE_BASE_URL
 app.state.config.AUDIO_STT_AZURE_MAX_SPEAKERS = AUDIO_STT_AZURE_MAX_SPEAKERS
+app.state.config.STT_SUPPORTED_CONTENT_TYPES = STT_SUPPORTED_CONTENT_TYPES
 
 app.state.config.TTS_OPENAI_API_BASE_URL = AUDIO_TTS_OPENAI_API_BASE_URL
 app.state.config.TTS_OPENAI_API_KEY = AUDIO_TTS_OPENAI_API_KEY

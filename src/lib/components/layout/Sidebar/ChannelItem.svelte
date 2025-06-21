@@ -25,10 +25,11 @@
 	{channel}
 	edit={true}
 	{onUpdate}
-	onSubmit={async ({ name, access_control }) => {
+	onSubmit={async ({ name, access_control, data }) => {
 		const res = await updateChannelById(localStorage.token, channel.id, {
 			name,
-			access_control
+			access_control,
+			data
 		}).catch((error) => {
 			toast.error(error.message);
 		});
