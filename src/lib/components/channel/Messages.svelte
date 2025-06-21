@@ -100,30 +100,34 @@
 				{thread}
 				showUserProfile={messageIdx === 0 ||
 					messageList.at(messageIdx - 1)?.user_id !== message.user_id}
-				onDelete={() => {
-					messages = messages.filter((m) => m.id !== message.id);
-
-					const res = deleteMessage(localStorage.token, message.channel_id, message.id).catch(
-						(error) => {
-							toast.error(`${error}`);
-							return null;
+				onDelete={async () => {
+					try {
+						const res = await deleteMessage(localStorage.token, message.channel_id, message.id);
+						if (res) {
+							// Only update UI if API call succeeded
+							messages = messages.filter((m) => m.id !== message.id);
 						}
-					);
-				}}
-				onEdit={(content) => {
-					messages = messages.map((m) => {
-						if (m.id === message.id) {
-							m.content = content;
-						}
-						return m;
-					});
-
-					const res = updateMessage(localStorage.token, message.channel_id, message.id, {
-						content: content
-					}).catch((error) => {
+					} catch (error) {
 						toast.error(`${error}`);
-						return null;
-					});
+					}
+				}}
+				onEdit={async (content) => {
+					try {
+						const res = await updateMessage(localStorage.token, message.channel_id, message.id, {
+							content: content
+						});
+						if (res) {
+							// Only update UI if API call succeeded
+							messages = messages.map((m) => {
+								if (m.id === message.id) {
+									m.content = content;
+								}
+								return m;
+							});
+						}
+					} catch (error) {
+						toast.error(`${error}`);
+					}
 				}}
 				onThread={(id) => {
 					onThread(id);

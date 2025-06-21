@@ -5,6 +5,7 @@
 	import Modal from '$lib/components/common/Modal.svelte';
 	import AccessControl from '$lib/components/workspace/common/AccessControl.svelte';
 	import DeleteConfirmDialog from '$lib/components/common/ConfirmDialog.svelte';
+	import Switch from '$lib/components/common/Switch.svelte';
 
 	import { toast } from 'svelte-sonner';
 	import { page } from '$app/stores';
@@ -20,6 +21,7 @@
 
 	let name = '';
 	let accessControl = {};
+	let botAccess = false;
 
 	let loading = false;
 
@@ -31,15 +33,21 @@
 		loading = true;
 		await onSubmit({
 			name: name.replace(/\s/g, '-'),
-			access_control: accessControl
+			access_control: accessControl,
+			data: {
+				bot_access: botAccess
+			}
 		});
 		show = false;
 		loading = false;
 	};
 
 	const init = () => {
-		name = channel.name;
-		accessControl = channel.access_control;
+		if (channel) {
+			name = (channel as any).name;
+			accessControl = (channel as any).access_control;
+			botAccess = (channel as any).data?.bot_access ?? false;
+		}
 	};
 
 	$: if (channel) {
@@ -51,7 +59,7 @@
 	const deleteHandler = async () => {
 		showDeleteConfirmDialog = false;
 
-		const res = await deleteChannelById(localStorage.token, channel.id).catch((error) => {
+		const res = await deleteChannelById(localStorage.token, channel!.id).catch((error) => {
 			toast.error(error.message);
 		});
 
@@ -59,7 +67,7 @@
 			toast.success('Channel deleted successfully');
 			onUpdate();
 
-			if ($page.url.pathname === `/channels/${channel.id}`) {
+			if ($page.url.pathname === `/channels/${channel!.id}`) {
 				goto('/');
 			}
 		}
@@ -126,6 +134,31 @@
 					<div class="my-2 -mx-2">
 						<div class="px-3 py-2 bg-gray-50 dark:bg-gray-950 rounded-lg">
 							<AccessControl bind:accessControl />
+						</div>
+					</div>
+
+					<!-- Bot Access Section -->
+					<hr class=" border-gray-100 dark:border-gray-700/10 my-2.5 w-full" />
+					
+					<div class="my-2 -mx-2">
+						<div class="px-3 py-2 bg-gray-50 dark:bg-gray-950 rounded-lg">
+							<div class="flex flex-col gap-2">
+								<div class="text-sm font-semibold">{$i18n.t('Bot Access')}</div>
+								
+								<div class="flex items-center justify-between">
+									<div class="flex items-center gap-2">
+										<div class="p-2 bg-black/5 dark:bg-white/5 rounded-full">
+											🤖
+										</div>
+										<div>
+											<div class="text-sm font-medium">{$i18n.t('Enable AI Bot')}</div>
+											<div class="text-xs text-gray-400">{$i18n.t('Allow AI bot to respond to messages in this channel')}</div>
+										</div>
+									</div>
+									
+									<Switch bind:state={botAccess} />
+								</div>
+							</div>
 						</div>
 					</div>
 
