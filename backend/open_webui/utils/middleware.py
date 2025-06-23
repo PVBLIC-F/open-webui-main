@@ -607,6 +607,7 @@ async def chat_completion_files_handler(
     sources = []
 
     if files := body.get("metadata", {}).get("files", None):
+        log.debug(f"CHANNEL_BOT_DEBUG: chat_completion_files_handler called with files: {files}")
         queries = []
         try:
             queries_response = await generate_queries(

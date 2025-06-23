@@ -19,6 +19,7 @@
 	import { WEBUI_BASE_URL } from '$lib/constants';
 
 	import Markdown from '$lib/components/chat/Messages/Markdown.svelte';
+	import ContentRenderer from '$lib/components/chat/Messages/ContentRenderer.svelte';
 	import ConfirmDialog from '$lib/components/common/ConfirmDialog.svelte';
 	import GarbageBin from '$lib/components/icons/GarbageBin.svelte';
 	import Pencil from '$lib/components/icons/Pencil.svelte';
@@ -72,9 +73,7 @@
 	<div
 		class="flex flex-col justify-between px-5 {showUserProfile
 			? 'pt-1.5 pb-0.5'
-			: ''} w-full {($settings?.widescreenMode ?? null)
-			? 'max-w-full'
-			: 'max-w-5xl'} mx-auto group hover:bg-gray-300/5 dark:hover:bg-gray-700/5 transition relative"
+			: ''} w-full max-w-5xl mx-auto group hover:bg-gray-300/5 dark:hover:bg-gray-700/5 transition relative"
 	>
 		{#if !edit}
 			<div
@@ -157,7 +156,7 @@
 							<span class="text-xs text-gray-500 dark:text-gray-400 font-normal ml-1">({aiModel})</span>
 						{/if}
 					</div>
-					<div class="text-gray-700 dark:text-gray-300 prose prose-sm max-w-none dark:prose-invert prose-headings:font-semibold prose-headings:text-gray-900 dark:prose-headings:text-gray-100 prose-p:mb-2 prose-ul:space-y-1 prose-li:text-gray-700 dark:prose-li:text-gray-300">
+					<div class="chat-assistant w-full min-w-full markdown-prose">
 						<Markdown id={message.id} content={message.content} />
 					</div>
 				</div>
@@ -197,11 +196,11 @@
 									onReaction(reaction.name);
 								}}
 							>
-								{#if $shortCodesToEmojis[reaction.name]}
+								{#if $shortCodesToEmojis && $shortCodesToEmojis[reaction.name]}
 									<img
 										src="/assets/emojis/{$shortCodesToEmojis[
 											reaction.name
-										].toLowerCase()}.svg"
+										]?.toLowerCase()}.svg"
 										alt={reaction.name}
 										class=" size-4"
 										loading="lazy"

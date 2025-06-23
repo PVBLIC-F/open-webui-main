@@ -34,9 +34,13 @@
 		initHandler();
 	}
 
-	const scrollToBottom = () => {
+	const scrollToBottom = async (behavior = 'auto') => {
+		await tick();
 		if (messagesContainerElement) {
-			messagesContainerElement.scrollTop = messagesContainerElement.scrollHeight;
+			messagesContainerElement.scrollTo({
+				top: messagesContainerElement.scrollHeight,
+				behavior
+			});
 		}
 	};
 
@@ -91,6 +95,12 @@
 
 				if (idx !== -1) {
 					messages[idx] = data;
+					
+					// Auto-scroll during message updates (for bot streaming responses)
+					await tick();
+					if (scrollEnd) {
+						scrollToBottom('smooth');
+					}
 				}
 			} else if (type === 'message:delete') {
 				messages = messages.filter((message) => message.id !== data.id);

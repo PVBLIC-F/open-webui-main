@@ -267,7 +267,7 @@ export const getOpenAIModels = async (token: string, urlIdx?: number) => {
 
 export const verifyOpenAIConnection = async (
 	token: string = '',
-	connection: dict = {},
+	connection: any = {},
 	direct: boolean = false
 ) => {
 	const { url, key, config } = connection;
@@ -366,6 +366,16 @@ export const generateOpenAIChatCompletion = async (
 ) => {
 	let error = null;
 
+	// Debug logging to trace RAG requests
+	console.log('🔍 DEBUG: generateOpenAIChatCompletion called');
+	console.log('🔍 DEBUG: URL:', `${url}/chat/completions`);
+	console.log('🔍 DEBUG: Request body:', JSON.stringify(body, null, 2));
+	
+	// Check if this is a RAG request with files
+	if (body && typeof body === 'object' && 'files' in body) {
+		console.log('📚 DEBUG: RAG request detected with files:', body.files);
+	}
+
 	const res = await fetch(`${url}/chat/completions`, {
 		method: 'POST',
 		headers: {
@@ -375,10 +385,18 @@ export const generateOpenAIChatCompletion = async (
 		body: JSON.stringify(body)
 	})
 		.then(async (res) => {
-			if (!res.ok) throw await res.json();
-			return res.json();
+			console.log('🔍 DEBUG: Response status:', res.status);
+			if (!res.ok) {
+				const errorData = await res.json();
+				console.log('❌ DEBUG: Error response:', errorData);
+				throw errorData;
+			}
+			const responseData = await res.json();
+			console.log('✅ DEBUG: Success response:', JSON.stringify(responseData, null, 2));
+			return responseData;
 		})
 		.catch((err) => {
+			console.log('❌ DEBUG: Fetch error:', err);
 			error = `${err?.detail ?? err}`;
 			return null;
 		});
