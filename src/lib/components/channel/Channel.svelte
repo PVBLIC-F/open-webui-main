@@ -73,12 +73,35 @@
 	};
 
 	const channelEventHandler = async (event) => {
+		console.log('🔍 Channel event received:', event);
+		
 		if (event.channel_id === id) {
 			const type = event?.data?.type ?? null;
 			const data = event?.data?.data ?? null;
+			
+			console.log('🔍 Processing event type:', type, 'for channel:', id);
 
 			if (type === 'message') {
 				if ((data?.parent_id ?? null) === null) {
+					// Check if this is a special model selection message
+					if (data?.content === '__MODEL_SELECTION__' && data?.data?.type === 'model_selection') {
+						console.log('🔍 Received model selection message from:', data.data.userName);
+						// Update channel data locally to trigger reactive updates
+						if (channel && data.data.userId !== $user?.id) {
+							console.log('🔍 Updating shared model selection:', data.data.selectedModel);
+							channel = {
+								...channel,
+								data: {
+									...channel.data,
+									selectedModel: data.data.selectedModel
+								}
+							};
+						}
+						// Don't add this system message to the messages list
+						return;
+					}
+					
+					// Regular message handling
 					messages = [data, ...messages];
 
 					if (typingUsers.find((user) => user.id === event.user.id)) {
@@ -259,6 +282,7 @@
 			<div class=" pb-[1rem]">
 				<MessageInput
 					id="root"
+					{channel}
 					{typingUsers}
 					{onChange}
 					onSubmit={submitHandler}

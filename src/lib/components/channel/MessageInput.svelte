@@ -5,8 +5,9 @@
 
 	const i18n = getContext('i18n');
 
-	import { config, mobile, settings, socket } from '$lib/stores';
+	import { config, mobile, settings, socket, user } from '$lib/stores';
 	import { uploadFile } from '$lib/apis/files';
+	import { updateChannelById, sendMessage } from '$lib/apis/channels';
 	import { WEBUI_API_BASE_URL } from '$lib/constants';
 	import { compressImage } from '$lib/utils';
 
@@ -22,6 +23,7 @@
 
 	export let placeholder = $i18n.t('Send a Message');
 	export let id = null;
+	export let channel = null;
 	export let typingUsers = [];
 	export let onSubmit: Function;
 	export let onChange: Function;
@@ -36,6 +38,34 @@
 	let inputFiles;
 	let commandsElement;
 	let atSelectedModel = undefined;
+
+	// Model selection persistence - unique per channel and user
+	const getModelStorageKey = () => `channel-${id}-selected-model`;
+
+	const saveModelSelection = (model) => {
+		try {
+			localStorage.setItem(getModelStorageKey(), JSON.stringify(model));
+			console.log('💾 Saved model selection:', model.name);
+		} catch (error) {
+			console.error('Failed to save model selection:', error);
+		}
+	};
+
+	const loadModelSelection = () => {
+		try {
+			const savedModel = localStorage.getItem(getModelStorageKey());
+			if (savedModel) {
+				const model = JSON.parse(savedModel);
+				atSelectedModel = model;
+				console.log('📂 Loaded model selection:', model.name);
+				return model;
+			}
+		} catch (error) {
+			console.error('Failed to load model selection:', error);
+			localStorage.removeItem(getModelStorageKey());
+		}
+		return null;
+	};
 
 	// Shared file upload logic
 	const inputFilesHandler = async (inputFiles) => {
@@ -190,7 +220,8 @@
 
 		content = '';
 		files = [];
-		atSelectedModel = undefined;
+		// Keep atSelectedModel persistent - don't reset it!
+		// atSelectedModel = undefined;
 
 		await tick();
 		document.getElementById(`chat-input-${id}`)?.focus();
@@ -198,13 +229,16 @@
 
 	$: if (content) onChange();
 
+	// Load saved model selection when component mounts
 	onMount(async () => {
+		// Load the saved model selection
+		loadModelSelection();
+
 		setTimeout(() => {
 			document.getElementById(`chat-input-${id}`)?.focus();
 		}, 0);
 
 		window.addEventListener('keydown', handleKeyDown);
-		await tick();
 
 		const dropzoneElement = document.getElementById('channel-container');
 		if (dropzoneElement) {
@@ -367,6 +401,13 @@
 
 						<div class="px-2.5">
 							<div class="scrollbar-hidden font-primary text-left bg-transparent dark:text-gray-100 outline-hidden w-full pt-3 px-1 rounded-xl resize-none h-fit max-h-80 overflow-auto">
+								<!-- Simple model indicator -->
+								{#if atSelectedModel}
+									<div class="text-xs text-gray-500 dark:text-gray-400 mb-2 px-1 flex items-center gap-1">
+										<span>Using {atSelectedModel.name}</span>
+									</div>
+								{/if}
+								
 								<RichTextInput
 									bind:value={content}
 									id={`chat-input-${id}`}
@@ -499,6 +540,8 @@
 					const data = e.detail;
 					if (data?.type === 'model') {
 						atSelectedModel = data.data;
+						// Save the model selection to localStorage for persistence
+						saveModelSelection(data.data);
 					}
 					document.getElementById(`chat-input-${id}`)?.focus();
 				}}
