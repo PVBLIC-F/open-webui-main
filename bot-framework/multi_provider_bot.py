@@ -71,15 +71,17 @@ class MultiProviderAIBot:
                     return await response.json()
                 return []
 
+    def _get_display_name(self, selected_model: dict = None) -> str:
+        """Get bot display name based on selected model"""
+        if selected_model:
+            model_name = selected_model.get("name", selected_model.get("id", "Unknown"))
+            return f"{self.bot_name} ({model_name})"
+        return self.bot_name
+
     async def send_message(self, channel_id: str, content: str, selected_model: dict = None) -> bool:
         """Send a message to a channel with bot metadata"""
         async with aiohttp.ClientSession() as session:
-            # Determine display name based on selected model
-            if selected_model:
-                model_name = selected_model.get("name", selected_model.get("id", "Unknown"))
-                display_name = f"{self.bot_name} ({model_name})"
-            else:
-                display_name = f"{self.bot_name}"
+            display_name = self._get_display_name(selected_model)
             
             # Add metadata to identify this as a bot message
             payload = {
@@ -94,77 +96,12 @@ class MultiProviderAIBot:
             async with session.post(url, headers=self.webui_headers, json=payload) as response:
                 return response.status == 200
 
-    async def send_streaming_message(self, channel_id: str, content: str, selected_model: dict = None) -> bool:
-        """Send a message with streaming effect by posting and then updating progressively"""
-        async with aiohttp.ClientSession() as session:
-            # Determine display name based on selected model
-            if selected_model:
-                model_name = selected_model.get("name", selected_model.get("id", "Unknown"))
-                display_name = f"{self.bot_name} ({model_name})"
-            else:
-                display_name = f"{self.bot_name}"
-            
-            # First, post a "thinking" message
-            thinking_payload = {
-                "content": "🤔 Thinking...",
-                "data": {
-                    "bot": True,
-                    "bot_name": display_name,
-                    "selected_model": selected_model.get("id") if selected_model else None
-                }
-            }
-            
-            post_url = f"{self.webui_url}/api/v1/channels/{channel_id}/messages/post"
-            async with session.post(post_url, headers=self.webui_headers, json=thinking_payload) as response:
-                if response.status != 200:
-                    return False
-                
-                message_data = await response.json()
-                message_id = message_data.get("id")
-                
-                if not message_id:
-                    return False
-            
-            # Wait a moment to show "thinking"
-            await asyncio.sleep(1)
-            
-            # Now stream the content by updating the message progressively
-            words = content.split()
-            current_text = ""
-            
-            for i, word in enumerate(words):
-                current_text += word + " "
-                
-                # Update message every 3 words or at the end
-                if (i + 1) % 3 == 0 or i == len(words) - 1:
-                    update_payload = {
-                        "content": current_text.strip(),
-                        "data": {
-                            "bot": True,
-                            "bot_name": display_name,
-                            "selected_model": selected_model.get("id") if selected_model else None
-                        }
-                    }
-                    
-                    update_url = f"{self.webui_url}/api/v1/channels/{channel_id}/messages/{message_id}/update"
-                    async with session.post(update_url, headers=self.webui_headers, json=update_payload) as update_response:
-                        if update_response.status != 200 and self.debug:
-                            print(f"⚠️  Failed to update message: {update_response.status}")
-                    
-                    # Small delay to simulate streaming
-                    await asyncio.sleep(0.15)
-            
-            return True
+
 
     async def send_thinking_indicator(self, channel_id: str, selected_model: dict = None) -> str:
         """Send immediate thinking indicator and return message ID for later update"""
         async with aiohttp.ClientSession() as session:
-            # Determine display name based on selected model
-            if selected_model:
-                model_name = selected_model.get("name", selected_model.get("id", "Unknown"))
-                display_name = f"{self.bot_name} ({model_name})"
-            else:
-                display_name = f"{self.bot_name}"
+            display_name = self._get_display_name(selected_model)
             
             # Post thinking message immediately
             thinking_payload = {
@@ -186,12 +123,7 @@ class MultiProviderAIBot:
     async def update_message_content(self, channel_id: str, message_id: str, content: str, selected_model: dict = None) -> bool:
         """Update a specific message with new content"""
         async with aiohttp.ClientSession() as session:
-            # Determine display name based on selected model
-            if selected_model:
-                model_name = selected_model.get("name", selected_model.get("id", "Unknown"))
-                display_name = f"{self.bot_name} ({model_name})"
-            else:
-                display_name = f"{self.bot_name}"
+            display_name = self._get_display_name(selected_model)
             
             update_payload = {
                 "content": content,
@@ -206,51 +138,39 @@ class MultiProviderAIBot:
             async with session.post(update_url, headers=self.webui_headers, json=update_payload) as update_response:
                 return update_response.status == 200
 
-    async def update_thinking_with_response(self, channel_id: str, content: str, selected_model: dict = None) -> bool:
-        """Update the thinking message with streaming response"""
-        # Get the message ID from the last thinking message
-        message_id = getattr(self, '_last_thinking_message_id', None)
-        if not message_id:
-            # Fallback to regular message
-            return await self.send_message(channel_id, content, selected_model)
+    async def _stream_response_to_message(self, channel_id: str, message_id: str, response_stream, selected_model: dict = None) -> str:
+        """Stream AI response content to a specific message with real-time updates"""
+        content = ""
+        update_counter = 0
         
-        async with aiohttp.ClientSession() as session:
-            # Determine display name based on selected model
-            if selected_model:
-                model_name = selected_model.get("name", selected_model.get("id", "Unknown"))
-                display_name = f"{self.bot_name} ({model_name})"
-            else:
-                display_name = f"{self.bot_name}"
-            
-            # Stream the content by updating the message progressively
-            words = content.split()
-            current_text = ""
-            
-            for i, word in enumerate(words):
-                current_text += word + " "
-                
-                # Update message every 3 words or at the end
-                if (i + 1) % 3 == 0 or i == len(words) - 1:
-                    update_payload = {
-                        "content": current_text.strip(),
-                        "data": {
-                            "bot": True,
-                            "bot_name": display_name,
-                            "selected_model": selected_model.get("id") if selected_model else None
-                        }
-                    }
-                    
-                    update_url = f"{self.webui_url}/api/v1/channels/{channel_id}/messages/{message_id}/update"
-                    async with session.post(update_url, headers=self.webui_headers, json=update_payload) as update_response:
-                        if update_response.status != 200 and self.debug:
-                            print(f"⚠️  Failed to update message: {update_response.status}")
-                    
-                    # Small delay to simulate streaming
-                    await asyncio.sleep(0.1)
-            
-            return True
+        async for line in response_stream:
+            line_str = line.decode('utf-8').strip()
+            if line_str.startswith('data: '):
+                data_str = line_str[6:]  # Remove 'data: ' prefix
+                if data_str == '[DONE]':
+                    break
+                try:
+                    data = json.loads(data_str)
+                    if "choices" in data and len(data["choices"]) > 0:
+                        delta = data["choices"][0].get("delta", {})
+                        if "content" in delta:
+                            content += delta["content"]
+                            update_counter += 1
+                            
+                            # Update every 2 tokens for fast streaming
+                            if update_counter % 2 == 0:
+                                await self.update_message_content(channel_id, message_id, content, selected_model)
+                                
+                except json.JSONDecodeError:
+                    continue
+        
+        # Final update with complete content
+        if content:
+            await self.update_message_content(channel_id, message_id, content, selected_model)
+        
+        return content
 
-    async def get_rag_response(self, message: str, files: List[dict], model_id: str = None, channel_id: str = None, selected_model: dict = None) -> str:
+    async def get_rag_response(self, message: str, files: List[dict], model_id: str = None, channel_id: str = None, selected_model: dict = None, thinking_message_id: str = None) -> str:
         """Get RAG-enhanced AI response using OpenWebUI's chat completions endpoint with files"""
         try:
             if self.debug:
@@ -284,36 +204,11 @@ class MultiProviderAIBot:
                         print(f"🔍 DEBUG: RAG response status: {response.status}")
                     
                     if response.status == 200:
-                        # Handle streaming response with real-time updates
-                        content = ""
-                        message_id = getattr(self, '_last_thinking_message_id', None)
-                        update_counter = 0  # Add counter to throttle updates
-                        
-                        async for line in response.content:
-                            line_str = line.decode('utf-8').strip()
-                            if line_str.startswith('data: '):
-                                data_str = line_str[6:]  # Remove 'data: ' prefix
-                                if data_str == '[DONE]':
-                                    break
-                                try:
-                                    data = json.loads(data_str)
-                                    if "choices" in data and len(data["choices"]) > 0:
-                                        delta = data["choices"][0].get("delta", {})
-                                        if "content" in delta:
-                                            content += delta["content"]
-                                            update_counter += 1
-                                            
-                                            # Only update every 10 tokens AND add delay to prevent spam
-                                            if channel_id and message_id and update_counter % 10 == 0:
-                                                await self.update_message_content(channel_id, message_id, content, selected_model)
-                                                await asyncio.sleep(0.1)  # Small delay to prevent API spam
-                                                
-                                except json.JSONDecodeError:
-                                    continue
-                        
-                        # Final update with complete content
-                        if channel_id and message_id and content:
-                            await self.update_message_content(channel_id, message_id, content, selected_model)
+                        # Stream response to the thinking message
+                        if thinking_message_id:
+                            content = await self._stream_response_to_message(channel_id, thinking_message_id, response.content, selected_model)
+                        else:
+                            content = ""
                         
                         if self.debug:
                             print(f"🔍 DEBUG: RAG response length: {len(content)}")
@@ -329,7 +224,7 @@ class MultiProviderAIBot:
                 traceback.print_exc()
             return "I apologize, but I encountered an error while processing the knowledge base files. Please try again."
 
-    async def get_ai_response(self, message: str, model_id: str, channel_id: str = None, selected_model: dict = None) -> str:
+    async def get_ai_response(self, message: str, model_id: str, channel_id: str = None, selected_model: dict = None, thinking_message_id: str = None) -> str:
         """Get AI response from Open WebUI using the selected model"""
         try:
             headers = self.webui_headers
@@ -347,36 +242,11 @@ class MultiProviderAIBot:
             async with aiohttp.ClientSession() as session:
                 async with session.post(url, headers=headers, json=payload) as response:
                     if response.status == 200:
-                        # Handle streaming response with real-time updates
-                        content = ""
-                        message_id = getattr(self, '_last_thinking_message_id', None)
-                        update_counter = 0  # Add counter to throttle updates
-                        
-                        async for line in response.content:
-                            line_str = line.decode('utf-8').strip()
-                            if line_str.startswith('data: '):
-                                data_str = line_str[6:]  # Remove 'data: ' prefix
-                                if data_str == '[DONE]':
-                                    break
-                                try:
-                                    data = json.loads(data_str)
-                                    if "choices" in data and len(data["choices"]) > 0:
-                                        delta = data["choices"][0].get("delta", {})
-                                        if "content" in delta:
-                                            content += delta["content"]
-                                            update_counter += 1
-                                            
-                                            # Only update every 10 tokens AND add delay to prevent spam
-                                            if channel_id and message_id and update_counter % 10 == 0:
-                                                await self.update_message_content(channel_id, message_id, content, selected_model)
-                                                await asyncio.sleep(0.1)  # Small delay to prevent API spam
-                                                
-                                except json.JSONDecodeError:
-                                    continue
-                        
-                        # Final update with complete content
-                        if channel_id and message_id and content:
-                            await self.update_message_content(channel_id, message_id, content, selected_model)
+                        # Stream response to the thinking message
+                        if thinking_message_id:
+                            content = await self._stream_response_to_message(channel_id, thinking_message_id, response.content, selected_model)
+                        else:
+                            content = ""
                         
                         return content if content else "I apologize, but I couldn't generate a proper response."
                     else:
@@ -436,9 +306,6 @@ class MultiProviderAIBot:
             # Skip if already processed
             if msg_id in self.seen_messages:
                 continue
-                
-            # Mark as seen
-            self.seen_messages.add(msg_id)
             
             # Skip bot's own messages (identify by metadata)
             if self._is_bot_message(message):
@@ -456,6 +323,10 @@ class MultiProviderAIBot:
             
             # Check if we should respond
             if self.should_respond(content, message):
+                # Mark as seen IMMEDIATELY to prevent duplicate processing
+                self.seen_messages.add(msg_id)
+                processed_content = content.strip()
+                
                 # Check if user selected a specific model via @ symbol
                 selected_model = message.get("data", {}).get("atSelectedModel")
                 if selected_model:
@@ -471,15 +342,15 @@ class MultiProviderAIBot:
                 print(f"🤖 {self.bot_name}{model_info} is thinking...")
                 
                 # Show thinking indicator immediately
-                self._last_thinking_message_id = await self.send_thinking_indicator(channel_id, selected_model)
+                thinking_message_id = await self.send_thinking_indicator(channel_id, selected_model)
                 
                 # If files are detected, use RAG processing
                 if files and len(files) > 0:
                     print(f"📚 Processing {len(files)} knowledge base files with RAG")
-                    ai_response = await self.get_rag_response(content, files, model_id, channel_id, selected_model)
+                    ai_response = await self.get_rag_response(processed_content, files, model_id, channel_id, selected_model, thinking_message_id)
                 else:
                     # No files, use regular AI response with selected model
-                    ai_response = await self.get_ai_response(content, model_id, channel_id, selected_model)
+                    ai_response = await self.get_ai_response(processed_content, model_id, channel_id, selected_model, thinking_message_id)
                 
                 # Response is already streamed in real-time, just log completion
                 display_name = f"{model_name}" if selected_model else "Open WebUI"
@@ -511,11 +382,13 @@ class MultiProviderAIBot:
             print("   Enable bot access in channel settings to allow the bot to respond.")
             return
         
+        print(f"\n🎯 {self.bot_name} is ready! To interact with the AI:")
+        print(f"   1. Type @ to select a model")
+        print(f"   2. Check the 'Send to [Model]' checkbox to enable AI response")
+        print(f"   3. Type your message and send")
+        print(f"   Note: Checkbox resets after each message for safety")
         if self.triggers:
-            print(f"\n🎯 {self.bot_name} is ready! Send a message containing trigger words:")
-            print(f"   {', '.join(self.triggers)}")
-        else:
-            print(f"\n🎯 {self.bot_name} is ready! Type @ to select a model and send your message.")
+            print(f"   Alternative: Messages containing: {', '.join(self.triggers)}")
         print()
         
         # Main loop

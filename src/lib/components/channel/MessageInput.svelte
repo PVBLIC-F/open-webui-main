@@ -21,7 +21,7 @@
 	import Image from '../common/Image.svelte';
 	import FilesOverlay from '../chat/MessageInput/FilesOverlay.svelte';
 
-	export let placeholder = $i18n.t('Send a Message');
+	export let placeholder = $i18n.t('Send a Message (use @ to select AI model)');
 	export let id = null;
 	export let channel = null;
 	export let typingUsers = [];
@@ -38,6 +38,7 @@
 	let inputFiles;
 	let commandsElement;
 	let atSelectedModel = undefined;
+	let aiEnabled = false;
 
 	// Model selection persistence - unique per channel and user
 	const getModelStorageKey = () => `channel-${id}-selected-model`;
@@ -212,7 +213,8 @@
 		if (content === '' && files.length === 0) return;
 
 		const messageData = { files };
-		if (atSelectedModel) {
+		// Only include the model if AI is enabled
+		if (atSelectedModel && aiEnabled) {
 			messageData.atSelectedModel = atSelectedModel;
 		}
 
@@ -222,6 +224,9 @@
 		files = [];
 		// Keep atSelectedModel persistent - don't reset it!
 		// atSelectedModel = undefined;
+		
+		// Reset AI checkbox after sending
+		aiEnabled = false;
 
 		await tick();
 		document.getElementById(`chat-input-${id}`)?.focus();
@@ -401,10 +406,17 @@
 
 						<div class="px-2.5">
 							<div class="scrollbar-hidden font-primary text-left bg-transparent dark:text-gray-100 outline-hidden w-full pt-3 px-1 rounded-xl resize-none h-fit max-h-80 overflow-auto">
-								<!-- Simple model indicator -->
+								<!-- Model indicator with AI toggle -->
 								{#if atSelectedModel}
-									<div class="text-xs text-gray-500 dark:text-gray-400 mb-2 px-1 flex items-center gap-1">
-										<span>Using {atSelectedModel.name}</span>
+									<div class="text-xs text-gray-500 dark:text-gray-400 mb-2 px-1 flex items-center gap-2">
+										<label class="flex items-center gap-2 cursor-pointer">
+											<input
+												type="checkbox"
+												bind:checked={aiEnabled}
+												class="w-3.5 h-3.5 rounded border-gray-300 dark:border-gray-600"
+											/>
+											<span>Send to {atSelectedModel.name}</span>
+										</label>
 									</div>
 								{/if}
 								

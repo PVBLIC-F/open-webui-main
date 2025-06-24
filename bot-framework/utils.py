@@ -165,15 +165,18 @@ class StreamingMessageUpdater:
 
 def should_respond_to_message(message_data: Dict, triggers: List[str] = None) -> bool:
     """Check if bot should respond to a message"""
+    content = message_data.get("content", "").strip()
+    
     # Primary: Check for @ model selection
     if message_data.get("data", {}).get("atSelectedModel"):
         return True
     
-    # Fallback: Check trigger words
+    # Fallback: Check trigger words (if any are configured)
     if triggers:
-        content = message_data.get("content", "").lower()
-        return any(trigger in content for trigger in triggers)
+        content_lower = content.lower()
+        return any(trigger in content_lower for trigger in triggers)
     
+    # If no triggers configured, don't respond to avoid spam
     return False
 
 
