@@ -9,11 +9,42 @@ import os
 import time
 import json
 import re
+import logging
+from pathlib import Path
 from typing import List, Set, Optional
 from dotenv import load_dotenv
 import html
 
 from utils import WebUIClient, should_respond_to_message, extract_bot_metadata
+
+# Configure logging to write to backend/data/logs/
+def setup_logging():
+    """Configure logging to write to backend/data/logs/ directory"""
+    # Get the project root (parent of bot-framework)
+    current_file = Path(__file__).resolve()
+    project_root = current_file.parent.parent
+    logs_dir = project_root / "backend" / "data" / "logs"
+    
+    # Ensure logs directory exists
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Create log file path
+    log_file = logs_dir / "channel_bot.log"
+    
+    # Configure logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(log_file),
+            logging.StreamHandler()  # Also log to console
+        ]
+    )
+    
+    return logging.getLogger('MultiProviderAIBot')
+
+# Initialize logger
+logger = setup_logging()
 
 
 class MultiProviderAIBot:
@@ -45,15 +76,15 @@ class MultiProviderAIBot:
         # Message tracking
         self.seen_messages: Set[str] = set()
         
-        print(f"🤖 {self.bot_name} configured:")
-        print(f"   Uses Open WebUI models via @ selection")
-        print(f"   Poll interval: {self.poll_interval}s")
-        print(f"   System prompt loaded: {len(self.system_prompt)} characters")
-        print(f"   System prompt preview: {self.system_prompt[:100]}...")
+        logger.info(f"🤖 {self.bot_name} configured:")
+        logger.info(f"   Uses Open WebUI models via @ selection")
+        logger.info(f"   Poll interval: {self.poll_interval}s")
+        logger.info(f"   System prompt loaded: {len(self.system_prompt)} characters")
+        logger.info(f"   System prompt preview: {self.system_prompt[:100]}...")
         if self.triggers:
-            print(f"   Trigger words: {', '.join(self.triggers)}")
+            logger.info(f"   Trigger words: {', '.join(self.triggers)}")
         else:
-            print(f"   Interaction: @ model selection only")
+            logger.info(f"   Interaction: @ model selection only")
 
     def _create_bot_payload(self, content: str, selected_model: dict = None) -> dict:
         """Create standardized bot message payload"""
@@ -183,13 +214,13 @@ class MultiProviderAIBot:
         """Get RAG-enhanced AI response using OpenWebUI's chat completions endpoint with files"""
         try:
             if self.debug:
-                print(f"🔍 DEBUG: get_rag_response called with {len(files)} files")
+                logger.info(f"🔍 DEBUG: get_rag_response called with {len(files)} files")
             
             # Format files for RAG processing
             formatted_files = []
             for file in files:
                 if self.debug:
-                    print(f"🔍 DEBUG: Processing file: {json.dumps(file, indent=2)}")
+                    logger.info(f"🔍 DEBUG: Processing file: {json.dumps(file, indent=2)}")
                 
                 # Handle different file types
                 if file.get("type") == "collection":
@@ -224,17 +255,17 @@ class MultiProviderAIBot:
                 else:
                     # Unknown format, try to use as-is
                     if self.debug:
-                        print(f"⚠️ Unknown file format, using as-is: {file}")
+                        logger.warning(f"⚠️ Unknown file format, using as-is: {file}")
                     formatted_files.append(file)
             
             if self.debug:
-                print(f"🔍 DEBUG: Formatted files: {json.dumps(formatted_files, indent=2)}")
+                logger.info(f"🔍 DEBUG: Formatted files: {json.dumps(formatted_files, indent=2)}")
             
             # Build payload using shared method
             payload = self._build_chat_payload(message, model_id, formatted_files)
             
             if self.debug:
-                print("DEBUG: Sending RAG payload to backend:", repr(payload))
+                logger.info("DEBUG: Sending RAG payload to backend:", repr(payload))
             
             # Handle streaming response
             if payload.get("stream"):
@@ -251,7 +282,7 @@ class MultiProviderAIBot:
                         await self.update_message_content(channel_id, self._last_thinking_message_id, content, selected_model)
                 
                 if self.debug:
-                    print("DEBUG: Final streaming content:", repr(content))
+                    logger.info("DEBUG: Final streaming content:", repr(content))
                 
                 return content
             else:
@@ -259,7 +290,7 @@ class MultiProviderAIBot:
                 response_data = await self.client.chat_completions(payload)
                 
                 if self.debug:
-                    print(f"🔍 DEBUG: Response data: {json.dumps(response_data, indent=2)}")
+                    logger.info(f"🔍 DEBUG: Response data: {json.dumps(response_data, indent=2)}")
                 
                 if "choices" in response_data and len(response_data["choices"]) > 0:
                     content = response_data["choices"][0]["message"]["content"]
@@ -270,7 +301,7 @@ class MultiProviderAIBot:
                     # Task-based response handling
                     task_id = response_data["task_id"]
                     if self.debug:
-                        print(f"🔍 DEBUG: Task-based response, task_id: {task_id}")
+                        logger.info(f"🔍 DEBUG: Task-based response, task_id: {task_id}")
                     
                     content = "I'm processing your request. Please check back in a moment for the complete response."
                     
@@ -279,10 +310,10 @@ class MultiProviderAIBot:
                     
                     return content
                 else:
-                    print(f"❌ Unexpected response format: {response_data}")
+                    logger.error(f"❌ Unexpected response format: {response_data}")
                     return "I encountered an unexpected response format. Please try again."
         except Exception as e:
-            print(f"❌ Error in get_rag_response: {str(e)}")
+            logger.error(f"❌ Error in get_rag_response: {str(e)}")
             error_msg = "I apologize, but I encountered an error while processing your files. Please try again."
             
             # Update the thinking indicator with the error message
@@ -298,8 +329,8 @@ class MultiProviderAIBot:
             payload = self._build_chat_payload(message, model_id, None)
             
             if self.debug:
-                print(f"🔍 DEBUG: Making AI request to {self.webui_url}/api/chat/completions")
-                print(f"🔍 DEBUG: Payload: {json.dumps(payload, indent=2)}")
+                logger.info(f"🔍 DEBUG: Making AI request to {self.webui_url}/api/chat/completions")
+                logger.info(f"🔍 DEBUG: Payload: {json.dumps(payload, indent=2)}")
             
             # Handle streaming response
             if payload.get("stream"):
@@ -316,7 +347,7 @@ class MultiProviderAIBot:
                         await self.update_message_content(channel_id, self._last_thinking_message_id, content, selected_model)
                 
                 if self.debug:
-                    print("DEBUG: Final streaming content:", repr(content))
+                    logger.info("DEBUG: Final streaming content:", repr(content))
                 
                 return content
             else:
@@ -324,7 +355,7 @@ class MultiProviderAIBot:
                 response_data = await self.client.chat_completions(payload)
                 
                 if self.debug:
-                    print(f"🔍 DEBUG: Response data: {json.dumps(response_data, indent=2)}")
+                    logger.info(f"🔍 DEBUG: Response data: {json.dumps(response_data, indent=2)}")
                 
                 if "choices" in response_data and len(response_data["choices"]) > 0:
                     content = response_data["choices"][0]["message"]["content"]
@@ -335,7 +366,7 @@ class MultiProviderAIBot:
                     # Task-based response handling
                     task_id = response_data["task_id"]
                     if self.debug:
-                        print(f"🔍 DEBUG: Task-based response, task_id: {task_id}")
+                        logger.info(f"🔍 DEBUG: Task-based response, task_id: {task_id}")
                     
                     content = "I'm processing your request. Please check back in a moment for the complete response."
                     
@@ -344,11 +375,11 @@ class MultiProviderAIBot:
                     
                     return content
                 else:
-                    print(f"❌ Unexpected response format: {response_data}")
+                    logger.error(f"❌ Unexpected response format: {response_data}")
                     return "I encountered an unexpected response format. Please try again."
                 
         except Exception as e:
-            print(f"❌ Error in get_ai_response: {str(e)}")
+            logger.error(f"❌ Error in get_ai_response: {str(e)}")
             return "I apologize, but I encountered an error while processing your request. Please try again."
     
     def _is_bot_message(self, message_data: dict) -> bool:
@@ -385,7 +416,7 @@ class MultiProviderAIBot:
             files = message.get("data", {}).get("files", [])
             
             if self.debug:
-                print(f"🔍 DEBUG: Message files detected: {len(files)} files")
+                logger.info(f"🔍 DEBUG: Message files detected: {len(files)} files")
             
             # Skip if already processed
             if msg_id in self.seen_messages:
@@ -397,7 +428,7 @@ class MultiProviderAIBot:
             # Skip bot's own messages (identify by metadata)
             if self._is_bot_message(message):
                 if self.debug:
-                    print(f"🤖 Skipping bot message: {content[:50]}...")
+                    logger.info(f"🤖 Skipping bot message: {content[:50]}...")
                 continue
             
             # Skip old messages
@@ -406,7 +437,7 @@ class MultiProviderAIBot:
                 continue
             
             kb_indicator = f" 📚({len(files)} KB files)" if files else ""
-            print(f"📝 [{channel_name}] {user_name}: {content}{kb_indicator}")
+            logger.info(f"📝 [{channel_name}] {user_name}: {content}{kb_indicator}")
             
             # Check if we should respond
             if self.should_respond(content, message):
@@ -417,25 +448,25 @@ class MultiProviderAIBot:
                 if selected_model:
                     model_name = selected_model.get("name", selected_model.get("id", "Unknown"))
                     model_id = selected_model.get("id")
-                    print(f"🎯 User selected model: {model_name}")
+                    logger.info(f"🎯 User selected model: {model_name}")
                     model_info = f" ({model_name})"
                 else:
                     # This shouldn't happen with @ selection only, but just in case
-                    print("⚠️  No model selected - this shouldn't happen with @ selection")
+                    logger.warning("⚠️  No model selected - this shouldn't happen with @ selection")
                     continue
                 
-                print(f"🤖 {self.bot_name}{model_info} is thinking...")
+                logger.info(f"🤖 {self.bot_name}{model_info} is thinking...")
                 
                 # Show thinking indicator immediately
                 self._last_thinking_message_id = await self.send_thinking_indicator(channel_id, selected_model)
                 if self.debug:
-                    print(f"🔍 DEBUG: Thinking message ID: {self._last_thinking_message_id}")
+                    logger.info(f"🔍 DEBUG: Thinking message ID: {self._last_thinking_message_id}")
                 
                 # If files are detected, use RAG processing
                 if files and len(files) > 0:
-                    print(f"📚 Processing {len(files)} knowledge base files with RAG")
+                    logger.info(f"📚 Processing {len(files)} knowledge base files with RAG")
                     if self.debug:
-                        print(f"🔍 DEBUG: Files structure: {json.dumps(files, indent=2)}")
+                        logger.info(f"🔍 DEBUG: Files structure: {json.dumps(files, indent=2)}")
                     
                     # Try RAG first
                     ai_response = await self.get_rag_response(processed_content, files, model_id, channel_id, selected_model)
@@ -443,7 +474,7 @@ class MultiProviderAIBot:
                     # If RAG fails or returns an error message, fall back to regular AI
                     if ai_response and any(error_indicator in ai_response.lower() for error_indicator in 
                                         ["error", "unexpected", "needs to be handled", "encountered"]):
-                        print(f"⚠️ RAG failed, falling back to regular AI response")
+                        logger.warning(f"⚠️ RAG failed, falling back to regular AI response")
                         # Update thinking indicator to show we're switching to regular AI
                         if channel_id and self._last_thinking_message_id:
                             await self.update_message_content(channel_id, self._last_thinking_message_id, 
@@ -457,40 +488,40 @@ class MultiProviderAIBot:
                 
                 # Response is already streamed in real-time, just log completion
                 display_name = f"{model_name}" if selected_model else "Open WebUI"
-                print(f"✅ {self.bot_name} ({display_name}): {ai_response[:100]}{'...' if len(ai_response) > 100 else ''}")
+                logger.info(f"✅ {self.bot_name} ({display_name}): {ai_response[:100]}{'...' if len(ai_response) > 100 else ''}")
             
             # Small delay to prevent overwhelming
             await asyncio.sleep(0.1)
     
     async def run(self):
         """Main bot loop"""
-        print(f"🚀 Starting {self.bot_name} with Open WebUI models...")
+        logger.info(f"🚀 Starting {self.bot_name} with Open WebUI models...")
         
         # Get channels
         channels = await self.get_channels()
         if not channels:
-            print("❌ No accessible channels found")
+            logger.error("❌ No accessible channels found")
             return
             
         # Filter channels with bot access
         bot_enabled_channels = [ch for ch in channels if self.has_bot_access(ch)]
         
-        print(f"✅ Found {len(channels)} channels, {len(bot_enabled_channels)} with bot access enabled:")
+        logger.info(f"✅ Found {len(channels)} channels, {len(bot_enabled_channels)} with bot access enabled:")
         for channel in channels:
             bot_status = "🤖" if self.has_bot_access(channel) else "🚫"
-            print(f"   {bot_status} {channel['name']}")
+            logger.info(f"   {bot_status} {channel['name']}")
         
         if not bot_enabled_channels:
-            print("\n⚠️  No channels have bot access enabled!")
-            print("   Enable bot access in channel settings to allow the bot to respond.")
+            logger.warning("\n⚠️  No channels have bot access enabled!")
+            logger.warning("   Enable bot access in channel settings to allow the bot to respond.")
             return
         
-        print(f"\n🎯 {self.bot_name} is ready! To interact with the AI:")
-        print(f"   1. Type @ to select a model")
-        print(f"   2. Check the AI checkbox to enable AI responses")
+        logger.info(f"\n🎯 {self.bot_name} is ready! To interact with the AI:")
+        logger.info(f"   1. Type @ to select a model")
+        logger.info(f"   2. Check the AI checkbox to enable AI responses")
         if self.triggers:
-            print(f"   Alternative: Messages containing: {', '.join(self.triggers)}")
-        print()
+            logger.info(f"   Alternative: Messages containing: {', '.join(self.triggers)}")
+        logger.info("")
         
         # Main loop
         while True:
@@ -502,14 +533,14 @@ class MultiProviderAIBot:
                 # Wait before next poll
                 await asyncio.sleep(self.poll_interval)
                 if not self.debug:
-                    print(".", end="", flush=True)
+                    logger.info(".", end="", flush=True)
                 
             except KeyboardInterrupt:
-                print(f"\n👋 {self.bot_name} is shutting down...")
+                logger.info(f"\n👋 {self.bot_name} is shutting down...")
                 break
             except Exception as e:
-                print(f"\n❌ Unexpected error: {e}")
-                print("🔄 Continuing in 5 seconds...")
+                logger.error(f"\n❌ Unexpected error: {e}")
+                logger.info("🔄 Continuing in 5 seconds...")
                 await asyncio.sleep(5)
 
 
@@ -519,9 +550,9 @@ def main():
         bot = MultiProviderAIBot()
         asyncio.run(bot.run())
     except KeyboardInterrupt:
-        print("\n👋 Bot stopped by user")
+        logger.info("\n👋 Bot stopped by user")
     except Exception as e:
-        print(f"❌ Fatal error: {e}")
+        logger.error(f"❌ Fatal error: {e}")
         import traceback
         traceback.print_exc()
 
