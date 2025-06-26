@@ -30,6 +30,9 @@
 	import ChevronRight from '$lib/components/icons/ChevronRight.svelte';
 	import { formatDate } from '$lib/utils';
 
+	import { get } from 'svelte/store';
+	const shortCodesToEmojisMap: Record<string, string> = get(shortCodesToEmojis);
+
 	export let message;
 	export let showUserProfile = true;
 	export let thread = false;
@@ -156,7 +159,7 @@
 							<span class="text-xs text-gray-500 dark:text-gray-400 font-normal ml-1">({aiModel})</span>
 						{/if}
 					</div>
-					<div class="chat-assistant w-full min-w-full markdown-prose">
+					<div class="w-full min-w-full markdown-prose">
 						<Markdown id={message.id} content={message.content} />
 					</div>
 				</div>
@@ -174,7 +177,7 @@
 					<div class="font-medium text-gray-900 dark:text-gray-100 mb-1">
 						{message?.user?.name}
 					</div>
-					<div class="text-gray-700 dark:text-gray-300 prose prose-sm max-w-none dark:prose-invert prose-headings:font-semibold prose-headings:text-gray-900 dark:prose-headings:text-gray-100 prose-p:mb-2 prose-ul:space-y-1 prose-li:text-gray-700 dark:prose-li:text-gray-300">
+					<div class="text-gray-700 dark:text-gray-300 w-full min-w-full markdown-prose">
 						<Markdown id={message.id} content={message.content} />
 					</div>
 				</div>
@@ -196,11 +199,9 @@
 									onReaction(reaction.name);
 								}}
 							>
-								{#if $shortCodesToEmojis && $shortCodesToEmojis[reaction.name]}
+								{#if shortCodesToEmojisMap && shortCodesToEmojisMap[reaction.name]}
 									<img
-										src="/assets/emojis/{$shortCodesToEmojis[
-											reaction.name
-										]?.toLowerCase()}.svg"
+										src="/assets/emojis/{shortCodesToEmojisMap[reaction.name]?.toLowerCase()}.svg"
 										alt={reaction.name}
 										class=" size-4"
 										loading="lazy"
