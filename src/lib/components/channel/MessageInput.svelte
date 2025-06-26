@@ -9,7 +9,7 @@
 	import { uploadFile } from '$lib/apis/files';
 	import { updateChannelById, sendMessage } from '$lib/apis/channels';
 	import { WEBUI_API_BASE_URL } from '$lib/constants';
-	import { compressImage } from '$lib/utils';
+	import { compressImage, removeLastWordFromString } from '$lib/utils';
 
 	// Components
 	import Tooltip from '../common/Tooltip.svelte';
@@ -192,6 +192,19 @@
 		}
 	};
 
+	const handleClickOutside = (event) => {
+		const commandsContainer = document.getElementById('commands-container');
+		const chatInput = document.getElementById(`chat-input-${id}`);
+		
+		if (commandsContainer && !commandsContainer.contains(event.target) && !chatInput.contains(event.target)) {
+			// Get the current command to remove
+			const currentCommand = content?.split('\n').pop()?.split(' ')?.pop() ?? '';
+			if (currentCommand && ['@', '#', '/'].includes(currentCommand.charAt(0))) {
+				content = removeLastWordFromString(content, currentCommand);
+			}
+		}
+	};
+
 	const onDragOver = (e) => {
 		e.preventDefault();
 		draggedOver = e.dataTransfer?.types?.includes('Files');
@@ -243,6 +256,7 @@
 		}, 0);
 
 		window.addEventListener('keydown', handleKeyDown);
+		document.addEventListener('click', handleClickOutside);
 
 		const dropzoneElement = document.getElementById('channel-container');
 		if (dropzoneElement) {
@@ -254,6 +268,7 @@
 
 	onDestroy(() => {
 		window.removeEventListener('keydown', handleKeyDown);
+		document.removeEventListener('click', handleClickOutside);
 		const dropzoneElement = document.getElementById('channel-container');
 		if (dropzoneElement) {
 			dropzoneElement.removeEventListener('dragover', onDragOver);
@@ -452,6 +467,15 @@
 													commandOptionButton.click();
 												} else {
 													submitHandler();
+												}
+												return;
+											}
+											if (e.key === 'Escape') {
+												e.preventDefault();
+												// Get the current command to remove
+												const currentCommand = content?.split('\n').pop()?.split(' ')?.pop() ?? '';
+												if (currentCommand && ['@', '#', '/'].includes(currentCommand.charAt(0))) {
+													content = removeLastWordFromString(content, currentCommand);
 												}
 												return;
 											}
