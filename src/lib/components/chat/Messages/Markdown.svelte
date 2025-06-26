@@ -1,5 +1,5 @@
-<script>
-	import { marked } from 'marked';
+<script lang="ts">
+	import { marked, type Token } from 'marked';
 	import { replaceTokens, processResponseContent } from '$lib/utils';
 	import { user } from '$lib/stores';
 
@@ -10,11 +10,11 @@
 
 	export let id = '';
 	export let content;
-	export let model = null;
+	export let model: any = null;
 	export let save = false;
 	export let preview = false;
 
-	export let sourceIds = [];
+	export let sourceIds: any[] = [];
 
 	export let onSave = () => {};
 	export let onUpdate = () => {};
@@ -24,7 +24,7 @@
 	export let onSourceClick = () => {};
 	export let onTaskClick = () => {};
 
-	let tokens = [];
+	let tokens: Token[] = [];
 
 	const options = {
 		throwOnError: false

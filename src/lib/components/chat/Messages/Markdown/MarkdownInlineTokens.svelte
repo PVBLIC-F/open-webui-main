@@ -66,6 +66,6 @@
 			onload="this.style.height=(this.contentWindow.document.body.scrollHeight+20)+'px';"
 		></iframe>
 	{:else if token.type === 'text'}
-		{token.raw}
+		{@html DOMPurify.sanitize(unescapeHtml(token.text) || '')}
 	{/if}
 {/each}

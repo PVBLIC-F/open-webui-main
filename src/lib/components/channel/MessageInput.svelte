@@ -40,6 +40,9 @@
 	let atSelectedModel = undefined;
 	let aiEnabled = false;
 
+	// Computed mobile detection to avoid duplication
+	$: isDesktop = !$mobile || !('ontouchstart' in window || navigator.maxTouchPoints > 0);
+
 	// Model selection persistence - unique per channel and user
 	const getModelStorageKey = () => `channel-${id}-selected-model`;
 
@@ -213,7 +216,6 @@
 		if (content === '' && files.length === 0) return;
 
 		const messageData = { files };
-		// Only include the model if AI is enabled
 		if (atSelectedModel && aiEnabled) {
 			messageData.atSelectedModel = atSelectedModel;
 		}
@@ -224,9 +226,6 @@
 		files = [];
 		// Keep atSelectedModel persistent - don't reset it!
 		// atSelectedModel = undefined;
-		
-		// Reset AI checkbox after sending
-		aiEnabled = false;
 
 		await tick();
 		document.getElementById(`chat-input-${id}`)?.focus();
@@ -406,17 +405,15 @@
 
 						<div class="px-2.5">
 							<div class="scrollbar-hidden font-primary text-left bg-transparent dark:text-gray-100 outline-hidden w-full pt-3 px-1 rounded-xl resize-none h-fit max-h-80 overflow-auto">
-								<!-- Model indicator with AI toggle -->
+								<!-- Simple model indicator with AI toggle -->
 								{#if atSelectedModel}
 									<div class="text-xs text-gray-500 dark:text-gray-400 mb-2 px-1 flex items-center gap-2">
-										<label class="flex items-center gap-2 cursor-pointer">
-											<input
-												type="checkbox"
-												bind:checked={aiEnabled}
-												class="w-3.5 h-3.5 rounded border-gray-300 dark:border-gray-600"
-											/>
-											<span>Send to {atSelectedModel.name}</span>
-										</label>
+										<input
+											type="checkbox"
+											bind:checked={aiEnabled}
+											class="w-3 h-3"
+										/>
+										<span>AI: {atSelectedModel.name}</span>
 									</div>
 								{/if}
 								
@@ -424,7 +421,7 @@
 									bind:value={content}
 									id={`chat-input-${id}`}
 									messageInput={true}
-									shiftEnter={!$mobile || !('ontouchstart' in window || navigator.maxTouchPoints > 0 || navigator.msMaxTouchPoints > 0)}
+									shiftEnter={isDesktop}
 									{placeholder}
 									largeTextAsFile={$settings?.largeTextAsFile ?? false}
 									on:keydown={async (e) => {
@@ -460,7 +457,7 @@
 											}
 										}
 
-										if (!$mobile || !('ontouchstart' in window || navigator.maxTouchPoints > 0 || navigator.msMaxTouchPoints > 0)) {
+										if (isDesktop) {
 											if (e.keyCode === 13 && !e.shiftKey) {
 												e.preventDefault();
 											}
@@ -512,28 +509,28 @@
 								{/if}
 
 								<div class="flex items-center">
-									<Tooltip content={$i18n.t('Send message')}>
-										<button
-											class="{content !== '' || files.length !== 0
+										<Tooltip content={$i18n.t('Send message')}>
+											<button
+												class="{content !== '' || files.length !== 0
 												? 'bg-black text-white hover:bg-gray-900 dark:bg-white dark:text-black dark:hover:bg-gray-100'
-												: 'text-white bg-gray-200 dark:text-gray-900 dark:bg-gray-700 disabled'} transition rounded-full p-1.5 self-center"
-											type="submit"
-											disabled={content === '' && files.length === 0}
-										>
-											<svg
-												xmlns="http://www.w3.org/2000/svg"
-												viewBox="0 0 16 16"
-												fill="currentColor"
-												class="size-5"
+													: 'text-white bg-gray-200 dark:text-gray-900 dark:bg-gray-700 disabled'} transition rounded-full p-1.5 self-center"
+												type="submit"
+												disabled={content === '' && files.length === 0}
 											>
-												<path
-													fill-rule="evenodd"
-													d="M8 14a.75.75 0 0 1-.75-.75V4.56L4.03 7.78a.75.75 0 0 1-1.06-1.06l4.5-4.5a.75.75 0 0 1 1.06 0l4.5 4.5a.75.75 0 0 1-1.06 1.06L8.75 4.56v8.69A.75.75 0 0 1 8 14Z"
-													clip-rule="evenodd"
-												/>
-											</svg>
-										</button>
-									</Tooltip>
+												<svg
+													xmlns="http://www.w3.org/2000/svg"
+													viewBox="0 0 16 16"
+													fill="currentColor"
+													class="size-5"
+												>
+													<path
+														fill-rule="evenodd"
+														d="M8 14a.75.75 0 0 1-.75-.75V4.56L4.03 7.78a.75.75 0 0 1-1.06-1.06l4.5-4.5a.75.75 0 0 1 1.06 0l4.5 4.5a.75.75 0 0 1-1.06 1.06L8.75 4.56v8.69A.75.75 0 0 1 8 14Z"
+														clip-rule="evenodd"
+													/>
+												</svg>
+											</button>
+										</Tooltip>
 								</div>
 							</div>
 						</div>
