@@ -6,38 +6,7 @@ import asyncio
 import aiohttp
 import json
 from typing import Dict, List, Optional, AsyncGenerator
-import socketio
 from env import WEBUI_URL, TOKEN
-
-
-async def send_message(channel_id: str, message: str):
-    url = f"{WEBUI_URL}/api/v1/channels/{channel_id}/messages/post"
-    headers = {"Authorization": f"Bearer {TOKEN}"}
-    data = {"content": str(message)}
-
-    async with aiohttp.ClientSession() as session:
-        async with session.post(url, headers=headers, json=data) as response:
-            if response.status != 200:
-                # Raise an exception if the request fails
-                raise aiohttp.ClientResponseError(
-                    request_info=response.request_info,
-                    history=response.history,
-                    status=response.status,
-                    message=await response.text(),
-                    headers=response.headers,
-                )
-            # Return response JSON if successful
-            return await response.json()
-
-
-async def send_typing(sio: socketio.AsyncClient, channel_id: str):
-    await sio.emit(
-        "channel-events",
-        {
-            "channel_id": channel_id,
-            "data": {"type": "typing", "data": {"typing": True}},
-        },
-    )
 
 
 class WebUIClient:
@@ -49,6 +18,10 @@ class WebUIClient:
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json"
         }
+    
+    def _session(self):
+        """Get aiohttp session for direct use"""
+        return aiohttp.ClientSession()
     
     async def get_channels(self) -> List[Dict]:
         """Get all accessible channels"""
@@ -93,6 +66,23 @@ class WebUIClient:
             url = f"{self.base_url}/api/v1/channels/{channel_id}/messages/{message_id}/update"
             async with session.post(url, headers=self.headers, json=payload) as response:
                 return response.status == 200
+    
+    async def chat_completions(self, payload: Dict) -> Dict:
+        """Make a chat completion request (for RAG and non-streaming)"""
+        async with aiohttp.ClientSession() as session:
+            url = f"{self.base_url}/api/chat/completions"
+            async with session.post(url, headers=self.headers, json=payload) as response:
+                if response.status == 200:
+                    return await response.json()
+                else:
+                    error_text = await response.text()
+                    raise aiohttp.ClientResponseError(
+                        request_info=response.request_info,
+                        history=response.history,
+                        status=response.status,
+                        message=error_text,
+                        headers=response.headers,
+                    )
     
     async def stream_chat_completion(
         self, 
