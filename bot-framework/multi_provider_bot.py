@@ -5,12 +5,16 @@ Uses Open WebUI's model selection via @ symbol.
 """
 
 import asyncio
-import aiohttp
 import os
 import time
 import json
+import re
 from typing import List, Set, Optional
 from dotenv import load_dotenv
+import html
+
+from utils import WebUIClient, should_respond_to_message, extract_bot_metadata
+
 
 class MultiProviderAIBot:
     def __init__(self, env_file=".env"):
@@ -23,8 +27,8 @@ class MultiProviderAIBot:
         if not self.webui_token:
             raise ValueError("TOKEN environment variable is required for Open WebUI access")
         
-        # Bot will use Open WebUI's models via @ selection
-        # No external provider configuration needed
+        # Initialize HTTP client
+        self.client = WebUIClient(self.webui_url, self.webui_token)
         
         # Bot Configuration
         self.bot_name = os.getenv("BOT_NAME", "AI Assistant")
@@ -38,8 +42,7 @@ class MultiProviderAIBot:
         trigger_string = os.getenv("BOT_TRIGGERS", "")
         self.triggers = [trigger.strip().lower() for trigger in trigger_string.split(",") if trigger.strip()]
         
-        # WebUI headers
-        self.webui_headers = {"Authorization": f"Bearer {self.webui_token}", "Content-Type": "application/json"}
+        # Message tracking
         self.seen_messages: Set[str] = set()
         
         print(f"🤖 {self.bot_name} configured:")
@@ -51,208 +54,299 @@ class MultiProviderAIBot:
             print(f"   Trigger words: {', '.join(self.triggers)}")
         else:
             print(f"   Interaction: @ model selection only")
-        
 
-    async def get_channels(self) -> List[dict]:
-        """Get all accessible channels from Open WebUI"""
-        async with aiohttp.ClientSession() as session:
-            async with session.get(f"{self.webui_url}/api/v1/channels/", headers=self.webui_headers) as response:
-                if response.status == 200:
-                    return await response.json()
-                print(f"❌ Failed to get channels: {response.status}")
-                return []
-    
-    async def get_messages(self, channel_id: str) -> List[dict]:
-        """Get recent messages from a channel"""
-        async with aiohttp.ClientSession() as session:
-            url = f"{self.webui_url}/api/v1/channels/{channel_id}/messages?limit={self.message_limit}"
-            async with session.get(url, headers=self.webui_headers) as response:
-                if response.status == 200:
-                    return await response.json()
-                return []
-
-    def _get_display_name(self, selected_model: dict = None) -> str:
-        """Get bot display name based on selected model"""
+    def _create_bot_payload(self, content: str, selected_model: dict = None) -> dict:
+        """Create standardized bot message payload"""
         if selected_model:
             model_name = selected_model.get("name", selected_model.get("id", "Unknown"))
-            return f"{self.bot_name} ({model_name})"
-        return self.bot_name
+            display_name = f"{self.bot_name} ({model_name})"
+        else:
+            display_name = self.bot_name
+        
+        return {
+            "content": content,
+            "data": {
+                "bot": True,
+                "bot_name": display_name,
+                "selected_model": selected_model.get("id") if selected_model else None
+            }
+        }
 
     async def send_message(self, channel_id: str, content: str, selected_model: dict = None) -> bool:
         """Send a message to a channel with bot metadata"""
-        async with aiohttp.ClientSession() as session:
-            display_name = self._get_display_name(selected_model)
-            
-            # Add metadata to identify this as a bot message
-            payload = {
-                "content": content,
-                "data": {
-                    "bot": True,
-                    "bot_name": display_name,  # Show selected model in display name
-                    "selected_model": selected_model.get("id") if selected_model else None
-                }
-            }
-            url = f"{self.webui_url}/api/v1/channels/{channel_id}/messages/post"
-            async with session.post(url, headers=self.webui_headers, json=payload) as response:
-                return response.status == 200
+        payload = self._create_bot_payload(content, selected_model)
+        result = await self.client.post_message(channel_id, content, payload["data"])
+        return result is not None
 
-
-
-    async def send_thinking_indicator(self, channel_id: str, selected_model: dict = None) -> str:
+    async def send_thinking_indicator(self, channel_id: str, selected_model: dict = None) -> Optional[str]:
         """Send immediate thinking indicator and return message ID for later update"""
-        async with aiohttp.ClientSession() as session:
-            display_name = self._get_display_name(selected_model)
-            
-            # Post thinking message immediately
-            thinking_payload = {
-                "content": "🤔 Thinking...",
-                "data": {
-                    "bot": True,
-                    "bot_name": display_name,
-                    "selected_model": selected_model.get("id") if selected_model else None
-                }
-            }
-            
-            post_url = f"{self.webui_url}/api/v1/channels/{channel_id}/messages/post"
-            async with session.post(post_url, headers=self.webui_headers, json=thinking_payload) as response:
-                if response.status == 200:
-                    message_data = await response.json()
-                    return message_data.get("id")
-                return None
+        payload = self._create_bot_payload("🤔 Thinking...", selected_model)
+        result = await self.client.post_message(channel_id, "🤔 Thinking...", payload["data"])
+        return result.get("id") if result else None
 
     async def update_message_content(self, channel_id: str, message_id: str, content: str, selected_model: dict = None) -> bool:
         """Update a specific message with new content"""
-        async with aiohttp.ClientSession() as session:
-            display_name = self._get_display_name(selected_model)
-            
-            update_payload = {
-                "content": content,
-                "data": {
-                    "bot": True,
-                    "bot_name": display_name,
-                    "selected_model": selected_model.get("id") if selected_model else None
-                }
+        payload = self._create_bot_payload(content, selected_model)
+        return await self.client.update_message(channel_id, message_id, content, payload["data"])
+
+    async def get_channels(self) -> List[dict]:
+        """Get all accessible channels from Open WebUI"""
+        return await self.client.get_channels()
+    
+    async def get_messages(self, channel_id: str) -> List[dict]:
+        """Get recent messages from a channel"""
+        return await self.client.get_messages(channel_id, self.message_limit)
+
+    def format_llm_response(self, content: str) -> str:
+        """Unified formatting for all LLM responses (user or RAG)."""
+        if not content:
+            return content
+        # Unescape HTML entities (if any)
+        content = html.unescape(content)
+        # Ensure blank line before headings
+        content = re.sub(r'(?<!\n)\n?(#+ )', r'\n\n\1', content)
+        # Ensure blank line before lists
+        content = re.sub(r'(?<!\n)\n?([-*] )', r'\n\n\1', content)
+        content = re.sub(r'(?<!\n)\n?(\d+\. )', r'\n\n\1', content)
+        # Replace 3+ newlines with just 2
+        content = re.sub(r'\n{3,}', '\n\n', content)
+        # Remove accidental double spaces
+        content = re.sub(r' {2,}', ' ', content)
+        return content.strip()
+
+    def _build_chat_payload(self, message: str, model_id: str, files: List[dict] = None) -> dict:
+        """Build standardized chat completion payload for both RAG and AI responses"""
+        # Build messages like chat interface
+        messages = []
+        if self.system_prompt:
+            messages.append({
+                "role": "system",
+                "content": self.system_prompt
+            })
+        messages.append({
+            "role": "user", 
+            "content": message
+        })
+        
+        # Filter and process messages like chat interface
+        messages = [msg for msg in messages if msg]
+        processed_messages = []
+        for msg in messages:
+            processed_messages.append({
+                "role": msg["role"],
+                "content": msg["content"]
+            })
+        
+        # Final filter like chat interface
+        messages = [msg for msg in processed_messages if msg.get("role") == "user" or msg.get("content", "").strip()]
+        
+        # Build payload structure matching chat interface
+        stream = True  # Chat interface default
+        payload = {
+            "stream": stream,
+            "model": model_id,
+            "messages": messages,
+            "params": {},  # Empty like chat when no settings
+            "files": files if files and len(files) > 0 else None,
+            "filter_ids": None,  # Like chat when selectedFilterIds empty
+            "tool_ids": None,    # Like chat when selectedToolIds empty  
+            "tool_servers": [],  # Like chat $toolServers when empty
+            "features": {
+                "image_generation": False,  # Like chat when disabled
+                "code_interpreter": False,
+                "web_search": False, 
+                "memory": False  # Like chat when $settings?.memory is false
+            },
+            "variables": {},  # Like chat when getPromptVariables returns empty
+            "model_item": None,  # Like chat when $models.find returns undefined
+            "session_id": f"bot-session-{int(time.time())}",
+            "chat_id": f"bot-chat-{int(time.time())}",
+            "id": f"bot-message-{int(time.time())}",
+            "background_tasks": {
+                "follow_up_generation": False  # Like chat when $settings?.autoFollowUps is false
             }
-            
-            update_url = f"{self.webui_url}/api/v1/channels/{channel_id}/messages/{message_id}/update"
-            async with session.post(update_url, headers=self.webui_headers, json=update_payload) as update_response:
-                return update_response.status == 200
+        }
+        
+        # Add stream options if streaming
+        if stream:
+            payload["stream_options"] = {"include_usage": True}
+        
+        # Remove None values like chat interface
+        final_payload = {}
+        for k, v in payload.items():
+            if v is not None:
+                final_payload[k] = v
+        
+        return final_payload
 
-    async def _stream_response_to_message(self, channel_id: str, message_id: str, response_stream, selected_model: dict = None) -> str:
-        """Stream AI response content to a specific message with real-time updates"""
-        content = ""
-        update_counter = 0
-        
-        async for line in response_stream:
-            line_str = line.decode('utf-8').strip()
-            if line_str.startswith('data: '):
-                data_str = line_str[6:]  # Remove 'data: ' prefix
-                if data_str == '[DONE]':
-                    break
-                try:
-                    data = json.loads(data_str)
-                    if "choices" in data and len(data["choices"]) > 0:
-                        delta = data["choices"][0].get("delta", {})
-                        if "content" in delta:
-                            content += delta["content"]
-                            update_counter += 1
-                            
-                            # Update every 2 tokens for fast streaming
-                            if update_counter % 2 == 0:
-                                await self.update_message_content(channel_id, message_id, content, selected_model)
-                                
-                except json.JSONDecodeError:
-                    continue
-        
-        # Final update with complete content
-        if content:
-            await self.update_message_content(channel_id, message_id, content, selected_model)
-        
-        return content
-
-    async def get_rag_response(self, message: str, files: List[dict], model_id: str = None, channel_id: str = None, selected_model: dict = None, thinking_message_id: str = None) -> str:
+    async def get_rag_response(self, message: str, files: List[dict], model_id: str = None, channel_id: str = None, selected_model: dict = None) -> str:
         """Get RAG-enhanced AI response using OpenWebUI's chat completions endpoint with files"""
         try:
             if self.debug:
                 print(f"🔍 DEBUG: get_rag_response called with {len(files)} files")
-                print(f"🔍 DEBUG: Files structure: {json.dumps(files, indent=2)}")
             
-            headers = self.webui_headers
-            url = f"{self.webui_url}/api/chat/completions"
-            
-            # Use EXACT same payload structure as main chat interface for RAG
-            payload = {
-                "stream": True,  # Enable streaming for better UX
-                "model": model_id,  # Use the selected model
-                "messages": [
-                    {"role": "system", "content": self.system_prompt},
-                    {"role": "user", "content": message}
-                ],
-                "files": files,  # Use files exactly as received from channel
-                "session_id": f"bot-session-{int(time.time())}",
-                "chat_id": f"bot-chat-{int(time.time())}",
-                "id": f"bot-message-{int(time.time())}"
-            }
+            # Format files for RAG processing
+            formatted_files = []
+            for file in files:
+                if self.debug:
+                    print(f"🔍 DEBUG: Processing file: {json.dumps(file, indent=2)}")
+                
+                # Handle different file types
+                if file.get("type") == "collection":
+                    # Knowledge base collection
+                    formatted_file = {
+                        "id": file.get("id"),
+                        "name": file.get("name", "Knowledge Base"),
+                        "type": "collection"
+                    }
+                    if file.get("legacy"):
+                        formatted_file["legacy"] = True
+                        formatted_file["collection_names"] = file.get("collection_names", [])
+                    formatted_files.append(formatted_file)
+                elif file.get("collection_name"):
+                    # Legacy collection
+                    formatted_file = {
+                        "id": file.get("collection_name"),
+                        "name": file.get("name", "Legacy Collection"),
+                        "legacy": True
+                    }
+                    formatted_files.append(formatted_file)
+                elif file.get("id"):
+                    # Individual file
+                    formatted_file = {
+                        "id": file.get("id"),
+                        "name": file.get("name", "File"),
+                        "type": "file"
+                    }
+                    if file.get("legacy"):
+                        formatted_file["legacy"] = True
+                    formatted_files.append(formatted_file)
+                else:
+                    # Unknown format, try to use as-is
+                    if self.debug:
+                        print(f"⚠️ Unknown file format, using as-is: {file}")
+                    formatted_files.append(file)
             
             if self.debug:
-                print(f"🔍 DEBUG: Making RAG request to {url}")
-                print(f"🔍 DEBUG: Payload: {json.dumps(payload, indent=2)}")
+                print(f"🔍 DEBUG: Formatted files: {json.dumps(formatted_files, indent=2)}")
             
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, headers=headers, json=payload) as response:
+            # Build payload using shared method
+            payload = self._build_chat_payload(message, model_id, formatted_files)
+            
+            if self.debug:
+                print("DEBUG: Sending RAG payload to backend:", repr(payload))
+            
+            # Handle streaming response
+            if payload.get("stream"):
+                # Use streaming - accumulate content
+                content = ""
+                async for chunk in self.client.stream_chat_completion(
+                    model_id, 
+                    payload["messages"], 
+                    payload.get("files")
+                ):
+                    content += chunk
+                    # Update message progressively
+                    if channel_id and self._last_thinking_message_id:
+                        await self.update_message_content(channel_id, self._last_thinking_message_id, content, selected_model)
+                
+                if self.debug:
+                    print("DEBUG: Final streaming content:", repr(content))
+                
+                return content
+            else:
+                # Non-streaming fallback
+                response_data = await self.client.chat_completions(payload)
+                
+                if self.debug:
+                    print(f"🔍 DEBUG: Response data: {json.dumps(response_data, indent=2)}")
+                
+                if "choices" in response_data and len(response_data["choices"]) > 0:
+                    content = response_data["choices"][0]["message"]["content"]
+                    if channel_id and self._last_thinking_message_id:
+                        await self.update_message_content(channel_id, self._last_thinking_message_id, content, selected_model)
+                    return content
+                elif response_data.get("status") and response_data.get("task_id"):
+                    # Task-based response handling
+                    task_id = response_data["task_id"]
                     if self.debug:
-                        print(f"🔍 DEBUG: RAG response status: {response.status}")
+                        print(f"🔍 DEBUG: Task-based response, task_id: {task_id}")
                     
-                    if response.status == 200:
-                        # Stream response to the thinking message
-                        if thinking_message_id:
-                            content = await self._stream_response_to_message(channel_id, thinking_message_id, response.content, selected_model)
-                        else:
-                            content = ""
-                        
-                        if self.debug:
-                            print(f"🔍 DEBUG: RAG response length: {len(content)}")
-                        return content if content else "I apologize, but I couldn't process the knowledge base files properly."
-                    else:
-                        error_text = await response.text()
-                        print(f"❌ RAG API Error {response.status}: {error_text}")
-                        return f"I encountered an error while processing the knowledge base files. Please try again."
+                    content = "I'm processing your request. Please check back in a moment for the complete response."
+                    
+                    if channel_id and self._last_thinking_message_id:
+                        await self.update_message_content(channel_id, self._last_thinking_message_id, content, selected_model)
+                    
+                    return content
+                else:
+                    print(f"❌ Unexpected response format: {response_data}")
+                    return "I encountered an unexpected response format. Please try again."
         except Exception as e:
             print(f"❌ Error in get_rag_response: {str(e)}")
-            if self.debug:
-                import traceback
-                traceback.print_exc()
-            return "I apologize, but I encountered an error while processing the knowledge base files. Please try again."
+            error_msg = "I apologize, but I encountered an error while processing your files. Please try again."
+            
+            # Update the thinking indicator with the error message
+            if channel_id and self._last_thinking_message_id:
+                await self.update_message_content(channel_id, self._last_thinking_message_id, error_msg, selected_model)
+            
+            return error_msg
 
-    async def get_ai_response(self, message: str, model_id: str, channel_id: str = None, selected_model: dict = None, thinking_message_id: str = None) -> str:
-        """Get AI response from Open WebUI using the selected model"""
+    async def get_ai_response(self, message: str, model_id: str, channel_id: str = None, selected_model: dict = None) -> str:
+        """Get AI response using OpenWebUI's chat completions endpoint"""
         try:
-            headers = self.webui_headers
-            url = f"{self.webui_url}/api/chat/completions"
+            # Build payload using shared method (no files for regular AI chat)
+            payload = self._build_chat_payload(message, model_id, None)
             
-            payload = {
-                "model": model_id,
-                "messages": [
-                    {"role": "system", "content": self.system_prompt},
-                    {"role": "user", "content": message}
-                ],
-                "stream": True
-            }
+            if self.debug:
+                print(f"🔍 DEBUG: Making AI request to {self.webui_url}/api/chat/completions")
+                print(f"🔍 DEBUG: Payload: {json.dumps(payload, indent=2)}")
             
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, headers=headers, json=payload) as response:
-                    if response.status == 200:
-                        # Stream response to the thinking message
-                        if thinking_message_id:
-                            content = await self._stream_response_to_message(channel_id, thinking_message_id, response.content, selected_model)
-                        else:
-                            content = ""
-                        
-                        return content if content else "I apologize, but I couldn't generate a proper response."
-                    else:
-                        error_text = await response.text()
-                        print(f"❌ API Error {response.status}: {error_text}")
-                        return f"I encountered an error while processing your request. Please try again."
+            # Handle streaming response
+            if payload.get("stream"):
+                # Use streaming - accumulate content
+                content = ""
+                async for chunk in self.client.stream_chat_completion(
+                    model_id, 
+                    payload["messages"], 
+                    payload.get("files")
+                ):
+                    content += chunk
+                    # Update message progressively
+                    if channel_id and self._last_thinking_message_id:
+                        await self.update_message_content(channel_id, self._last_thinking_message_id, content, selected_model)
+                
+                if self.debug:
+                    print("DEBUG: Final streaming content:", repr(content))
+                
+                return content
+            else:
+                # Non-streaming fallback
+                response_data = await self.client.chat_completions(payload)
+                
+                if self.debug:
+                    print(f"🔍 DEBUG: Response data: {json.dumps(response_data, indent=2)}")
+                
+                if "choices" in response_data and len(response_data["choices"]) > 0:
+                    content = response_data["choices"][0]["message"]["content"]
+                    if channel_id and self._last_thinking_message_id:
+                        await self.update_message_content(channel_id, self._last_thinking_message_id, content, selected_model)
+                    return content
+                elif response_data.get("status") and response_data.get("task_id"):
+                    # Task-based response handling
+                    task_id = response_data["task_id"]
+                    if self.debug:
+                        print(f"🔍 DEBUG: Task-based response, task_id: {task_id}")
+                    
+                    content = "I'm processing your request. Please check back in a moment for the complete response."
+                    
+                    if channel_id and self._last_thinking_message_id:
+                        await self.update_message_content(channel_id, self._last_thinking_message_id, content, selected_model)
+                    
+                    return content
+                else:
+                    print(f"❌ Unexpected response format: {response_data}")
+                    return "I encountered an unexpected response format. Please try again."
+                
         except Exception as e:
             print(f"❌ Error in get_ai_response: {str(e)}")
             return "I apologize, but I encountered an error while processing your request. Please try again."
@@ -263,17 +357,7 @@ class MultiProviderAIBot:
     
     def should_respond(self, content: str, message_data: dict = None) -> bool:
         """Check if bot should respond to a message"""
-        # Primary method: Check if user selected a model via @ symbol
-        if message_data and message_data.get("data", {}).get("atSelectedModel"):
-            return True
-        
-        # Fallback to trigger words (if any are configured)
-        if self.triggers:
-            content_lower = content.lower()
-            return any(trigger in content_lower for trigger in self.triggers)
-        
-        # If no triggers configured, don't respond to avoid spam
-        return False
+        return should_respond_to_message(message_data or {}, self.triggers)
     
     def has_bot_access(self, channel: dict) -> bool:
         """Check if bot access is enabled for this channel"""
@@ -306,6 +390,9 @@ class MultiProviderAIBot:
             # Skip if already processed
             if msg_id in self.seen_messages:
                 continue
+                
+            # Mark as seen
+            self.seen_messages.add(msg_id)
             
             # Skip bot's own messages (identify by metadata)
             if self._is_bot_message(message):
@@ -323,8 +410,6 @@ class MultiProviderAIBot:
             
             # Check if we should respond
             if self.should_respond(content, message):
-                # Mark as seen IMMEDIATELY to prevent duplicate processing
-                self.seen_messages.add(msg_id)
                 processed_content = content.strip()
                 
                 # Check if user selected a specific model via @ symbol
@@ -342,15 +427,33 @@ class MultiProviderAIBot:
                 print(f"🤖 {self.bot_name}{model_info} is thinking...")
                 
                 # Show thinking indicator immediately
-                thinking_message_id = await self.send_thinking_indicator(channel_id, selected_model)
+                self._last_thinking_message_id = await self.send_thinking_indicator(channel_id, selected_model)
+                if self.debug:
+                    print(f"🔍 DEBUG: Thinking message ID: {self._last_thinking_message_id}")
                 
                 # If files are detected, use RAG processing
                 if files and len(files) > 0:
                     print(f"📚 Processing {len(files)} knowledge base files with RAG")
-                    ai_response = await self.get_rag_response(processed_content, files, model_id, channel_id, selected_model, thinking_message_id)
+                    if self.debug:
+                        print(f"🔍 DEBUG: Files structure: {json.dumps(files, indent=2)}")
+                    
+                    # Try RAG first
+                    ai_response = await self.get_rag_response(processed_content, files, model_id, channel_id, selected_model)
+                    
+                    # If RAG fails or returns an error message, fall back to regular AI
+                    if ai_response and any(error_indicator in ai_response.lower() for error_indicator in 
+                                        ["error", "unexpected", "needs to be handled", "encountered"]):
+                        print(f"⚠️ RAG failed, falling back to regular AI response")
+                        # Update thinking indicator to show we're switching to regular AI
+                        if channel_id and self._last_thinking_message_id:
+                            await self.update_message_content(channel_id, self._last_thinking_message_id, 
+                                                            "Processing with regular AI (RAG unavailable)...", selected_model)
+                        
+                        # Try regular AI response
+                        ai_response = await self.get_ai_response(processed_content, model_id, channel_id, selected_model)
                 else:
                     # No files, use regular AI response with selected model
-                    ai_response = await self.get_ai_response(processed_content, model_id, channel_id, selected_model, thinking_message_id)
+                    ai_response = await self.get_ai_response(processed_content, model_id, channel_id, selected_model)
                 
                 # Response is already streamed in real-time, just log completion
                 display_name = f"{model_name}" if selected_model else "Open WebUI"
@@ -384,9 +487,7 @@ class MultiProviderAIBot:
         
         print(f"\n🎯 {self.bot_name} is ready! To interact with the AI:")
         print(f"   1. Type @ to select a model")
-        print(f"   2. Check the 'Send to [Model]' checkbox to enable AI response")
-        print(f"   3. Type your message and send")
-        print(f"   Note: Checkbox resets after each message for safety")
+        print(f"   2. Check the AI checkbox to enable AI responses")
         if self.triggers:
             print(f"   Alternative: Messages containing: {', '.join(self.triggers)}")
         print()
@@ -411,6 +512,7 @@ class MultiProviderAIBot:
                 print("🔄 Continuing in 5 seconds...")
                 await asyncio.sleep(5)
 
+
 def main():
     """Main entry point for standalone execution"""
     try:
@@ -422,6 +524,7 @@ def main():
         print(f"❌ Fatal error: {e}")
         import traceback
         traceback.print_exc()
+
 
 if __name__ == "__main__":
     main() 
