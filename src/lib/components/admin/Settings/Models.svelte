@@ -57,8 +57,8 @@
 			.filter((m) => searchValue === '' || m.name.toLowerCase().includes(searchValue.toLowerCase()))
 			.sort((a, b) => {
 				// // Check if either model is inactive and push them to the bottom
-				// if ((a.is_active ?? true) !== (b.is_active ?? true)) {
-				// 	return (b.is_active ?? true) - (a.is_active ?? true);
+				// if ((a.is_active ?? false) !== (b.is_active ?? false)) {
+				// 	return (b.is_active ?? false) - (a.is_active ?? false);
 				// }
 				// If both models' active states are the same, sort alphabetically
 				return a.name.localeCompare(b.name);
@@ -94,7 +94,7 @@
 					id: m.id,
 					name: m.name,
 
-					is_active: true
+					is_active: false
 				};
 			}
 		});
@@ -321,7 +321,7 @@
 						>
 							<div class=" self-center w-8">
 								<div
-									class=" rounded-full object-cover {(model?.is_active ?? true)
+									class=" rounded-full object-cover {(model?.is_active ?? false)
 										? ''
 										: 'opacity-50 dark:opacity-50'} "
 								>
@@ -333,7 +333,7 @@
 								</div>
 							</div>
 
-							<div class=" flex-1 self-center {(model?.is_active ?? true) ? '' : 'text-gray-500'}">
+							<div class=" flex-1 self-center {(model?.is_active ?? false) ? '' : 'text-gray-500'}">
 								<Tooltip
 									content={marked.parse(
 										!!model?.meta?.description
@@ -423,7 +423,7 @@
 
 								<div class="ml-1">
 									<Tooltip
-										content={(model?.is_active ?? true) ? $i18n.t('Enabled') : $i18n.t('Disabled')}
+										content={(model?.is_active ?? false) ? $i18n.t('Enabled') : $i18n.t('Disabled')}
 									>
 										<Switch
 											bind:state={model.is_active}

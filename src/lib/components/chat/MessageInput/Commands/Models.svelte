@@ -37,7 +37,9 @@
 		? fuse.search(command).map((e) => {
 				return e.item;
 			})
-		: $models.filter((model) => !model?.info?.meta?.hidden);
+		: $models
+			.filter((model) => !model?.info?.meta?.hidden)
+			.sort((a, b) => a.name.localeCompare(b.name));
 
 	$: if (command) {
 		selectedIdx = 0;

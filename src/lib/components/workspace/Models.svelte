@@ -54,15 +54,17 @@
 	let group_ids = [];
 
 	$: if (models) {
-		filteredModels = models.filter((m) => {
-			if (query === '') return true;
-			const lowerQuery = query.toLowerCase();
-			return (
-				(m.name || '').toLowerCase().includes(lowerQuery) ||
-				(m.user?.name || '').toLowerCase().includes(lowerQuery) || // Search by user name
-				(m.user?.email || '').toLowerCase().includes(lowerQuery) // Search by user email
-			);
-		});
+		filteredModels = models
+			.filter((m) => {
+				if (query === '') return true;
+				const lowerQuery = query.toLowerCase();
+				return (
+					(m.name || '').toLowerCase().includes(lowerQuery) ||
+					(m.user?.name || '').toLowerCase().includes(lowerQuery) || // Search by user name
+					(m.user?.email || '').toLowerCase().includes(lowerQuery) // Search by user email
+				);
+			})
+			.sort((a, b) => a.name.localeCompare(b.name));
 	}
 
 	let query = '';

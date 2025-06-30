@@ -95,7 +95,7 @@ class Model(Base):
     #      }
     #   }
 
-    is_active = Column(Boolean, default=True)
+    is_active = Column(Boolean, default=False)
 
     updated_at = Column(BigInteger)
     created_at = Column(BigInteger)
@@ -139,7 +139,7 @@ class ModelForm(BaseModel):
     meta: ModelMeta
     params: ModelParams
     access_control: Optional[dict] = None
-    is_active: bool = True
+    is_active: bool = False
 
 
 class ModelsTable:

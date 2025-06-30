@@ -794,6 +794,10 @@ async def generate_chat_completion(
             convert_logit_bias_input_to_json(payload["logit_bias"])
         )
 
+    # Enable OpenRouter Usage Accounting for cost tracking
+    if "openrouter.ai" in url:
+        payload["usage"] = {"include": True}
+
     headers = {
         "Content-Type": "application/json",
         **(

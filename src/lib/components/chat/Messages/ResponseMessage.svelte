@@ -585,6 +585,53 @@
 			});
 		}
 	});
+
+	const formatUsageInfo = (usage) => {
+		if (!usage) return '';
+		
+		let formatted = [];
+		
+		// Add cost information if available (OpenRouter)
+		if (usage.cost !== undefined) {
+			formatted.push(`💰 Cost: ${usage.cost} credits`);
+			if (usage.cost_details?.upstream_inference_cost) {
+				formatted.push(`   Upstream: ${usage.cost_details.upstream_inference_cost} credits`);
+			}
+		}
+		
+		// Add token information
+		if (usage.total_tokens) {
+			formatted.push(`🔢 Total Tokens: ${usage.total_tokens.toLocaleString()}`);
+		}
+		if (usage.prompt_tokens) {
+			formatted.push(`📝 Prompt: ${usage.prompt_tokens.toLocaleString()} tokens`);
+		}
+		if (usage.completion_tokens) {
+			formatted.push(`💬 Completion: ${usage.completion_tokens.toLocaleString()} tokens`);
+		}
+		
+		// Add reasoning tokens if available (o1 models)
+		if (usage.completion_tokens_details?.reasoning_tokens) {
+			formatted.push(`🧠 Reasoning: ${usage.completion_tokens_details.reasoning_tokens.toLocaleString()} tokens`);
+		}
+		
+		// Add cached tokens if available
+		if (usage.prompt_tokens_details?.cached_tokens) {
+			formatted.push(`💾 Cached: ${usage.prompt_tokens_details.cached_tokens.toLocaleString()} tokens`);
+		}
+		
+		return formatted.length > 0 ? formatted.join('\n') : 
+			// Fallback to raw JSON if no specific formatting matches
+			sanitizeResponseContent(
+				JSON.stringify(usage, null, 2)
+					.replace(/"([^(")"]+)":/g, '$1:')
+					.slice(1, -1)
+					.split('\n')
+					.map((line) => line.slice(2))
+					.map((line) => (line.endsWith(',') ? line.slice(0, -1) : line))
+					.join('\n')
+			);
+	};
 </script>
 
 <DeleteConfirmDialog
@@ -1177,17 +1224,7 @@
 
 								{#if message.usage}
 									<Tooltip
-										content={message.usage
-											? `<pre>${sanitizeResponseContent(
-													JSON.stringify(message.usage, null, 2)
-														.replace(/"([^(")"]+)":/g, '$1:')
-														.slice(1, -1)
-														.split('\n')
-														.map((line) => line.slice(2))
-														.map((line) => (line.endsWith(',') ? line.slice(0, -1) : line))
-														.join('\n')
-												)}</pre>`
-											: ''}
+										content={formatUsageInfo(message.usage)}
 										placement="bottom"
 									>
 										<button
@@ -1200,21 +1237,41 @@
 											}}
 											id="info-{message.id}"
 										>
-											<svg
-												aria-hidden="true"
-												xmlns="http://www.w3.org/2000/svg"
-												fill="none"
-												viewBox="0 0 24 24"
-												stroke-width="2.3"
-												stroke="currentColor"
-												class="w-4 h-4"
-											>
-												<path
-													stroke-linecap="round"
-													stroke-linejoin="round"
-													d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z"
-												/>
-											</svg>
+											{#if message.usage?.cost !== undefined}
+												<!-- Show dollar sign when cost information is available -->
+												<svg
+													aria-hidden="true"
+													xmlns="http://www.w3.org/2000/svg"
+													fill="none"
+													viewBox="0 0 24 24"
+													stroke-width="2.3"
+													stroke="currentColor"
+													class="w-4 h-4 text-green-600 dark:text-green-400"
+												>
+													<path
+														stroke-linecap="round"
+														stroke-linejoin="round"
+														d="M12 6v12m-3-2.818.879.659c1.171.879 3.07.879 4.242 0 1.172-.879 1.172-2.303 0-3.182C13.536 12.219 12.768 12 12 12c-.725 0-1.45-.22-2.003-.659-1.106-.879-1.106-2.303 0-3.182s2.897-.879 4.006 0l.415.33M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"
+													/>
+												</svg>
+											{:else}
+												<!-- Standard info icon -->
+												<svg
+													aria-hidden="true"
+													xmlns="http://www.w3.org/2000/svg"
+													fill="none"
+													viewBox="0 0 24 24"
+													stroke-width="2.3"
+													stroke="currentColor"
+													class="w-4 h-4"
+												>
+													<path
+														stroke-linecap="round"
+														stroke-linejoin="round"
+														d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z"
+													/>
+												</svg>
+											{/if}
 										</button>
 									</Tooltip>
 								{/if}
