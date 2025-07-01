@@ -43,6 +43,7 @@
 	} from '$lib/apis/chats';
 	import { createNewFolder, getFolders, updateFolderParentIdById } from '$lib/apis/folders';
 	import { WEBUI_BASE_URL } from '$lib/constants';
+	import { getModelProfileImageUrl } from '$lib/utils/modelLogos';
 
 	import ArchivedChatsModal from './ArchivedChatsModal.svelte';
 	import UserMenu from './Sidebar/UserMenu.svelte';
@@ -668,7 +669,11 @@
 									<div class="self-center shrink-0">
 										<img
 											crossorigin="anonymous"
-											src={model?.info?.meta?.profile_image_url ?? '/static/favicon.png'}
+											src={getModelProfileImageUrl(
+												model?.id,
+												model?.name,
+												model?.info?.meta?.profile_image_url
+											)}
 											class=" size-5 rounded-full -translate-x-[0.5px]"
 											alt="logo"
 										/>

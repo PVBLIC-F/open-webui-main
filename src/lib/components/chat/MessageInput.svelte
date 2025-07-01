@@ -47,6 +47,7 @@
 	import Tooltip from '../common/Tooltip.svelte';
 	import FileItem from '../common/FileItem.svelte';
 	import Image from '../common/Image.svelte';
+	import ProfileImage from './Messages/ProfileImage.svelte';
 
 	import XMark from '../icons/XMark.svelte';
 	import Headphone from '../icons/Headphone.svelte';
@@ -541,15 +542,15 @@
 						>
 							<div class="flex items-center justify-between w-full">
 								<div class="pl-[1px] flex items-center gap-2 text-sm dark:text-gray-500">
-									<img
-										crossorigin="anonymous"
-										alt="model profile"
-										class="size-3.5 max-w-[28px] object-cover rounded-full"
+									<ProfileImage
+										className="size-3.5 max-w-[28px]"
 										src={$models.find((model) => model.id === atSelectedModel.id)?.info?.meta
 											?.profile_image_url ??
 											($i18n.language === 'dg-DG'
 												? `/doge.png`
 												: `${WEBUI_BASE_URL}/static/favicon.png`)}
+										modelId={atSelectedModel.id}
+										modelName={atSelectedModel.name}
 									/>
 									<div class="translate-y-[0.5px]">
 										Talking to <span class=" font-medium">{atSelectedModel.name}</span>

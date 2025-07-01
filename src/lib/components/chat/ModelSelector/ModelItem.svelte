@@ -8,6 +8,7 @@
 
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import { copyToClipboard, sanitizeResponseContent } from '$lib/utils';
+	import { getModelProfileImageUrl } from '$lib/utils/modelLogos';
 	import ArrowUpTray from '$lib/components/icons/ArrowUpTray.svelte';
 	import Check from '$lib/components/icons/Check.svelte';
 	import ModelItemMenu from './ModelItemMenu.svelte';
@@ -73,7 +74,11 @@
 			<div class="flex items-center min-w-fit">
 				<Tooltip content={$user?.role === 'admin' ? (item?.value ?? '') : ''} placement="top-start">
 					<img
-						src={item.model?.info?.meta?.profile_image_url ?? '/static/favicon.png'}
+						src={getModelProfileImageUrl(
+							item.model?.id || item.value,
+							item.model?.name,
+							item.model?.info?.meta?.profile_image_url
+						)}
 						alt="Model"
 						class="rounded-full size-5 flex items-center"
 					/>

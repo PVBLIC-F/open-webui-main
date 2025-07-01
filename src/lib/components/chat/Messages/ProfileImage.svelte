@@ -3,6 +3,16 @@
 
 	export let className = 'size-8';
 	export let src = `${WEBUI_BASE_URL}/static/favicon.png`;
+	export let modelId: string | undefined = undefined;
+	export let modelName: string | undefined = undefined;
+
+	// Handle image load errors - fallback to default favicon
+	const handleImageError = (event) => {
+		const img = event.target;
+		if (img.src !== `${WEBUI_BASE_URL}/static/favicon.png`) {
+			img.src = `${WEBUI_BASE_URL}/static/favicon.png`;
+		}
+	};
 </script>
 
 <img
@@ -15,7 +25,8 @@
 			  src.startsWith('/')
 			? src
 			: `/user.png`}
-	class=" {className} object-cover rounded-full"
+	class="{className} object-cover rounded-full"
 	alt="profile"
 	draggable="false"
+	on:error={handleImageError}
 />

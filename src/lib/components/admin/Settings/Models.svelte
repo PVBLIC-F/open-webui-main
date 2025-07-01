@@ -35,6 +35,7 @@
 	import EyeSlash from '$lib/components/icons/EyeSlash.svelte';
 	import Eye from '$lib/components/icons/Eye.svelte';
 	import { copyToClipboard } from '$lib/utils';
+	import { getModelProfileImageUrl } from '$lib/utils/modelLogos';
 
 	let shiftKey = false;
 
@@ -86,15 +87,25 @@
 			if (workspaceModel) {
 				return {
 					...m,
-					...workspaceModel
+					...workspaceModel,
+					meta: {
+						...workspaceModel.meta,
+						profile_image_url: getModelProfileImageUrl(
+							m.id,
+							m.name,
+							workspaceModel.meta?.profile_image_url
+						)
+					}
 				};
 			} else {
 				return {
 					...m,
 					id: m.id,
 					name: m.name,
-
-					is_active: true
+					is_active: true,
+					meta: {
+						profile_image_url: getModelProfileImageUrl(m.id, m.name)
+					}
 				};
 			}
 		});
@@ -325,9 +336,13 @@
 										? ''
 										: 'opacity-50 dark:opacity-50'} "
 								>
-									<img
-										src={model?.meta?.profile_image_url ?? '/static/favicon.png'}
-										alt="modelfile profile"
+																	<img
+									src={getModelProfileImageUrl(
+										model?.id,
+										model?.name,
+										model?.meta?.profile_image_url
+									)}
+									alt="modelfile profile"
 										class=" rounded-full w-full h-auto object-cover"
 									/>
 								</div>

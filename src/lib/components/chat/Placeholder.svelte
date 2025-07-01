@@ -10,6 +10,7 @@
 	import { config, user, models as _models, temporaryChatEnabled } from '$lib/stores';
 	import { sanitizeResponseContent, extractCurlyBraceWords } from '$lib/utils';
 	import { WEBUI_BASE_URL } from '$lib/constants';
+	import { getModelProfileImageUrl } from '$lib/utils/modelLogos';
 
 	import Suggestions from './Suggestions.svelte';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
@@ -124,10 +125,12 @@
 								>
 									<img
 										crossorigin="anonymous"
-										src={model?.info?.meta?.profile_image_url ??
-											($i18n.language === 'dg-DG'
-												? `/doge.png`
-												: `${WEBUI_BASE_URL}/static/favicon.png`)}
+										src={getModelProfileImageUrl(
+											model?.id,
+											model?.name,
+											model?.info?.meta?.profile_image_url,
+											$i18n.language === 'dg-DG' ? `/doge.png` : `${WEBUI_BASE_URL}/static/favicon.png`
+										)}
 										class=" size-9 @sm:size-10 rounded-full border-[1px] border-gray-100 dark:border-none"
 										alt="logo"
 										draggable="false"
