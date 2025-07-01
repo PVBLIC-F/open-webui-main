@@ -676,31 +676,47 @@ const convertOpenAIMessages = (convo) => {
 		const message = mapping[message_id];
 		currentId = message_id;
 		try {
-			if (
-				messages.length == 0 &&
-				(message['message'] == null ||
-					(message['message']['content']['parts']?.[0] == '' &&
-						message['message']['content']['text'] == null))
-			) {
-				// Skip chat messages with no content
+			// Skip messages without content or system messages
+			if (!message['message'] || 
+				(message['message']['author']?.['role'] === 'system' && 
+				 message['message']['metadata']?.['is_visually_hidden_from_conversation'])) {
 				continue;
-			} else {
-				const new_chat = {
-					id: message_id,
-					parentId: lastId,
-					childrenIds: message['children'] || [],
-					role: message['message']?.['author']?.['role'] !== 'user' ? 'assistant' : 'user',
-					content:
-						message['message']?.['content']?.['parts']?.[0] ||
-						message['message']?.['content']?.['text'] ||
-						'',
-					model: 'gpt-3.5-turbo',
-					done: true,
-					context: null
-				};
-				messages.push(new_chat);
-				lastId = currentId;
 			}
+
+			// Extract content from different ChatGPT formats
+			let content = '';
+			const messageContent = message['message']['content'];
+			if (messageContent) {
+				if (messageContent['parts']?.[0]) {
+					content = messageContent['parts'][0];
+				} else if (messageContent['text']) {
+					content = messageContent['text'];
+				} else if (messageContent['thoughts'] && Array.isArray(messageContent['thoughts'])) {
+					// Handle o1 reasoning content
+					content = messageContent['thoughts'].map(t => t.content || '').join('\n\n');
+				} else if (messageContent['content']) {
+					content = messageContent['content'];
+				}
+			}
+
+			// Skip empty messages or meaningless recap messages
+			if (!content.trim() || 
+				(content.includes('Thought for') && content.includes('seconds') && content.length < 50)) {
+				continue;
+			}
+
+			const new_chat = {
+				id: message_id,
+				parentId: lastId,
+				childrenIds: message['children'] || [],
+				role: message['message']?.['author']?.['role'] === 'user' ? 'user' : 'assistant',
+				content: content,
+				model: message['message']?.['metadata']?.['model_slug'] || 'gpt-3.5-turbo',
+				done: true,
+				context: null
+			};
+			messages.push(new_chat);
+			lastId = currentId;
 		} catch (error) {
 			console.log('Error with', message, '\nError:', error);
 		}
@@ -712,7 +728,7 @@ const convertOpenAIMessages = (convo) => {
 	const chat = {
 		history: {
 			currentId: currentId,
-			messages: history // Need to convert this to not a list and instead a json object
+			messages: history
 		},
 		models: ['gpt-3.5-turbo'],
 		messages: messages,
@@ -746,7 +762,7 @@ const validateChat = (chat) => {
 
 	// Every message's content should be a string
 	for (const message of messages) {
-		if (typeof message.content !== 'string') {
+		if (typeof message.content !== 'string' || !message.content.trim()) {
 			return false;
 		}
 	}
