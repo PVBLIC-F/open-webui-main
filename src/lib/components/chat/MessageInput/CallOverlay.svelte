@@ -5,6 +5,7 @@
 	const dispatch = createEventDispatcher();
 
 	import { blobToFile } from '$lib/utils';
+	import { getModelProfileImageUrl } from '$lib/utils/modelLogos';
 	import { generateEmoji } from '$lib/apis';
 	import { synthesizeOpenAISpeech, transcribeAudio } from '$lib/apis/audio';
 
@@ -45,6 +46,15 @@
 
 	let videoInputDevices = [];
 	let selectedVideoInputDeviceId = null;
+
+	// Helper function to get profile image URL with auto-detection
+		const getProfileImageUrl = (model) => {
+		return getModelProfileImageUrl(
+			model?.id,
+			model?.name,
+			model?.info?.meta?.profile_image_url
+		);
+	};
 
 	const getVideoInputDevices = async () => {
 		const devices = await navigator.mediaDevices.enumerateDevices();
@@ -757,16 +767,14 @@
 							? ' size-[4.5rem]'
 							: rmsLevel * 100 > 2
 								? ' size-16'
-								: rmsLevel * 100 > 1
-									? 'size-14'
-									: 'size-12'}  transition-all rounded-full {(model?.info?.meta
-							?.profile_image_url ?? '/static/favicon.png') !== '/static/favicon.png'
-							? ' bg-cover bg-center bg-no-repeat'
-							: 'bg-black dark:bg-white'}  bg-black dark:bg-white"
-						style={(model?.info?.meta?.profile_image_url ?? '/static/favicon.png') !==
-						'/static/favicon.png'
-							? `background-image: url('${model?.info?.meta?.profile_image_url}');`
-							: ''}
+															: rmsLevel * 100 > 1
+								? 'size-14'
+								: 'size-12'}  transition-all rounded-full {getProfileImageUrl(model) !== '/static/favicon.png'
+						? ' bg-cover bg-center bg-no-repeat'
+						: 'bg-black dark:bg-white'}  bg-black dark:bg-white"
+					style={getProfileImageUrl(model) !== '/static/favicon.png'
+						? `background-image: url('${getProfileImageUrl(model)}');`
+						: ''}
 					/>
 				{/if}
 				<!-- navbar -->
@@ -841,13 +849,11 @@
 									? 'size-48'
 									: rmsLevel * 100 > 1
 										? 'size-44'
-										: 'size-40'}  transition-all rounded-full {(model?.info?.meta
-								?.profile_image_url ?? '/static/favicon.png') !== '/static/favicon.png'
+										: 'size-40'}  transition-all rounded-full {getProfileImageUrl(model) !== '/static/favicon.png'
 								? ' bg-cover bg-center bg-no-repeat'
 								: 'bg-black dark:bg-white'} "
-							style={(model?.info?.meta?.profile_image_url ?? '/static/favicon.png') !==
-							'/static/favicon.png'
-								? `background-image: url('${model?.info?.meta?.profile_image_url}');`
+							style={getProfileImageUrl(model) !== '/static/favicon.png'
+								? `background-image: url('${getProfileImageUrl(model)}');`
 								: ''}
 						/>
 					{/if}

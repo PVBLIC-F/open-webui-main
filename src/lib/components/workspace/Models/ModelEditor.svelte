@@ -16,6 +16,7 @@
 	import AccessControl from '../common/AccessControl.svelte';
 	import { stringify } from 'postcss';
 	import { toast } from 'svelte-sonner';
+	import { getModelProfileImageUrl, detectModelLogo } from '$lib/utils/modelLogos';
 
 	const i18n = getContext('i18n');
 
@@ -54,6 +55,11 @@
 				.replace(/[^a-zA-Z0-9-]/g, '')
 				.toLowerCase();
 		}
+	}
+
+	// Auto-detect logo when ID changes (for new models)
+	$: if (!edit && id && info.meta.profile_image_url === '/static/favicon.png') {
+		info.meta.profile_image_url = getModelProfileImageUrl(id, name);
 	}
 
 	let system = '';
@@ -425,7 +431,23 @@
 							></div>
 						</button>
 
-						<div class="flex w-full mt-1 justify-end">
+						<div class="flex w-full mt-1 justify-between">
+							<button
+								class="px-2 py-1 text-blue-500 hover:text-blue-600 rounded-lg text-xs"
+								on:click={() => {
+									const logoSlug = detectModelLogo(id || info.id, name || info.name);
+									if (logoSlug) {
+										info.meta.profile_image_url = `https://unpkg.com/@lobehub/icons-static-svg@latest/icons/${logoSlug}.svg`;
+										toast.success('Auto-detected logo applied!');
+									} else {
+										toast.error('No logo found for this model');
+									}
+								}}
+								type="button"
+								title="Automatically detect and set logo based on model ID"
+							>
+								Auto-detect Logo</button
+							>
 							<button
 								class="px-2 py-1 text-gray-500 rounded-lg text-xs"
 								on:click={() => {
