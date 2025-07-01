@@ -673,34 +673,30 @@ async def signout(request: Request, response: Response):
     if ENABLE_OAUTH_SIGNUP.value:
         oauth_id_token = request.cookies.get("oauth_id_token")
         if oauth_id_token:
-            try:
-                async with ClientSession() as session:
-                    async with session.get(OPENID_PROVIDER_URL.value) as resp:
-                        if resp.status == 200:
-                            openid_data = await resp.json()
-                            logout_url = openid_data.get("end_session_endpoint")
-                            if logout_url:
-                                response.delete_cookie("oauth_id_token")
-
-                                return JSONResponse(
-                                    status_code=200,
-                                    content={
-                                        "status": True,
-                                        "redirect_url": f"{logout_url}?id_token_hint={oauth_id_token}",
-                                    },
-                                    headers=response.headers,
-                                )
-                        else:
-                            raise HTTPException(
-                                status_code=resp.status,
-                                detail="Failed to fetch OpenID configuration",
-                            )
-            except Exception as e:
-                log.error(f"OpenID signout error: {str(e)}")
-                raise HTTPException(
-                    status_code=500,
-                    detail="Failed to sign out from the OpenID provider.",
-                )
+            response.delete_cookie("oauth_id_token")
+            
+            # Only attempt OpenID Connect logout if OPENID_PROVIDER_URL is configured
+            if OPENID_PROVIDER_URL.value:
+                try:
+                    async with ClientSession() as session:
+                        async with session.get(OPENID_PROVIDER_URL.value) as resp:
+                            if resp.status == 200:
+                                openid_data = await resp.json()
+                                logout_url = openid_data.get("end_session_endpoint")
+                                if logout_url:
+                                    return JSONResponse(
+                                        status_code=200,
+                                        content={
+                                            "status": True,
+                                            "redirect_url": f"{logout_url}?id_token_hint={oauth_id_token}",
+                                        },
+                                        headers=response.headers,
+                                    )
+                            else:
+                                log.warning(f"Failed to fetch OpenID configuration: HTTP {resp.status}")
+                except Exception as e:
+                    log.warning(f"OpenID signout error: {str(e)} - continuing with local logout")
+                    # Don't raise exception, just continue with local logout
 
     if WEBUI_AUTH_SIGNOUT_REDIRECT_URL:
         return JSONResponse(
