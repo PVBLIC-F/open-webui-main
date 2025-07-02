@@ -57,8 +57,23 @@
 	const getChatAsText = async (chat) => {
 		const history = chat.chat.history;
 		const messages = createMessagesList(history, history.currentId);
-		const chatText = messages.reduce((a, message, i, arr) => {
-			return `${a}### ${message.role.toUpperCase()}\n${message.content}\n\n`;
+		
+		// Format messages as clean text without markdown
+		const chatText = messages.reduce((text, message, i) => {
+			const role = message.role === 'user' ? 'You' : 'Assistant';
+			const content = message.content || '';
+			
+			// Clean up content: remove markdown formatting
+			const cleanContent = content
+				.replace(/#{1,6}\s/g, '') // Remove markdown headers
+				.replace(/\*\*(.*?)\*\*/g, '$1') // Remove bold
+				.replace(/\*(.*?)\*/g, '$1') // Remove italic
+				.replace(/`(.*?)`/g, '$1') // Remove inline code
+				.replace(/```[\s\S]*?```/g, '[Code Block]') // Replace code blocks
+				.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // Remove links, keep text
+				.trim();
+			
+			return `${text}${role}:\n${cleanContent}\n\n`;
 		}, '');
 
 		return chatText.trim();
