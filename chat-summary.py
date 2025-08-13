@@ -1118,14 +1118,15 @@ class Filter:
                             f"🔗 **Full Document:** {source_url}"
                         ]
                         
-                        # Add streaming links using actual Ragie URLs via proxy for authentication
-                        # Note: We pass the actual Ragie streaming URLs to our proxy for authentication
+                        # Add streaming links using proxy for authentication and SSL compatibility
+                        # Route all Ragie URLs through our proxy to handle SSL/TLS properly
                         if links.get('self_audio_stream'):
                             # Get the actual streaming URL from Ragie and proxy it
                             ragie_audio_url = links['self_audio_stream'].get('href')
                             if ragie_audio_url:
-                                # Use the direct Ragie external URL
-                                proxy_audio_url = ragie_audio_url
+                                # Route through our proxy to handle SSL/TLS compatibility
+                                from urllib.parse import quote
+                                proxy_audio_url = f"/api/proxy/ragie/stream?url={quote(ragie_audio_url)}"
                                 if start_time is not None and end_time is not None:
                                     duration = end_time - start_time
                                     attribution_parts.append(f"🎵 **▶️ Play Matching Audio Segment:** {proxy_audio_url} (⏱️ {start_time:.1f}s - {end_time:.1f}s, {duration:.1f}s duration)")
@@ -1136,27 +1137,27 @@ class Filter:
                             # Get the actual streaming URL from Ragie and proxy it
                             ragie_video_url = links['self_video_stream'].get('href')
                             if ragie_video_url:
-                                # Use the direct Ragie external URL
-                                proxy_video_url = ragie_video_url
+                                # Route through our proxy to handle SSL/TLS compatibility
+                                proxy_video_url = f"/api/proxy/ragie/stream?url={quote(ragie_video_url)}"
                                 if start_time is not None and end_time is not None:
                                     duration = end_time - start_time
                                     attribution_parts.append(f"🎬 **▶️ Play Matching Video Segment:** {proxy_video_url} (⏱️ {start_time:.1f}s - {end_time:.1f}s, {duration:.1f}s duration)")
                                 else:
                                     attribution_parts.append(f"🎬 **▶️ Play Matching Video Segment:** {proxy_video_url}")
                         
-                        # Add full document media links using actual Ragie URLs via proxy
+                        # Add full document media links using proxy for SSL compatibility
                         if links.get('document_audio_stream'):
                             ragie_full_audio_url = links['document_audio_stream'].get('href')
                             if ragie_full_audio_url:
-                                # Use the direct Ragie external URL
-                                proxy_full_audio_url = ragie_full_audio_url
+                                # Route through our proxy to handle SSL/TLS compatibility
+                                proxy_full_audio_url = f"/api/proxy/ragie/stream?url={quote(ragie_full_audio_url)}"
                                 attribution_parts.append(f"🎧 **Full Audio Document:** {proxy_full_audio_url}")
                         
                         if links.get('document_video_stream'):
                             ragie_full_video_url = links['document_video_stream'].get('href')
                             if ragie_full_video_url:
-                                # Use the direct Ragie external URL
-                                proxy_full_video_url = ragie_full_video_url
+                                # Route through our proxy to handle SSL/TLS compatibility
+                                proxy_full_video_url = f"/api/proxy/ragie/stream?url={quote(ragie_full_video_url)}"
                                 attribution_parts.append(f"📺 **Full Video Document:** {proxy_full_video_url}")
                         
                         attributed_text = f"{text}\n\n" + "\n".join(attribution_parts) + "\n[MUST CITE: Include this exact source, document link, and ALL streaming/media links in your response so users can access the content]"

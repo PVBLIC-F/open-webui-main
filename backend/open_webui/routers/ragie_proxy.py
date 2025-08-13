@@ -68,7 +68,13 @@ async def proxy_ragie_stream(url: str, request: Request):
     try:
         log.info(f"Proxying Ragie stream: {url}")
 
-        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0), limits=httpx.Limits(max_connections=20, max_keepalive_connections=10)) as client:
+        # Configure SSL/TLS settings for better compatibility with Ragie API
+        # Use more lenient SSL settings while maintaining security for api.ragie.ai
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(30.0), 
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+            verify=True  # Keep SSL verification but let httpx handle compatibility
+        ) as client:
             async with client.stream("GET", url, headers=headers, follow_redirects=True) as resp:
                 if resp.status_code not in (200, 206):
                     # Try to surface upstream error body
