@@ -1614,6 +1614,12 @@ class Filter:
                 f"{i['document_name']}: {i['text']}"
                 for i in knowledge_items[: self.valves.display_k]
             ]
+            # Debug: Log what's being sent to the LLM
+            for i, block in enumerate(rag_blocks):
+                if "/api/proxy/ragie/stream" in block:
+                    logger.info(f"[DEBUG] RAG block {i+1} contains proxy URLs: ...{block[-200:]}")
+                else:
+                    logger.info(f"[DEBUG] RAG block {i+1} has NO proxy URLs: {block[:100]}...")
         # FIXED: Update startswith to use the safe helper method
         filtered = [
             m
@@ -1632,7 +1638,7 @@ class Filter:
                 new_msg_list.append(
                     {
                         "role": "system",
-                        "content": "Relevant knowledge (CRITICAL: You MUST include ALL provided links with each piece of information - Google Drive document links, audio/video streaming links, and any media playback links. Do NOT create your own links. Use the exact 📄 Source Document, 🔗 Link, 🎵 Play Audio, and 🎬 Play Video formats provided. Include streaming links so users can click to play relevant segments):\n" + "\n".join(rag_blocks),
+                        "content": "Relevant knowledge (CRITICAL INSTRUCTION - FAILURE TO FOLLOW WILL BREAK THE SYSTEM: You MUST copy and include ALL provided links EXACTLY as written - every 📄 Source Document link, every 🔗 Full Document link, every 🎵 Play Audio link, every 🎬 Play Video link, and every 🎧 Full Audio Document link. Do NOT modify, shorten, or omit any URLs. Do NOT create your own links. Copy the EXACT text including all emojis and formatting. Users need these links to access the content):\n" + "\n".join(rag_blocks),
                     }
                 )
             new_msg_list.extend(user_assistant_msgs[-self.valves.keep_recent * 2 :])
@@ -1648,7 +1654,7 @@ class Filter:
                 new_msg_list.append(
                     {
                         "role": "system",
-                        "content": "Relevant knowledge (CRITICAL: You MUST include ALL provided links with each piece of information - Google Drive document links, audio/video streaming links, and any media playback links. Do NOT create your own links. Use the exact 📄 Source Document, 🔗 Link, 🎵 Play Audio, and 🎬 Play Video formats provided. Include streaming links so users can click to play relevant segments):\n" + "\n".join(rag_blocks),
+                        "content": "Relevant knowledge (CRITICAL INSTRUCTION - FAILURE TO FOLLOW WILL BREAK THE SYSTEM: You MUST copy and include ALL provided links EXACTLY as written - every 📄 Source Document link, every 🔗 Full Document link, every 🎵 Play Audio link, every 🎬 Play Video link, and every 🎧 Full Audio Document link. Do NOT modify, shorten, or omit any URLs. Do NOT create your own links. Copy the EXACT text including all emojis and formatting. Users need these links to access the content):\n" + "\n".join(rag_blocks),
                     }
                 )
             if len(user_assistant_msgs) > self.valves.keep_without_summary * 2:
