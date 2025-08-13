@@ -1018,7 +1018,7 @@ class Filter:
         vec_str = json.dumps(rounded_vec)
         return hashlib.md5(vec_str.encode()).hexdigest()[:12]
 
-    async def _retrieve_knowledge(self, vec: list) -> list:
+    async def _retrieve_knowledge(self, vec: list, __event_emitter__=None) -> list:
         """Retrieve knowledge items from Ragie using direct API call."""
         logger.info("[DEBUG] === STARTING RAGIE KNOWLEDGE RETRIEVAL ===")
         if not self.valves.ragie_api_key:
@@ -1132,6 +1132,34 @@ class Filter:
                                 base_url = self.valves.base_url.rstrip('/') if self.valves.base_url else "https://chat.pvblic.org"
                                 proxy_audio_url = f"{base_url}/api/proxy/ragie/stream?url={urllib.parse.quote(ragie_audio_url)}"
                                 logger.info(f"Generated proxy audio URL: {proxy_audio_url} from original: {ragie_audio_url}")
+                                
+                                # Emit citation event for guaranteed display of audio streaming link
+                                if __event_emitter__:
+                                    citation_name = f"🎵 {document_name}"
+                                    if start_time is not None and end_time is not None:
+                                        duration = end_time - start_time
+                                        citation_name += f" ({start_time:.1f}s-{end_time:.1f}s, {duration:.1f}s)"
+                                    
+                                    await __event_emitter__({
+                                        "type": "citation",
+                                        "data": {
+                                            "document": [text],
+                                            "metadata": [
+                                                {
+                                                    "date_accessed": datetime.now().isoformat(),
+                                                    "source": document_name,
+                                                    "start_time": start_time,
+                                                    "end_time": end_time,
+                                                    "media_type": "audio"
+                                                }
+                                            ],
+                                            "source": {
+                                                "name": citation_name,
+                                                "url": proxy_audio_url
+                                            },
+                                        },
+                                    })
+                                
                                 if start_time is not None and end_time is not None:
                                     duration = end_time - start_time
                                     attribution_parts.append(f"🎵 **▶️ Play Matching Audio Segment:** {proxy_audio_url} (⏱️ {start_time:.1f}s - {end_time:.1f}s, {duration:.1f}s duration)")
@@ -1145,6 +1173,34 @@ class Filter:
                                 # Route through our proxy to handle SSL/TLS compatibility
                                 base_url = self.valves.base_url.rstrip('/') if self.valves.base_url else ""
                                 proxy_video_url = f"{base_url}/api/proxy/ragie/stream?url={urllib.parse.quote(ragie_video_url)}"
+                                
+                                # Emit citation event for guaranteed display of video streaming link
+                                if __event_emitter__:
+                                    citation_name = f"🎬 {document_name}"
+                                    if start_time is not None and end_time is not None:
+                                        duration = end_time - start_time
+                                        citation_name += f" ({start_time:.1f}s-{end_time:.1f}s, {duration:.1f}s)"
+                                    
+                                    await __event_emitter__({
+                                        "type": "citation",
+                                        "data": {
+                                            "document": [text],
+                                            "metadata": [
+                                                {
+                                                    "date_accessed": datetime.now().isoformat(),
+                                                    "source": document_name,
+                                                    "start_time": start_time,
+                                                    "end_time": end_time,
+                                                    "media_type": "video"
+                                                }
+                                            ],
+                                            "source": {
+                                                "name": citation_name,
+                                                "url": proxy_video_url
+                                            },
+                                        },
+                                    })
+                                
                                 if start_time is not None and end_time is not None:
                                     duration = end_time - start_time
                                     attribution_parts.append(f"🎬 **▶️ Play Matching Video Segment:** {proxy_video_url} (⏱️ {start_time:.1f}s - {end_time:.1f}s, {duration:.1f}s duration)")
@@ -1170,6 +1226,26 @@ class Filter:
                         
                         # Add Google Drive link at the end (less prominent)
                         attribution_parts.append(f"🔗 **Full Document:** {source_url}")
+                        
+                        # Emit citation event for the source document (Google Drive link)
+                        if __event_emitter__:
+                            await __event_emitter__({
+                                "type": "citation",
+                                "data": {
+                                    "document": [text],
+                                    "metadata": [
+                                        {
+                                            "date_accessed": datetime.now().isoformat(),
+                                            "source": document_name,
+                                            "media_type": "document"
+                                        }
+                                    ],
+                                    "source": {
+                                        "name": f"📄 {document_name}",
+                                        "url": source_url
+                                    },
+                                },
+                            })
                         
                         attributed_text = f"{text}\n\n" + "\n".join(attribution_parts) + "\n[CRITICAL: You MUST include the 🎵 Play Audio and 🎬 Play Video streaming links in your response - these are the primary links users need to access the media content. Do NOT use Google Drive links for media access.]"
                         # Enhanced logging for audio/video content
@@ -1197,7 +1273,7 @@ class Filter:
                         attributed_text = text
                         logger.info(f"[DEBUG] No source attribution added - missing document name and URL")
                     
-                logger.info(
+                    logger.info(
                         f"[RAGIE KNOWLEDGE] document={document_name}, "
                         f"score={score:.4f}, chunk_id={chunk_id}, source_url={source_url[:50]}..." if source_url else f"score={score:.4f}, chunk_id={chunk_id}"
                     )
@@ -1244,10 +1320,10 @@ class Filter:
             
             # Update metrics (for compatibility)
             self.knowledge_cache_hits += 1  # Since Ragie handles its own caching
-        self._log_retrieval_metrics()
+            self._log_retrieval_metrics()
             
             logger.info("[DEBUG] === COMPLETED RAGIE KNOWLEDGE RETRIEVAL ===")
-        return items
+            return items
             
         except Exception as e:
             logger.error(f"Ragie knowledge query failed: {e}")
@@ -1500,7 +1576,7 @@ class Filter:
             logger.info("[DEBUG] === FAILED PINECONE CHAT HISTORY RETRIEVAL ===")
             return []
 
-    async def _retrieve(self, vec: list, chat_id: str, user_id: str) -> list:
+    async def _retrieve(self, vec: list, chat_id: str, user_id: str, __event_emitter__=None) -> list:
         """Retrieve function with separate strategies for knowledge vs chat content."""
         search_start = time.time()
         logger.info(
@@ -1521,7 +1597,7 @@ class Filter:
             for query_info in queries:
                 query_type = query_info["type"]
                 if query_type == "knowledge":
-                    tasks.append(self._retrieve_knowledge(vec))
+                    tasks.append(self._retrieve_knowledge(vec, __event_emitter__))
                 elif query_type == "chat":
                     tasks.append(self._retrieve_chat_history(vec, chat_id, user_id))
 
@@ -1564,7 +1640,7 @@ class Filter:
         )
 
     async def inlet(
-        self, body: Dict[str, Any], *, __user__: Dict[str, Any] = None, **_
+        self, body: Dict[str, Any], *, __user__: Dict[str, Any] = None, __event_emitter__=None, **_
     ) -> Dict[str, Any]:
         __user__ = __user__ or {}
         messages = body.get("messages", []) or []
@@ -1590,7 +1666,7 @@ class Filter:
         self.current_query = cleaned_text
         logger.info(f"[DEBUG] User query for retrieval: {cleaned_text[:100]}...")
         vec = await self._embed([cleaned_text])
-        items = await self._retrieve(vec, chat_id, user_id)
+        items = await self._retrieve(vec, chat_id, user_id, __event_emitter__)
         chat_summaries = [i for i in items if i["type"] == "chat"]
         knowledge_items = [i for i in items if i["type"] == "knowledge"]
         logger.info(
