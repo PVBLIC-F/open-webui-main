@@ -21,9 +21,6 @@ router = APIRouter()
 log = logging.getLogger(__name__)
 log.setLevel(SRC_LOG_LEVELS.get("RAGIE_PROXY", logging.INFO))
 
-# Get Ragie API key from environment
-RAGIE_API_KEY = os.getenv("RAGIE_API_KEY", "")
-
 @router.get("/api/proxy/ragie/stream")
 async def proxy_ragie_stream(url: str, request: Request):
     """
@@ -38,7 +35,11 @@ async def proxy_ragie_stream(url: str, request: Request):
     Returns:
         StreamingResponse: The media stream from Ragie
     """
+    # Get Ragie API key from environment at runtime
+    RAGIE_API_KEY = os.getenv("RAGIE_API_KEY", "")
+    
     if not RAGIE_API_KEY:
+        log.error("RAGIE_API_KEY not found in environment")
         raise HTTPException(status_code=500, detail="Ragie API key not configured")
     
     # Validate that it's a Ragie URL for security
