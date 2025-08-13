@@ -9,11 +9,12 @@ import os
 import httpx
 from urllib.parse import urlparse, parse_qs
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Depends
 from fastapi.responses import StreamingResponse
 import logging
 
 from open_webui.env import SRC_LOG_LEVELS
+from open_webui.utils.auth import get_verified_user
 
 router = APIRouter()
 
@@ -22,7 +23,7 @@ log = logging.getLogger(__name__)
 log.setLevel(SRC_LOG_LEVELS.get("RAGIE_PROXY", logging.INFO))
 
 @router.get("/api/proxy/ragie/stream")
-async def proxy_ragie_stream(url: str, request: Request):
+async def proxy_ragie_stream(url: str, request: Request, user=Depends(get_verified_user)):
     """
     Proxy any Ragie streaming URL with authentication.
     
@@ -35,6 +36,9 @@ async def proxy_ragie_stream(url: str, request: Request):
     Returns:
         StreamingResponse: The media stream from Ragie
     """
+    # Log the authenticated user
+    log.info(f"Ragie proxy request from user: {user.email if user else 'unknown'}")
+    
     # Get Ragie API key from environment at runtime
     RAGIE_API_KEY = os.getenv("RAGIE_API_KEY", "")
     
