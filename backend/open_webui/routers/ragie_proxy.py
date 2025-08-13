@@ -100,7 +100,14 @@ async def proxy_ragie_stream(url: str, request: Request, user=Depends(get_verifi
                     # Try to surface upstream error body
                     text = await resp.aread()
                     log.error(f"Ragie stream failed: {resp.status_code} - {text[:200]!r}")
-                    raise HTTPException(status_code=resp.status_code, detail="Failed to stream from Ragie")
+                    
+                    if resp.status_code == 404:
+                        raise HTTPException(
+                            status_code=404, 
+                            detail="Media content not found. This audio/video segment may have been re-indexed or removed from the knowledge base. Please try searching for updated content."
+                        )
+                    else:
+                        raise HTTPException(status_code=resp.status_code, detail="Failed to stream from Ragie")
 
                 upstream_content_type = resp.headers.get("content-type", accept_type)
 
