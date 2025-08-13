@@ -564,6 +564,11 @@ class Filter:
         ragie_recency_bias: bool = Field(
             default_factory=lambda: os.getenv("RAGIE_RECENCY_BIAS", "true").lower() == "true"
         )
+        
+        # Base URL for proxy endpoints (for absolute URLs)
+        base_url: str = Field(
+            default_factory=lambda: os.getenv("WEBUI_BASE_URL", "")
+        )
 
     def __init__(self):
         self.valves = self.Valves()
@@ -1124,7 +1129,8 @@ class Filter:
                             ragie_audio_url = links['self_audio_stream'].get('href')
                             if ragie_audio_url:
                                 # Route through our proxy to handle SSL/TLS compatibility
-                                proxy_audio_url = f"/api/proxy/ragie/stream?url={urllib.parse.quote(ragie_audio_url)}"
+                                base_url = self.valves.base_url.rstrip('/') if self.valves.base_url else ""
+                                proxy_audio_url = f"{base_url}/api/proxy/ragie/stream?url={urllib.parse.quote(ragie_audio_url)}"
                                 logger.info(f"Generated proxy audio URL: {proxy_audio_url} from original: {ragie_audio_url}")
                                 if start_time is not None and end_time is not None:
                                     duration = end_time - start_time
@@ -1137,7 +1143,8 @@ class Filter:
                             ragie_video_url = links['self_video_stream'].get('href')
                             if ragie_video_url:
                                 # Route through our proxy to handle SSL/TLS compatibility
-                                proxy_video_url = f"/api/proxy/ragie/stream?url={urllib.parse.quote(ragie_video_url)}"
+                                base_url = self.valves.base_url.rstrip('/') if self.valves.base_url else ""
+                                proxy_video_url = f"{base_url}/api/proxy/ragie/stream?url={urllib.parse.quote(ragie_video_url)}"
                                 if start_time is not None and end_time is not None:
                                     duration = end_time - start_time
                                     attribution_parts.append(f"🎬 **▶️ Play Matching Video Segment:** {proxy_video_url} (⏱️ {start_time:.1f}s - {end_time:.1f}s, {duration:.1f}s duration)")
@@ -1149,14 +1156,16 @@ class Filter:
                             ragie_full_audio_url = links['document_audio_stream'].get('href')
                             if ragie_full_audio_url:
                                 # Route through our proxy to handle SSL/TLS compatibility
-                                proxy_full_audio_url = f"/api/proxy/ragie/stream?url={urllib.parse.quote(ragie_full_audio_url)}"
+                                base_url = self.valves.base_url.rstrip('/') if self.valves.base_url else ""
+                                proxy_full_audio_url = f"{base_url}/api/proxy/ragie/stream?url={urllib.parse.quote(ragie_full_audio_url)}"
                                 attribution_parts.append(f"🎧 **Full Audio Document:** {proxy_full_audio_url}")
                         
                         if links.get('document_video_stream'):
                             ragie_full_video_url = links['document_video_stream'].get('href')
                             if ragie_full_video_url:
                                 # Route through our proxy to handle SSL/TLS compatibility
-                                proxy_full_video_url = f"/api/proxy/ragie/stream?url={urllib.parse.quote(ragie_full_video_url)}"
+                                base_url = self.valves.base_url.rstrip('/') if self.valves.base_url else ""
+                                proxy_full_video_url = f"{base_url}/api/proxy/ragie/stream?url={urllib.parse.quote(ragie_full_video_url)}"
                                 attribution_parts.append(f"📺 **Full Video Document:** {proxy_full_video_url}")
                         
                         # Add Google Drive link at the end (less prominent)
