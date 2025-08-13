@@ -7,7 +7,9 @@ It handles authentication with the Ragie API and streams content back to clients
 
 import os
 import httpx
-from fastapi import APIRouter, HTTPException
+from urllib.parse import urlparse, parse_qs
+
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 import logging
 
@@ -23,7 +25,7 @@ log.setLevel(SRC_LOG_LEVELS.get("RAGIE_PROXY", logging.INFO))
 RAGIE_API_KEY = os.getenv("RAGIE_API_KEY", "")
 
 @router.get("/api/proxy/ragie/stream")
-async def proxy_ragie_stream(url: str):
+async def proxy_ragie_stream(url: str, request: Request):
     """
     Proxy any Ragie streaming URL with authentication.
     
@@ -40,47 +42,60 @@ async def proxy_ragie_stream(url: str):
         raise HTTPException(status_code=500, detail="Ragie API key not configured")
     
     # Validate that it's a Ragie URL for security
-    if not url.startswith("https://api.ragie.ai/"):
-        raise HTTPException(status_code=400, detail="Invalid URL: Only Ragie URLs are allowed")
-    
-    # Determine content type from URL parameters
-    if "media_type=audio" in url or "audio" in url:
-        accept_type = "audio/mpeg"
-        media_type = "audio/mpeg"
-        file_extension = "mp3"
-    elif "media_type=video" in url or "video" in url:
-        accept_type = "video/mp4"
-        media_type = "video/mp4"
-        file_extension = "mp4"
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or parsed.netloc != "api.ragie.ai":
+        raise HTTPException(status_code=400, detail="Invalid URL: Only Ragie API URLs are allowed")
+
+    # Determine desired media type from query parameters, fall back conservatively
+    qs = parse_qs(parsed.query)
+    requested_media_type = (qs.get("media_type", [""])[0] or "").strip()
+    if requested_media_type.startswith("audio/"):
+        accept_type = requested_media_type
+    elif requested_media_type.startswith("video/"):
+        accept_type = requested_media_type
     else:
-        # Default to audio if content type is unclear
-        accept_type = "audio/mpeg"
-        media_type = "audio/mpeg"
-        file_extension = "mp3"
+        # Let the upstream decide if unspecified or JSON/text; default to octet-stream
+        accept_type = "*/*"
     
-    headers = {
-        "Authorization": f"Bearer {RAGIE_API_KEY}",
-        "Accept": accept_type
-    }
+    # Build upstream headers
+    headers = {"Authorization": f"Bearer {RAGIE_API_KEY}", "Accept": accept_type}
+    # Forward range requests for proper media seeking
+    range_header = request.headers.get("range")
+    if range_header:
+        headers["Range"] = range_header
     
     try:
-        log.info(f"Proxying Ragie stream: {url[:100]}...")
-        
-        async with httpx.AsyncClient() as client:
-            response = await client.get(url, headers=headers)
-            
-            if response.status_code != 200:
-                log.error(f"Ragie stream failed: {response.status_code} - {response.text}")
-                raise HTTPException(status_code=response.status_code, detail="Failed to stream from Ragie")
-            
-            return StreamingResponse(
-                iter([response.content]),
-                media_type=media_type,
-                headers={
-                    "Content-Disposition": f"inline; filename=ragie_stream.{file_extension}",
-                    "Cache-Control": "public, max-age=3600"
-                }
-            )
+        log.info(f"Proxying Ragie stream: {url}")
+
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0), limits=httpx.Limits(max_connections=20, max_keepalive_connections=10)) as client:
+            async with client.stream("GET", url, headers=headers, follow_redirects=True) as resp:
+                if resp.status_code not in (200, 206):
+                    # Try to surface upstream error body
+                    text = await resp.aread()
+                    log.error(f"Ragie stream failed: {resp.status_code} - {text[:200]!r}")
+                    raise HTTPException(status_code=resp.status_code, detail="Failed to stream from Ragie")
+
+                upstream_content_type = resp.headers.get("content-type", accept_type)
+
+                # Select headers to forward to the client
+                response_headers = {}
+                for header_name in ("content-length", "content-range", "accept-ranges", "cache-control", "content-disposition"):
+                    if header_name in resp.headers:
+                        response_headers[header_name.title()] = resp.headers[header_name]
+                # Ensure inline disposition to allow in-browser playback when Ragie doesn't set it
+                response_headers.setdefault("Content-Disposition", "inline")
+
+                async def byte_iterator():
+                    async for chunk in resp.aiter_bytes(chunk_size=64 * 1024):
+                        if chunk:
+                            yield chunk
+
+                return StreamingResponse(
+                    byte_iterator(),
+                    status_code=resp.status_code,
+                    media_type=upstream_content_type,
+                    headers=response_headers,
+                )
             
     except httpx.RequestError as e:
         log.error(f"Network error proxying Ragie stream: {e}")
