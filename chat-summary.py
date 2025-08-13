@@ -567,7 +567,7 @@ class Filter:
         
         # Base URL for proxy endpoints (for absolute URLs)
         base_url: str = Field(
-            default_factory=lambda: os.getenv("WEBUI_BASE_URL", "")
+            default_factory=lambda: os.getenv("WEBUI_URL", "")
         )
 
     def __init__(self):
@@ -1129,7 +1129,7 @@ class Filter:
                             ragie_audio_url = links['self_audio_stream'].get('href')
                             if ragie_audio_url:
                                 # Route through our proxy to handle SSL/TLS compatibility
-                                base_url = self.valves.base_url.rstrip('/') if self.valves.base_url else ""
+                                base_url = self.valves.base_url.rstrip('/') if self.valves.base_url else "https://chat.pvblic.org"
                                 proxy_audio_url = f"{base_url}/api/proxy/ragie/stream?url={urllib.parse.quote(ragie_audio_url)}"
                                 logger.info(f"Generated proxy audio URL: {proxy_audio_url} from original: {ragie_audio_url}")
                                 if start_time is not None and end_time is not None:
@@ -1197,7 +1197,7 @@ class Filter:
                         attributed_text = text
                         logger.info(f"[DEBUG] No source attribution added - missing document name and URL")
                     
-                    logger.info(
+                logger.info(
                         f"[RAGIE KNOWLEDGE] document={document_name}, "
                         f"score={score:.4f}, chunk_id={chunk_id}, source_url={source_url[:50]}..." if source_url else f"score={score:.4f}, chunk_id={chunk_id}"
                     )
@@ -1244,10 +1244,10 @@ class Filter:
             
             # Update metrics (for compatibility)
             self.knowledge_cache_hits += 1  # Since Ragie handles its own caching
-            self._log_retrieval_metrics()
+        self._log_retrieval_metrics()
             
             logger.info("[DEBUG] === COMPLETED RAGIE KNOWLEDGE RETRIEVAL ===")
-            return items
+        return items
             
         except Exception as e:
             logger.error(f"Ragie knowledge query failed: {e}")
