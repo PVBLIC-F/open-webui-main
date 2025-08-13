@@ -2,7 +2,16 @@
 Ragie Proxy Router
 
 This module provides authenticated proxy endpoints for streaming Ragie audio and video content.
-It handles authentication with the Ragie API and streams content back to clients.
+It handles authentication with the Ragie API, SSL/TLS compatibility, and streams content back 
+to clients.
+
+Features:
+- Proxy endpoint for explicit Ragie URL proxying (/api/proxy/ragie/stream)
+- Automatic interception of direct Ragie URLs (/documents/{id}/chunks/{id}/content)
+- User authentication and authorization
+- SSL/TLS compatibility handling
+- Range request support for media seeking
+- Comprehensive error handling and logging
 """
 
 import os
@@ -25,16 +34,23 @@ log.setLevel(SRC_LOG_LEVELS.get("RAGIE_PROXY", logging.INFO))
 @router.get("/api/proxy/ragie/stream")
 async def proxy_ragie_stream(url: str, request: Request, user=Depends(get_verified_user)):
     """
-    Proxy any Ragie streaming URL with authentication.
+    Proxy Ragie streaming URLs with authentication and SSL compatibility.
     
-    This endpoint accepts actual Ragie streaming URLs from the links object
-    and proxies them with proper authentication headers.
+    This endpoint accepts Ragie streaming URLs and proxies them with proper
+    authentication headers, handling SSL/TLS compatibility issues that may
+    occur when accessing Ragie directly from the browser.
     
     Args:
-        url: The Ragie streaming URL to proxy (from chunk.links.*.href)
+        url: The Ragie streaming URL to proxy (must be from api.ragie.ai)
+        request: FastAPI request object for header forwarding
+        user: Authenticated user (injected by dependency)
     
     Returns:
-        StreamingResponse: The media stream from Ragie
+        StreamingResponse: The authenticated media stream from Ragie
+        
+    Raises:
+        HTTPException: 400 for invalid URLs, 500 for configuration errors,
+                      503 for network errors
     """
     # Log the authenticated user
     log.info(f"Ragie proxy request from user: {user.email if user else 'unknown'}")
@@ -114,3 +130,42 @@ async def proxy_ragie_stream(url: str, request: Request, user=Depends(get_verifi
     except Exception as e:
         log.error(f"Unexpected error proxying Ragie stream: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.get("/documents/{document_id}/chunks/{chunk_id}/content")
+async def intercept_ragie_direct(
+    document_id: str, 
+    chunk_id: str, 
+    request: Request,
+    user=Depends(get_verified_user)
+):
+    """
+    Intercept direct Ragie URLs and proxy them with authentication.
+    
+    This endpoint catches direct Ragie URLs that bypass the proxy and automatically
+    routes them through the authenticated proxy. This ensures that even if the LLM
+    generates direct Ragie URLs, they will still work with proper authentication.
+    
+    Args:
+        document_id: The Ragie document ID
+        chunk_id: The Ragie chunk ID
+        request: FastAPI request object (contains query parameters)
+        user: Authenticated user from dependency injection
+        
+    Returns:
+        StreamingResponse: The authenticated media stream from Ragie
+    """
+    log.info(f"Intercepting direct Ragie URL: documents/{document_id}/chunks/{chunk_id}/content")
+    
+    # Reconstruct the original Ragie URL with all query parameters
+    ragie_url = f"https://api.ragie.ai/documents/{document_id}/chunks/{chunk_id}/content"
+    
+    # Preserve all query parameters from the original request
+    if request.query_params:
+        query_string = str(request.query_params)
+        ragie_url += f"?{query_string}"
+    
+    log.info(f"Proxying intercepted URL: {ragie_url}")
+    
+    # Delegate to the main proxy function
+    return await proxy_ragie_stream(ragie_url, request, user)
