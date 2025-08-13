@@ -1112,10 +1112,9 @@ class Filter:
                     
                     # Add source attribution to the text with audio/video support
                     if source_url and document_name:
-                        # Build enhanced source attribution with media links
+                        # Build enhanced source attribution with media links - prioritize streaming links
                         attribution_parts = [
-                            f"📄 **Source Document:** {document_name}",
-                            f"🔗 **Full Document:** {source_url}"
+                            f"📄 **Source Document:** {document_name}"
                         ]
                         
                         # Add streaming links using proxy for authentication and SSL compatibility
@@ -1160,7 +1159,10 @@ class Filter:
                                 proxy_full_video_url = f"/api/proxy/ragie/stream?url={urllib.parse.quote(ragie_full_video_url)}"
                                 attribution_parts.append(f"📺 **Full Video Document:** {proxy_full_video_url}")
                         
-                        attributed_text = f"{text}\n\n" + "\n".join(attribution_parts) + "\n[MUST CITE: Include this exact source, document link, and ALL streaming/media links in your response so users can access the content]"
+                        # Add Google Drive link at the end (less prominent)
+                        attribution_parts.append(f"🔗 **Full Document:** {source_url}")
+                        
+                        attributed_text = f"{text}\n\n" + "\n".join(attribution_parts) + "\n[CRITICAL: You MUST include the 🎵 Play Audio and 🎬 Play Video streaming links in your response - these are the primary links users need to access the media content. Do NOT use Google Drive links for media access.]"
                         # Enhanced logging for audio/video content
                         media_info = []
                         if links.get('self_audio_stream'):
