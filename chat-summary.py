@@ -1273,7 +1273,7 @@ class Filter:
                         attributed_text = text
                         logger.info(f"[DEBUG] No source attribution added - missing document name and URL")
                     
-                logger.info(
+                    logger.info(
                         f"[RAGIE KNOWLEDGE] document={document_name}, "
                         f"score={score:.4f}, chunk_id={chunk_id}, source_url={source_url[:50]}..." if source_url else f"score={score:.4f}, chunk_id={chunk_id}"
                     )
@@ -1320,10 +1320,10 @@ class Filter:
             
             # Update metrics (for compatibility)
             self.knowledge_cache_hits += 1  # Since Ragie handles its own caching
-        self._log_retrieval_metrics()
+            self._log_retrieval_metrics()
             
             logger.info("[DEBUG] === COMPLETED RAGIE KNOWLEDGE RETRIEVAL ===")
-        return items
+            return items
             
         except Exception as e:
             logger.error(f"Ragie knowledge query failed: {e}")
