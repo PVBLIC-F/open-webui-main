@@ -382,6 +382,57 @@ class Filter:
         content_str = self._ensure_string(content)
         return content_str.startswith(prefix)
 
+    def _clean_document_name(self, document_name: str) -> str:
+        """Clean document name for better display."""
+        if not document_name:
+            return "Unknown Document"
+        
+        # Remove file extensions for cleaner display
+        name = document_name
+        if '.' in name:
+            name_parts = name.rsplit('.', 1)
+            if len(name_parts) == 2 and len(name_parts[1]) <= 5:  # Likely a file extension
+                name = name_parts[0]
+        
+        # Replace underscores and hyphens with spaces
+        name = name.replace('_', ' ').replace('-', ' ')
+        
+        # Capitalize words
+        name = ' '.join(word.capitalize() for word in name.split())
+        
+        return name
+    
+    def _format_citation_content(self, text: str, document_name: str, start_time: float = None, end_time: float = None, media_type: str = "document") -> str:
+        """Format citation content for better display in the UI."""
+        if not text:
+            return ""
+        
+        # Clean the text first
+        clean_text = self._clean_text(text)
+        
+        # Truncate if too long (keep first 300 characters)
+        if len(clean_text) > 300:
+            clean_text = clean_text[:300] + "..."
+        
+        # Create a structured format
+        formatted_parts = []
+        
+        # Add media type context
+        if media_type == "audio" and start_time is not None and end_time is not None:
+            duration = end_time - start_time
+            formatted_parts.append(f"🎵 Audio Segment ({start_time:.1f}s - {end_time:.1f}s, {duration:.1f}s duration)")
+        elif media_type == "video" and start_time is not None and end_time is not None:
+            duration = end_time - start_time
+            formatted_parts.append(f"🎬 Video Segment ({start_time:.1f}s - {end_time:.1f}s, {duration:.1f}s duration)")
+        elif media_type == "document":
+            formatted_parts.append(f"📄 Document Excerpt")
+        
+        # Add the content
+        formatted_parts.append("")  # Empty line for spacing
+        formatted_parts.append(clean_text)
+        
+        return "\n".join(formatted_parts)
+
     # Improved text cleaning function
     def _clean_text(self, text):
         """
@@ -1115,13 +1166,9 @@ class Filter:
                     # Clean the text
                     text = self._clean_text(text)
                     
-                    # Add source attribution to the text with audio/video support
+                    # Emit citation events for audio/video streaming and document links
+                    # The citations will display in the UI, so we don't need text attribution
                     if source_url and document_name:
-                        # Build enhanced source attribution with media links - prioritize streaming links
-                        attribution_parts = [
-                            f"📄 **Source Document:** {document_name}"
-                        ]
-                        
                         # Add streaming links using proxy for authentication and SSL compatibility
                         # Route all Ragie URLs through our proxy to handle SSL/TLS properly
                         if links.get('self_audio_stream'):
@@ -1140,17 +1187,21 @@ class Filter:
                                         duration = end_time - start_time
                                         citation_name += f" ({start_time:.1f}s-{end_time:.1f}s, {duration:.1f}s)"
                                     
+                                    # Format the content for better display
+                                    formatted_content = self._format_citation_content(text, document_name, start_time, end_time, "audio")
+                                    
                                     await __event_emitter__({
                                         "type": "citation",
                                         "data": {
-                                            "document": [text],
+                                            "document": [formatted_content],
                                             "metadata": [
                                                 {
                                                     "date_accessed": datetime.now().isoformat(),
-                                                    "source": document_name,
+                                                    "source": self._clean_document_name(document_name),
                                                     "start_time": start_time,
                                                     "end_time": end_time,
-                                                    "media_type": "audio"
+                                                    "media_type": "audio",
+                                                    "duration": f"{end_time - start_time:.1f}s" if start_time and end_time else None
                                                 }
                                             ],
                                             "source": {
@@ -1159,12 +1210,6 @@ class Filter:
                                             },
                                         },
                                     })
-                                
-                                if start_time is not None and end_time is not None:
-                                    duration = end_time - start_time
-                                    attribution_parts.append(f"🎵 **▶️ Play Matching Audio Segment:** {proxy_audio_url} (⏱️ {start_time:.1f}s - {end_time:.1f}s, {duration:.1f}s duration)")
-                                else:
-                                    attribution_parts.append(f"🎵 **▶️ Play Matching Audio Segment:** {proxy_audio_url}")
                         
                         if links.get('self_video_stream'):
                             # Get the actual streaming URL from Ragie and proxy it
@@ -1181,17 +1226,21 @@ class Filter:
                                         duration = end_time - start_time
                                         citation_name += f" ({start_time:.1f}s-{end_time:.1f}s, {duration:.1f}s)"
                                     
+                                    # Format the content for better display
+                                    formatted_content = self._format_citation_content(text, document_name, start_time, end_time, "video")
+                                    
                                     await __event_emitter__({
                                         "type": "citation",
                                         "data": {
-                                            "document": [text],
+                                            "document": [formatted_content],
                                             "metadata": [
                                                 {
                                                     "date_accessed": datetime.now().isoformat(),
-                                                    "source": document_name,
+                                                    "source": self._clean_document_name(document_name),
                                                     "start_time": start_time,
                                                     "end_time": end_time,
-                                                    "media_type": "video"
+                                                    "media_type": "video",
+                                                    "duration": f"{end_time - start_time:.1f}s" if start_time and end_time else None
                                                 }
                                             ],
                                             "source": {
@@ -1200,54 +1249,33 @@ class Filter:
                                             },
                                         },
                                     })
-                                
-                                if start_time is not None and end_time is not None:
-                                    duration = end_time - start_time
-                                    attribution_parts.append(f"🎬 **▶️ Play Matching Video Segment:** {proxy_video_url} (⏱️ {start_time:.1f}s - {end_time:.1f}s, {duration:.1f}s duration)")
-                                else:
-                                    attribution_parts.append(f"🎬 **▶️ Play Matching Video Segment:** {proxy_video_url}")
-                        
-                        # Add full document media links using proxy for SSL compatibility
-                        if links.get('document_audio_stream'):
-                            ragie_full_audio_url = links['document_audio_stream'].get('href')
-                            if ragie_full_audio_url:
-                                # Route through our proxy to handle SSL/TLS compatibility
-                                base_url = self.valves.base_url.rstrip('/') if self.valves.base_url else ""
-                                proxy_full_audio_url = f"{base_url}/api/proxy/ragie/stream?url={urllib.parse.quote(ragie_full_audio_url)}"
-                                attribution_parts.append(f"🎧 **Full Audio Document:** {proxy_full_audio_url}")
-                        
-                        if links.get('document_video_stream'):
-                            ragie_full_video_url = links['document_video_stream'].get('href')
-                            if ragie_full_video_url:
-                                # Route through our proxy to handle SSL/TLS compatibility
-                                base_url = self.valves.base_url.rstrip('/') if self.valves.base_url else ""
-                                proxy_full_video_url = f"{base_url}/api/proxy/ragie/stream?url={urllib.parse.quote(ragie_full_video_url)}"
-                                attribution_parts.append(f"📺 **Full Video Document:** {proxy_full_video_url}")
-                        
-                        # Add Google Drive link at the end (less prominent)
-                        attribution_parts.append(f"🔗 **Full Document:** {source_url}")
                         
                         # Emit citation event for the source document (Google Drive link)
                         if __event_emitter__:
+                            # Format the content for better display
+                            formatted_content = self._format_citation_content(text, document_name, None, None, "document")
+                            
                             await __event_emitter__({
                                 "type": "citation",
                                 "data": {
-                                    "document": [text],
+                                    "document": [formatted_content],
                                     "metadata": [
                                         {
                                             "date_accessed": datetime.now().isoformat(),
-                                            "source": document_name,
+                                            "source": self._clean_document_name(document_name),
                                             "media_type": "document"
                                         }
                                     ],
                                     "source": {
-                                        "name": f"📄 {document_name}",
+                                        "name": f"📄 {self._clean_document_name(document_name)}",
                                         "url": source_url
                                     },
                                 },
                             })
                         
-                        attributed_text = f"{text}\n\n" + "\n".join(attribution_parts) + "\n[CRITICAL: You MUST include the 🎵 Play Audio and 🎬 Play Video streaming links in your response - these are the primary links users need to access the media content. Do NOT use Google Drive links for media access.]"
+                        # Use clean text without attribution since citations handle the links
+                        attributed_text = text
+                        
                         # Enhanced logging for audio/video content
                         media_info = []
                         if links.get('self_audio_stream'):
@@ -1264,31 +1292,22 @@ class Filter:
                                 media_info.append("🎬 Direct video stream")
                         
                         media_str = f" + {', '.join(media_info)}" if media_info else ""
-                        logger.info(f"[DEBUG] ✅ Added enhanced source attribution: {document_name} -> {source_url}{media_str}")
-                        logger.info(f"[DEBUG] ✅ Attribution length: {len(attributed_text)} chars, ends with: ...{attributed_text[-100:]}")
-                    elif document_name:
-                        attributed_text = f"{text}\n\n**Source:** {document_name}"
-                        logger.info(f"[DEBUG] Added source attribution without URL: {document_name}")
+                        logger.info(f"[DEBUG] ✅ Emitted citation events for: {document_name} -> {source_url}{media_str}")
                     else:
                         attributed_text = text
-                        logger.info(f"[DEBUG] No source attribution added - missing document name and URL")
+                        logger.info(f"[DEBUG] No citation events - missing document name or URL")
                     
                     logger.info(
                         f"[RAGIE KNOWLEDGE] document={document_name}, "
                         f"score={score:.4f}, chunk_id={chunk_id}, source_url={source_url[:50]}..." if source_url else f"score={score:.4f}, chunk_id={chunk_id}"
                     )
                     
-                    # Debug: Show a preview of the attributed text including the source section
+                    # Debug: Show a preview of the clean text (citations are handled separately)
                     if len(attributed_text) > 300:
-                        # Show first part + source section
-                        source_start = attributed_text.find("**Source:**")
-                        if source_start > 0:
-                            preview_text = attributed_text[:150] + "...\n" + attributed_text[source_start:]
-                        else:
-                            preview_text = attributed_text[:300] + "..."
+                        preview_text = attributed_text[:300] + "..."
                     else:
                         preview_text = attributed_text
-                    logger.info(f"[DEBUG] Final attributed text with source: {preview_text}")
+                    logger.info(f"[DEBUG] Clean text for LLM (citations handled separately): {preview_text}")
                     
                     items.append({
                         "type": "knowledge",
@@ -1673,6 +1692,14 @@ class Filter:
             f"Found {len(chat_summaries)} chat summaries and {len(knowledge_items)} knowledge items "
             f"(with quality filtering: min_quality_score={self.valves.min_quality_score})"
         )
+        
+        # Emit status event to show count in UI
+        if __event_emitter__:
+            total_items = len(chat_summaries) + len(knowledge_items)
+            await __event_emitter__({
+                "type": "status",
+                "data": {"description": f"✅ Found {total_items} relevant items ({len(knowledge_items)} knowledge, {len(chat_summaries)} chat history)", "done": True}
+            })
         # FIXED: Update startswith to use the safe helper method
         summary_msg = next(
             (
@@ -1725,7 +1752,7 @@ class Filter:
                 new_msg_list.append(
                     {
                         "role": "system",
-                        "content": "Relevant knowledge (CRITICAL INSTRUCTION - FAILURE TO FOLLOW WILL BREAK THE SYSTEM: You MUST copy and include ALL provided links EXACTLY as written - every 📄 Source Document link, every 🔗 Full Document link, every 🎵 Play Audio link, every 🎬 Play Video link, and every 🎧 Full Audio Document link. Do NOT modify, shorten, or omit any URLs. Do NOT create your own links. Copy the EXACT text including all emojis and formatting. Users need these links to access the content):\n" + "\n".join(rag_blocks),
+                        "content": "Relevant knowledge:\n" + "\n".join(rag_blocks),
                     }
                 )
             new_msg_list.extend(user_assistant_msgs[-self.valves.keep_recent * 2 :])
@@ -1741,7 +1768,7 @@ class Filter:
                 new_msg_list.append(
                     {
                         "role": "system",
-                        "content": "Relevant knowledge (CRITICAL INSTRUCTION - FAILURE TO FOLLOW WILL BREAK THE SYSTEM: You MUST copy and include ALL provided links EXACTLY as written - every 📄 Source Document link, every 🔗 Full Document link, every 🎵 Play Audio link, every 🎬 Play Video link, and every 🎧 Full Audio Document link. Do NOT modify, shorten, or omit any URLs. Do NOT create your own links. Copy the EXACT text including all emojis and formatting. Users need these links to access the content):\n" + "\n".join(rag_blocks),
+                        "content": "Relevant knowledge:\n" + "\n".join(rag_blocks),
                     }
                 )
             if len(user_assistant_msgs) > self.valves.keep_without_summary * 2:

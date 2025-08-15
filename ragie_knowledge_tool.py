@@ -69,7 +69,9 @@ class Tools:
         self.pinecone_client = None
         self.openai_client = None
         self.httpx_client = httpx.AsyncClient()
-        
+    
+    async def _initialize_clients(self):
+        """Initialize API clients if not already done."""
         # Load environment variables if valves are empty
         if not self.valves.pinecone_api_key:
             self.valves.pinecone_api_key = os.getenv("PINECONE_API_KEY", "")
@@ -81,9 +83,6 @@ class Tools:
             self.valves.ragie_api_key = os.getenv("RAGIE_API_KEY", "")
         if not self.valves.webui_base_url:
             self.valves.webui_base_url = os.getenv("WEBUI_URL", "")
-
-    async def _initialize_clients(self):
-        """Initialize API clients if not already done."""
         if not self.pinecone_client and self.valves.pinecone_api_key:
             self.pinecone_client = Pinecone(api_key=self.valves.pinecone_api_key)
             
@@ -105,6 +104,8 @@ class Tools:
 
     async def _retrieve_from_ragie(self, query: str, __event_emitter__=None) -> List[Dict]:
         """Retrieve knowledge from Ragie API and emit citations."""
+        await self._initialize_clients()
+
         if not self.valves.ragie_api_key:
             logger.warning("Ragie API key not provided")
             return []
@@ -135,6 +136,7 @@ class Tools:
             
             ragie_data = response.json()
             chunks = ragie_data.get("scored_chunks", [])
+
             
             knowledge_items = []
             
@@ -331,6 +333,7 @@ class Tools:
             # Emit completion status
             if __event_emitter__:
                 total_items = len(knowledge_items) + len(chat_items)
+
                 await __event_emitter__({
                     "type": "status",
                     "data": {"description": f"✅ Found {total_items} relevant items ({len(knowledge_items)} knowledge, {len(chat_items)} chat history)", "done": True}

@@ -102,9 +102,11 @@ async def proxy_ragie_stream(url: str, request: Request, user=Depends(get_verifi
                     log.error(f"Ragie stream failed: {resp.status_code} - {text[:200]!r}")
                     
                     if resp.status_code == 404:
+                        # Log the specific URL that failed for debugging
+                        log.warning(f"Ragie chunk not found (404): {url}")
                         raise HTTPException(
                             status_code=404, 
-                            detail="Media content not found. This audio/video segment may have been re-indexed or removed from the knowledge base. Please try searching for updated content."
+                            detail="Audio/video segment temporarily unavailable. The content may be re-indexing. Please try again in a moment or search for updated content."
                         )
                     else:
                         raise HTTPException(status_code=resp.status_code, detail="Failed to stream from Ragie")
