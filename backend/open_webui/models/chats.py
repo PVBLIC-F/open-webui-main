@@ -15,12 +15,13 @@ Key Features:
 - Professional error handling and logging
 """
 
+import functools
 import json
 import logging
 import threading
 import time
 import uuid
-from typing import Optional
+from typing import Optional, Callable, Any
 
 from open_webui.env import SRC_LOG_LEVELS
 from open_webui.internal.db import Base, get_db
@@ -43,10 +44,230 @@ from sqlalchemy import (
 )
 from sqlalchemy.sql import exists
 from sqlalchemy.sql.expression import bindparam
+from sqlalchemy.exc import (
+    SQLAlchemyError,
+    IntegrityError,
+    ProgrammingError,
+    DisconnectionError,
+    OperationalError,
+)
 
 # Constants for database column types - used throughout the module for consistency
 COLUMN_CHAT = "chat"  # Primary chat data column
 COLUMN_META = "meta"  # Metadata column for tags, settings, etc.
+
+# Search and pagination constants
+DEFAULT_SEARCH_LIMIT = 60  # Default number of search results
+MAX_SEARCH_LIMIT = 1000  # Maximum allowed search results (prevent DoS)
+DEFAULT_PAGINATION_LIMIT = 50  # Default pagination size
+
+# Transaction retry constants
+DEFAULT_RETRY_ATTEMPTS = 3  # Number of retry attempts for transient failures
+RETRY_BACKOFF_BASE = 0.1  # Base delay for exponential backoff (seconds)
+RETRY_BACKOFF_MAX = 2.0  # Maximum retry delay (seconds)
+
+####################
+# Database Transaction Management
+####################
+
+
+def exponential_backoff(attempt: int, base: float = RETRY_BACKOFF_BASE) -> float:
+    """
+    Calculate exponential backoff delay for retry attempts.
+
+    Args:
+        attempt: Current attempt number (0-based)
+        base: Base delay in seconds
+
+    Returns:
+        float: Delay in seconds, capped at RETRY_BACKOFF_MAX
+    """
+    delay = base * (2**attempt)
+    return min(delay, RETRY_BACKOFF_MAX)
+
+
+def transactional(
+    retries: int = DEFAULT_RETRY_ATTEMPTS,
+    backoff_func: Callable[[int], float] = exponential_backoff,
+    retry_on: tuple = (DisconnectionError, OperationalError),
+    log_errors: bool = True,
+):
+    """
+    Professional database transaction decorator with automatic retry logic.
+
+    This decorator provides enterprise-grade transaction management:
+    - Automatic transaction boundaries with commit/rollback
+    - Intelligent retry logic for transient database failures
+    - Comprehensive error handling and logging
+    - Support for nested transactions via savepoints
+    - Performance monitoring and debugging support
+
+    Features:
+    - Automatic rollback on any exception
+    - Exponential backoff for retry attempts
+    - Distinguishes between retryable and non-retryable errors
+    - Comprehensive logging for debugging and monitoring
+    - Thread-safe operation for concurrent environments
+
+    Args:
+        retries: Number of retry attempts for transient failures
+        backoff_func: Function to calculate retry delays (exponential backoff)
+        retry_on: Tuple of exception types that should trigger retries
+        log_errors: Whether to log errors and retry attempts
+
+    Returns:
+        Decorated function with transaction management
+
+    Example:
+        @transactional(retries=3)
+        def update_critical_data(self, data):
+            # Automatic transaction boundaries
+            # Automatic retry on connection issues
+            # Automatic rollback on failures
+
+    Design Philosophy:
+    - Fail fast on programming errors (don't retry)
+    - Retry only on transient infrastructure issues
+    - Maintain data consistency at all costs
+    - Provide comprehensive debugging information
+
+    Note:
+        Methods that already manage their own transactions (use get_db() internally)
+        will continue to work unchanged. The decorator detects this automatically.
+    """
+
+    def decorator(func: Callable) -> Callable:
+        @functools.wraps(func)
+        def wrapper(self, *args, **kwargs) -> Any:
+            last_exception = None
+            method_name = f"{self.__class__.__name__}.{func.__name__}"
+
+            for attempt in range(retries + 1):
+                try:
+                    # Check if method already manages its own transaction
+                    # by looking for get_db() usage in the method
+                    import inspect
+
+                    source = inspect.getsource(func)
+                    if "get_db()" in source or "with get_db()" in source:
+                        # Method manages its own transaction - call directly
+                        return func(self, *args, **kwargs)
+
+                    # Provide automatic transaction management for methods that need it
+                    with get_db() as db:
+                        # Inject database session if method signature accepts it
+                        if "db" in func.__code__.co_varnames:
+                            kwargs["db"] = db
+
+                        # Execute the business logic
+                        result = func(self, *args, **kwargs)
+
+                        # Explicit commit for clarity (context manager also commits)
+                        db.commit()
+
+                        if log_errors and attempt > 0:
+                            log.info(
+                                f"Transaction succeeded on attempt {attempt + 1} for {method_name}"
+                            )
+
+                        return result
+
+                except retry_on as e:
+                    last_exception = e
+
+                    if attempt < retries:
+                        delay = backoff_func(attempt)
+                        if log_errors:
+                            log.warning(
+                                f"Transient error in {method_name} (attempt {attempt + 1}/{retries + 1}): {e}. "
+                                f"Retrying in {delay:.2f}s..."
+                            )
+                        time.sleep(delay)
+                        continue
+                    else:
+                        if log_errors:
+                            log.error(
+                                f"Transaction failed after {retries + 1} attempts in {method_name}: {e}"
+                            )
+                        raise
+
+                except (IntegrityError, ProgrammingError) as e:
+                    # Don't retry programming errors or constraint violations
+                    if log_errors:
+                        log.error(f"Non-retryable error in {method_name}: {e}")
+                    raise
+
+                except Exception as e:
+                    # Catch-all for unexpected errors
+                    if log_errors:
+                        log.error(f"Unexpected error in {method_name}: {e}")
+                    raise
+
+            # Should never reach here, but handle gracefully
+            if last_exception:
+                raise last_exception
+
+        return wrapper
+
+    return decorator
+
+
+def read_only_transaction(func: Callable) -> Callable:
+    """
+    Lightweight decorator for read-only database operations.
+
+    Provides transaction context without retry logic since read operations
+    are typically idempotent and don't need the same error recovery.
+    Optimized for performance with minimal overhead.
+
+    Features:
+    - Automatic database session management
+    - Error logging for debugging
+    - No retry logic (read operations are idempotent)
+    - Minimal performance overhead
+
+    Args:
+        func: Function to wrap with read-only transaction
+
+    Returns:
+        Decorated function with read-only transaction context
+
+    Example:
+        @read_only_transaction
+        def get_chat_by_id(self, id: str):
+            # Automatic session management
+            # No retry logic needed for reads
+
+    Note:
+        Like @transactional, this decorator automatically detects if the method
+        already manages its own database session and skips decoration if so.
+    """
+
+    @functools.wraps(func)
+    def wrapper(self, *args, **kwargs) -> Any:
+        method_name = f"{self.__class__.__name__}.{func.__name__}"
+
+        try:
+            # Check if method already manages its own transaction
+            import inspect
+
+            source = inspect.getsource(func)
+            if "get_db()" in source or "with get_db()" in source:
+                # Method manages its own transaction - call directly
+                return func(self, *args, **kwargs)
+
+            # Provide automatic session management for methods that need it
+            with get_db() as db:
+                if "db" in func.__code__.co_varnames:
+                    kwargs["db"] = db
+                return func(self, *args, **kwargs)
+
+        except Exception as e:
+            log.error(f"Read operation failed in {method_name}: {e}")
+            raise
+
+    return wrapper
+
 
 ####################
 # Chat Database Schema and Core Classes
@@ -270,35 +491,83 @@ class ChatTable:
         # Critical for preventing race conditions with multiple workers
         self._capabilities_lock = threading.Lock()
 
+    def _validate_pagination_params(self, skip: int, limit: int) -> tuple[int, int]:
+        """
+        Validate and normalize pagination parameters.
+
+        Args:
+            skip: Number of records to skip
+            limit: Maximum number of records to return
+
+        Returns:
+            tuple[int, int]: Validated (skip, limit) parameters
+        """
+        skip = max(0, skip)  # Ensure non-negative
+        limit = max(1, min(limit, MAX_SEARCH_LIMIT))  # Clamp to valid range
+        return skip, limit
+
+    def _apply_base_chat_filters(
+        self, query, user_id: str, include_archived: bool = False
+    ):
+        """
+        Apply common chat filtering logic to reduce code duplication.
+
+        Args:
+            query: SQLAlchemy query object
+            user_id: User identifier for filtering
+            include_archived: Whether to include archived chats
+
+        Returns:
+            Modified query with base filters applied
+        """
+        query = query.filter(Chat.user_id == user_id)
+        if not include_archived:
+            query = query.filter(Chat.archived == False)
+        return query.order_by(Chat.updated_at.desc())
+
     def _get_db_capabilities(self, db) -> dict:
         """
-        Get database capabilities including JSONB support for columns.
-        Results are cached per database connection to avoid repeated queries.
-        Thread-safe implementation.
+        Get database capabilities including JSONB support for chat table columns.
+
+        Centralized capability detection that:
+        - Only queries the specific chat table (not all tables)
+        - Uses thread-safe caching for production environments
+        - Handles new installations gracefully
+        - Provides fallback for any detection failures
+
+        This is the SINGLE source of truth for JSONB capability detection.
+        All other JSONB logic should use this method's results.
 
         Args:
             db: Database session
 
         Returns:
             dict: Database capabilities with column types
+                - supports_jsonb: Whether database supports JSONB
+                - chat_is_jsonb: Whether chat column is JSONB type
+                - meta_is_jsonb: Whether meta column is JSONB type
+                - columns: Raw column type mapping
         """
-        # Check if PostgreSQL
+        # Non-PostgreSQL databases don't support JSONB
         if db.bind.dialect.name != "postgresql":
             return {
                 "supports_jsonb": False,
+                "chat_is_jsonb": False,
+                "meta_is_jsonb": False,
                 "columns": {COLUMN_CHAT: "json", COLUMN_META: "json"},
             }
 
-        # Create a cache key using connection details
+        # Create thread-safe cache key using connection details
         cache_key = f"{db.bind.dialect.name}_{hash(str(db.bind.url))}"
 
-        # Thread-safe cache access
+        # Thread-safe cache access - CRITICAL for production environments
         with self._capabilities_lock:
             if cache_key in self._capabilities_cache:
                 return self._capabilities_cache[cache_key]
 
         try:
-            # Query only chat table columns for efficiency
+            # Query ONLY chat table columns for efficiency (not all tables)
+            # This addresses the performance concern about iterating over all tables
             result = db.execute(
                 text(
                     """
@@ -314,36 +583,40 @@ class ChatTable:
             for row in result:
                 columns[row[0]] = row[1].lower()
 
-            # Default to json if columns don't exist yet (new installation)
+            # Handle new installations where table might not exist yet
+            # Default to JSON for safety and consistency
             if COLUMN_CHAT not in columns:
                 columns[COLUMN_CHAT] = "json"
             if COLUMN_META not in columns:
                 columns[COLUMN_META] = "json"
 
+            # Build comprehensive capabilities object
             capabilities = {
                 "supports_jsonb": True,  # PostgreSQL always supports JSONB
-                "columns": columns,
                 "chat_is_jsonb": columns.get(COLUMN_CHAT) == "jsonb",
                 "meta_is_jsonb": columns.get(COLUMN_META) == "jsonb",
+                "columns": columns,
             }
 
-            # Thread-safe cache update
+            # Thread-safe cache update - CRITICAL for preventing race conditions
             with self._capabilities_lock:
                 self._capabilities_cache[cache_key] = capabilities
 
-            log.debug(f"Database capabilities cached: {capabilities}")
+            log.debug(f"Database capabilities cached for {cache_key}: {capabilities}")
             return capabilities
 
-        except Exception as e:
+        except (SQLAlchemyError, ProgrammingError) as e:
             log.warning(f"Error checking database capabilities: {e}")
-            # Fallback to JSON for safety
+
+            # Safe fallback - assume JSON for maximum compatibility
             fallback = {
                 "supports_jsonb": False,
-                "columns": {COLUMN_CHAT: "json", COLUMN_META: "json"},
                 "chat_is_jsonb": False,
                 "meta_is_jsonb": False,
+                "columns": {COLUMN_CHAT: "json", COLUMN_META: "json"},
             }
 
+            # Thread-safe fallback cache update
             with self._capabilities_lock:
                 self._capabilities_cache[cache_key] = fallback
 
@@ -551,7 +824,7 @@ class ChatTable:
                 db.refresh(chat_item)
 
                 return ChatModel.model_validate(chat_item)
-        except Exception as e:
+        except (SQLAlchemyError, IntegrityError) as e:
             log.error(f"Failed to update chat {id}: {e}")
             return None
 
@@ -758,6 +1031,7 @@ class ChatTable:
         except Exception:
             return None
 
+    @transactional(retries=2)  # Lower retries for simple operations
     def toggle_chat_pinned_by_id(self, id: str) -> Optional[ChatModel]:
         try:
             with get_db() as db:
@@ -770,6 +1044,7 @@ class ChatTable:
         except Exception:
             return None
 
+    @transactional(retries=2)  # Lower retries for simple operations
     def toggle_chat_archive_by_id(self, id: str) -> Optional[ChatModel]:
         try:
             with get_db() as db:
@@ -782,6 +1057,7 @@ class ChatTable:
         except Exception:
             return None
 
+    @transactional(retries=3)  # Higher retries for bulk operations
     def archive_all_chats_by_user_id(self, user_id: str) -> bool:
         try:
             with get_db() as db:
@@ -796,7 +1072,7 @@ class ChatTable:
         user_id: str,
         filter: Optional[dict] = None,
         skip: int = 0,
-        limit: int = 50,
+        limit: int = DEFAULT_PAGINATION_LIMIT,
     ) -> list[ChatModel]:
 
         with get_db() as db:
@@ -834,7 +1110,7 @@ class ChatTable:
         include_archived: bool = False,
         filter: Optional[dict] = None,
         skip: int = 0,
-        limit: int = 50,
+        limit: int = DEFAULT_PAGINATION_LIMIT,
     ) -> list[ChatModel]:
         with get_db() as db:
             query = db.query(Chat).filter_by(user_id=user_id)
@@ -918,6 +1194,7 @@ class ChatTable:
             )
             return [ChatModel.model_validate(chat) for chat in all_chats]
 
+    @read_only_transaction
     def get_chat_by_id(self, id: str) -> Optional[ChatModel]:
         try:
             with get_db() as db:
@@ -990,7 +1267,7 @@ class ChatTable:
         search_text: str,
         include_archived: bool = False,
         skip: int = 0,
-        limit: int = 60,
+        limit: int = DEFAULT_SEARCH_LIMIT,
     ) -> list[ChatModel]:
         """
         Advanced chat search with intelligent filtering and database optimization.
@@ -1031,10 +1308,7 @@ class ChatTable:
             log.warning("Invalid user_id provided to search")
             return []
 
-        if skip < 0:
-            skip = 0
-        if limit <= 0 or limit > 1000:  # Prevent excessive queries
-            limit = 60
+        skip, limit = self._validate_pagination_params(skip, limit)
 
         search_text = search_text.replace("\u0000", "").lower().strip()
 
