@@ -104,7 +104,7 @@ def upgrade():
                     index["name"],
                     index["table"],
                     index["columns"],
-                    postgresql_using=index.get("postgresql_using")
+                    postgresql_using=index.get("postgresql_using"),
                 )
                 log.info(f"Created index: {index['name']}")
             else:
