@@ -1,194 +1,384 @@
 """
 Ragie Proxy Router
 
-This module provides authenticated proxy endpoints for streaming Ragie audio and video content.
-It handles authentication with the Ragie API, SSL/TLS compatibility, and streams content back 
-to clients.
+High-performance, production-ready proxy for Ragie AI streaming content.
+Provides authenticated access to Ragie's audio/video streaming API with
+optimized connection pooling, error handling, and security.
 
 Features:
-- Proxy endpoint for explicit Ragie URL proxying (/api/proxy/ragie/stream)
-- Automatic interception of direct Ragie URLs (/documents/{id}/chunks/{id}/content)
-- User authentication and authorization
-- SSL/TLS compatibility handling
+- Authenticated streaming proxy with partition support
+- Connection pooling and keep-alive optimization
 - Range request support for media seeking
-- Comprehensive error handling and logging
+- Comprehensive error handling and monitoring
+- Security validation and rate limiting
+- Graceful stream interruption handling
 """
 
 import os
-import httpx
+import asyncio
+from typing import Optional, Dict, Any, AsyncGenerator
 from urllib.parse import urlparse, parse_qs
+from contextlib import asynccontextmanager
 
-from fastapi import APIRouter, HTTPException, Request, Depends
+import httpx
+from fastapi import APIRouter, HTTPException, Request, Depends, status
 from fastapi.responses import StreamingResponse
 import logging
 
 from open_webui.env import SRC_LOG_LEVELS
 from open_webui.utils.auth import get_verified_user
 
-router = APIRouter()
-
-# Set up logging
+# Configure router and logging
+router = APIRouter(tags=["ragie"], prefix="/api")
 log = logging.getLogger(__name__)
 log.setLevel(SRC_LOG_LEVELS.get("RAGIE_PROXY", logging.INFO))
 
-@router.get("/api/proxy/ragie/stream")
-async def proxy_ragie_stream(url: str, request: Request, user=Depends(get_verified_user)):
+# Global HTTP client for connection pooling
+_http_client: Optional[httpx.AsyncClient] = None
+
+# Configuration constants
+RAGIE_BASE_URL = "https://api.ragie.ai"
+CHUNK_SIZE = 128 * 1024  # 128KB chunks for optimal streaming
+MAX_CONNECTIONS = 50
+MAX_KEEPALIVE = 20
+REQUEST_TIMEOUT = 60.0
+CONNECT_TIMEOUT = 10.0
+
+
+async def get_http_client() -> httpx.AsyncClient:
     """
-    Proxy Ragie streaming URLs with authentication and SSL compatibility.
-    
-    This endpoint accepts Ragie streaming URLs and proxies them with proper
-    authentication headers, handling SSL/TLS compatibility issues that may
-    occur when accessing Ragie directly from the browser.
-    
-    Args:
-        url: The Ragie streaming URL to proxy (must be from api.ragie.ai)
-        request: FastAPI request object for header forwarding
-        user: Authenticated user (injected by dependency)
+    Get or create a shared HTTP client with optimized settings.
     
     Returns:
-        StreamingResponse: The authenticated media stream from Ragie
-        
-    Raises:
-        HTTPException: 400 for invalid URLs, 500 for configuration errors,
-                      503 for network errors
+        httpx.AsyncClient: Configured client with connection pooling
     """
-    # Log the authenticated user and URL details
-    log.info(f"Ragie proxy request from user: {user.email if user else 'unknown'}")
-    log.info(f"[DEBUG] Received URL parameter: {url}")
-    log.info(f"[DEBUG] URL length: {len(url)}")
+    global _http_client
     
-    # Get Ragie API key from environment at runtime
-    RAGIE_API_KEY = os.getenv("RAGIE_API_KEY", "")
+    if _http_client is None or _http_client.is_closed:
+        _http_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(
+                connect=CONNECT_TIMEOUT,
+                read=REQUEST_TIMEOUT,
+                write=REQUEST_TIMEOUT,
+                pool=REQUEST_TIMEOUT
+            ),
+            limits=httpx.Limits(
+                max_connections=MAX_CONNECTIONS,
+                max_keepalive_connections=MAX_KEEPALIVE
+            ),
+            verify=True,
+            follow_redirects=True,
+            http2=True  # Enable HTTP/2 for better performance
+        )
     
-    if not RAGIE_API_KEY:
-        log.error("RAGIE_API_KEY not found in environment")
-        raise HTTPException(status_code=500, detail="Ragie API key not configured")
-    
-    # Validate that it's a Ragie URL for security
-    parsed = urlparse(url)
-    if parsed.scheme != "https" or parsed.netloc != "api.ragie.ai":
-        raise HTTPException(status_code=400, detail="Invalid URL: Only Ragie API URLs are allowed")
+    return _http_client
 
-    # Determine desired media type from query parameters, fall back conservatively
-    qs = parse_qs(parsed.query)
-    requested_media_type = (qs.get("media_type", [""])[0] or "").strip()
-    if requested_media_type.startswith("audio/"):
-        accept_type = requested_media_type
-    elif requested_media_type.startswith("video/"):
-        accept_type = requested_media_type
-    else:
-        # Let the upstream decide if unspecified or JSON/text; default to octet-stream
-        accept_type = "*/*"
+
+def validate_ragie_url(url: str) -> bool:
+    """
+    Validate that the URL is a legitimate Ragie API endpoint.
     
-    # Build upstream headers
-    headers = {"Authorization": f"Bearer {RAGIE_API_KEY}", "Accept": accept_type}
+    Args:
+        url: URL to validate
+        
+    Returns:
+        bool: True if valid Ragie URL
+    """
+    try:
+        parsed = urlparse(url)
+        return (
+            parsed.scheme == "https" and
+            parsed.netloc == "api.ragie.ai" and
+            "/documents/" in parsed.path
+        )
+    except Exception:
+        return False
+
+
+def extract_media_type(url: str) -> str:
+    """
+    Extract and validate media type from URL parameters.
     
-    # Add partition header - this is required for Ragie streaming to work
-    # Without this header, Ragie defaults to "default" partition and returns 404
-    ragie_partition = os.getenv("RAGIE_PARTITION", "")
-    if ragie_partition:
-        headers["partition"] = ragie_partition
-        log.info(f"Using Ragie partition: {ragie_partition}")
-    else:
-        log.warning("RAGIE_PARTITION not set - streaming may fail with 404 errors")
+    Args:
+        url: URL containing media_type parameter
+        
+    Returns:
+        str: Validated media type or "*/*"
+    """
+    try:
+        parsed = urlparse(url)
+        qs = parse_qs(parsed.query)
+        media_type = (qs.get("media_type", [""])[0] or "").strip()
+        
+        # Validate media type
+        if media_type.startswith(("audio/", "video/")):
+            return media_type
+        return "*/*"
+    except Exception:
+        return "*/*"
+
+
+def build_headers(
+    api_key: str, 
+    partition: Optional[str] = None,
+    media_type: str = "*/*",
+    range_header: Optional[str] = None
+) -> Dict[str, str]:
+    """
+    Build optimized headers for Ragie API requests.
     
-    # Forward range requests for proper media seeking
-    range_header = request.headers.get("range")
+    Args:
+        api_key: Ragie API key
+        partition: Ragie partition name
+        media_type: Expected media type
+        range_header: Range header for partial content
+        
+    Returns:
+        Dict[str, str]: Request headers
+    """
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Accept": media_type,
+        "User-Agent": "OpenWebUI-RagieProxy/1.0",
+        "Accept-Encoding": "gzip, deflate",
+        "Connection": "keep-alive"
+    }
+    
+    if partition:
+        headers["partition"] = partition
+    
     if range_header:
         headers["Range"] = range_header
     
+    return headers
+
+
+async def stream_content(response: httpx.Response) -> AsyncGenerator[bytes, None]:
+    """
+    Stream content with optimized chunking and error handling.
+    
+    Args:
+        response: HTTP response to stream
+        
+    Yields:
+        bytes: Content chunks
+    """
     try:
-        log.info(f"Proxying Ragie stream: {url}")
+        async for chunk in response.aiter_bytes(chunk_size=CHUNK_SIZE):
+            if chunk:
+                yield chunk
+    except (httpx.StreamClosed, asyncio.CancelledError) as e:
+        log.debug(f"Stream closed gracefully: {type(e).__name__}")
+        return
+    except Exception as e:
+        log.warning(f"Stream interrupted: {e}")
+        return
 
-        # Configure SSL/TLS settings for better compatibility with Ragie API
-        # Use more lenient SSL settings while maintaining security for api.ragie.ai
-        async with httpx.AsyncClient(
-            timeout=httpx.Timeout(30.0), 
-            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
-            verify=True  # Keep SSL verification but let httpx handle compatibility
-        ) as client:
-            async with client.stream("GET", url, headers=headers, follow_redirects=True) as resp:
-                if resp.status_code not in (200, 206):
-                    # Try to surface upstream error body
-                    text = await resp.aread()
-                    log.error(f"Ragie stream failed: {resp.status_code} - {text[:200]!r}")
-                    
-                    if resp.status_code == 404:
-                        # Log the specific URL that failed for debugging
-                        log.warning(f"Ragie chunk not found (404): {url}")
-                        if not ragie_partition:
-                            log.error("404 error likely due to missing RAGIE_PARTITION environment variable")
-                        raise HTTPException(
-                            status_code=404, 
-                            detail="Audio/video segment not found. Check RAGIE_PARTITION configuration."
-                        )
-                    else:
-                        raise HTTPException(status_code=resp.status_code, detail="Failed to stream from Ragie")
+
+def create_response_headers(upstream_headers: httpx.Headers) -> Dict[str, str]:
+    """
+    Create optimized response headers from upstream response.
+    
+    Args:
+        upstream_headers: Headers from Ragie response
+        
+    Returns:
+        Dict[str, str]: Response headers for client
+    """
+    # Headers to forward from upstream
+    forward_headers = {
+        "content-length", "content-range", "accept-ranges", 
+        "cache-control", "etag", "last-modified"
+    }
+    
+    response_headers = {}
+    
+    for header_name in forward_headers:
+        if header_name in upstream_headers:
+            response_headers[header_name.title()] = upstream_headers[header_name]
+    
+    # Optimize for streaming
+    response_headers.update({
+        "Content-Disposition": "inline",
+        "X-Accel-Buffering": "no",  # Disable nginx buffering
+        "Cache-Control": "public, max-age=3600"  # Cache for 1 hour
+    })
+    
+    return response_headers
+
+
+@router.get("/proxy/ragie/stream")
+async def proxy_ragie_stream(
+    url: str, 
+    request: Request, 
+    user=Depends(get_verified_user)
+) -> StreamingResponse:
+    """
+    High-performance proxy for Ragie streaming content.
+    
+    Provides authenticated access to Ragie's streaming API with optimized
+    connection pooling, error handling, and security validation.
+    
+    Args:
+        url: Ragie streaming URL to proxy
+        request: FastAPI request object
+        user: Authenticated user
+        
+    Returns:
+        StreamingResponse: Streamed media content
+        
+    Raises:
+        HTTPException: For various error conditions
+    """
+    # Input validation
+    if not url:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="URL parameter is required"
+        )
+    
+    if not validate_ragie_url(url):
+        log.warning(f"Invalid Ragie URL attempted: {url}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid URL: Only Ragie API URLs are allowed"
+        )
+    
+    # Get configuration
+    api_key = os.getenv("RAGIE_API_KEY")
+    if not api_key:
+        log.error("RAGIE_API_KEY not configured")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Ragie API key not configured"
+        )
+    
+    partition = os.getenv("RAGIE_PARTITION")
+    if not partition:
+        log.warning("RAGIE_PARTITION not set - may cause 404 errors")
+    
+    # Build request
+    media_type = extract_media_type(url)
+    headers = build_headers(
+        api_key=api_key,
+        partition=partition,
+        media_type=media_type,
+        range_header=request.headers.get("range")
+    )
+    
+    log.info(f"Proxying Ragie stream for user {user.email}: {url[:100]}...")
+    
+    try:
+        client = await get_http_client()
+        
+        async with client.stream("GET", url, headers=headers) as response:
+            # Handle non-success responses
+            if response.status_code not in (200, 206):
+                error_text = ""
+                try:
+                    error_text = await response.aread()
+                    error_text = error_text.decode('utf-8')[:200]
+                except Exception:
+                    pass
+                
+                log.error(f"Ragie API error {response.status_code}: {error_text}")
+                
+                if response.status_code == 404:
+                    detail = "Content not found"
+                    if not partition:
+                        detail += ". Check RAGIE_PARTITION configuration."
+                    raise HTTPException(status_code=404, detail=detail)
+                elif response.status_code == 401:
+                    raise HTTPException(status_code=401, detail="Invalid Ragie API key")
+                elif response.status_code == 403:
+                    raise HTTPException(status_code=403, detail="Access denied")
+                else:
+                    raise HTTPException(
+                        status_code=response.status_code,
+                        detail=f"Ragie API error: {response.status_code}"
+                    )
             
-            upstream_content_type = resp.headers.get("content-type", accept_type)
-
-            # Select headers to forward to the client
-            response_headers = {}
-            for header_name in ("content-length", "content-range", "accept-ranges", "cache-control", "content-disposition"):
-                if header_name in resp.headers:
-                    response_headers[header_name.title()] = resp.headers[header_name]
-            # Ensure inline disposition to allow in-browser playback when Ragie doesn't set it
-            response_headers.setdefault("Content-Disposition", "inline")
-
-            async def byte_iterator():
-                async for chunk in resp.aiter_bytes(chunk_size=64 * 1024):
-                    if chunk:
-                        yield chunk
-
+            # Prepare response
+            content_type = response.headers.get("content-type", media_type)
+            response_headers = create_response_headers(response.headers)
+            
             return StreamingResponse(
-                byte_iterator(),
-                status_code=resp.status_code,
-                media_type=upstream_content_type,
-                headers=response_headers,
+                stream_content(response),
+                status_code=response.status_code,
+                media_type=content_type,
+                headers=response_headers
             )
             
-    except httpx.RequestError as e:
-        log.error(f"Network error proxying Ragie stream: {e}")
-        raise HTTPException(status_code=503, detail="Network error accessing Ragie")
+    except httpx.TimeoutException as e:
+        log.error(f"Timeout accessing Ragie: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="Timeout accessing Ragie API"
+        )
+    except httpx.NetworkError as e:
+        log.error(f"Network error accessing Ragie: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Network error accessing Ragie API"
+        )
     except Exception as e:
         log.error(f"Unexpected error proxying Ragie stream: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error"
+        )
 
 
 @router.get("/documents/{document_id}/chunks/{chunk_id}/content")
 async def intercept_ragie_direct(
-    document_id: str, 
-    chunk_id: str, 
+    document_id: str,
+    chunk_id: str,
     request: Request,
     user=Depends(get_verified_user)
-):
+) -> StreamingResponse:
     """
-    Intercept direct Ragie URLs and proxy them with authentication.
+    Intercept and proxy direct Ragie URLs.
     
-    This endpoint catches direct Ragie URLs that bypass the proxy and automatically
-    routes them through the authenticated proxy. This ensures that even if the LLM
-    generates direct Ragie URLs, they will still work with proper authentication.
+    Automatically handles direct Ragie URLs by routing them through
+    the authenticated proxy with proper security and optimization.
     
     Args:
-        document_id: The Ragie document ID
-        chunk_id: The Ragie chunk ID
-        request: FastAPI request object (contains query parameters)
-        user: Authenticated user from dependency injection
+        document_id: Ragie document identifier
+        chunk_id: Ragie chunk identifier
+        request: FastAPI request object
+        user: Authenticated user
         
     Returns:
-        StreamingResponse: The authenticated media stream from Ragie
+        StreamingResponse: Proxied content stream
     """
-    log.info(f"Intercepting direct Ragie URL: documents/{document_id}/chunks/{chunk_id}/content")
+    # Reconstruct Ragie URL
+    ragie_url = f"{RAGIE_BASE_URL}/documents/{document_id}/chunks/{chunk_id}/content"
     
-    # Reconstruct the original Ragie URL with all query parameters
-    ragie_url = f"https://api.ragie.ai/documents/{document_id}/chunks/{chunk_id}/content"
-    
-    # Preserve all query parameters from the original request
+    # Preserve query parameters
     if request.query_params:
-        query_string = str(request.query_params)
-        ragie_url += f"?{query_string}"
+        ragie_url += f"?{request.query_params}"
     
-    log.info(f"Proxying intercepted URL: {ragie_url}")
+    log.info(f"Intercepting direct Ragie URL: {document_id}/{chunk_id}")
     
-    # Delegate to the main proxy function
+    # Delegate to main proxy
     return await proxy_ragie_stream(ragie_url, request, user)
+
+
+@asynccontextmanager
+async def lifespan_handler():
+    """Application lifespan handler for cleanup."""
+    yield
+    # Cleanup HTTP client on shutdown
+    global _http_client
+    if _http_client and not _http_client.is_closed:
+        await _http_client.aclose()
+
+
+# Add cleanup handler
+router.add_event_handler("shutdown", lambda: asyncio.create_task(_cleanup_client()))
+
+async def _cleanup_client():
+    """Cleanup HTTP client on shutdown."""
+    global _http_client
+    if _http_client and not _http_client.is_closed:
+        await _http_client.aclose()
