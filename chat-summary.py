@@ -1169,86 +1169,110 @@ class Filter:
                     # Emit citation events for audio/video streaming and document links
                     # The citations will display in the UI, so we don't need text attribution
                     if source_url and document_name:
+                        # Check if this chunk has any streaming links before processing
+                        has_audio = links.get('self_audio_stream') is not None
+                        has_video = links.get('self_video_stream') is not None
+                        
+                        logger.info(f"[DEBUG] Chunk {chunk_id} - has_audio: {has_audio}, has_video: {has_video}")
+                        logger.info(f"[DEBUG] Available links: {list(links.keys())}")
+                        if links.get('document_audio_stream'):
+                            logger.info(f"[DEBUG] document_audio_stream: {links['document_audio_stream']}")
+                        if links.get('document_video_stream'):
+                            logger.info(f"[DEBUG] document_video_stream: {links['document_video_stream']}")
+                        
                         # Add streaming links using proxy for authentication and SSL compatibility
                         # Route all Ragie URLs through our proxy to handle SSL/TLS properly
-                        if links.get('self_audio_stream'):
-                            # Get the actual streaming URL from Ragie and proxy it
-                            ragie_audio_url = links['self_audio_stream'].get('href')
-                            if ragie_audio_url:
-                                # Route through our proxy to handle SSL/TLS compatibility
-                                base_url = self.valves.base_url.rstrip('/') if self.valves.base_url else "https://chat.pvblic.org"
-                                proxy_audio_url = f"{base_url}/api/proxy/ragie/stream?url={urllib.parse.quote(ragie_audio_url)}"
-                                logger.info(f"Generated proxy audio URL: {proxy_audio_url} from original: {ragie_audio_url}")
-                                
-                                # Emit citation event for guaranteed display of audio streaming link
-                                if __event_emitter__:
-                                    citation_name = f"🎵 {document_name}"
-                                    if start_time is not None and end_time is not None:
-                                        duration = end_time - start_time
-                                        citation_name += f" ({start_time:.1f}s-{end_time:.1f}s, {duration:.1f}s)"
-                                    
-                                    # Format the content for better display
-                                    formatted_content = self._format_citation_content(text, document_name, start_time, end_time, "audio")
-                                    
-                                    await __event_emitter__({
-                                        "type": "citation",
-                                        "data": {
-                                            "document": [formatted_content],
-                                            "metadata": [
-                                                {
-                                                    "date_accessed": datetime.now().isoformat(),
-                                                    "source": self._clean_document_name(document_name),
-                                                    "start_time": start_time,
-                                                    "end_time": end_time,
-                                                    "media_type": "audio",
-                                                    "duration": f"{end_time - start_time:.1f}s" if start_time and end_time else None
-                                                }
-                                            ],
-                                            "source": {
-                                                "name": citation_name,
-                                                "url": proxy_audio_url
-                                            },
-                                        },
-                                    })
                         
-                        if links.get('self_video_stream'):
-                            # Get the actual streaming URL from Ragie and proxy it
-                            ragie_video_url = links['self_video_stream'].get('href')
-                            if ragie_video_url:
-                                # Route through our proxy to handle SSL/TLS compatibility
-                                base_url = self.valves.base_url.rstrip('/') if self.valves.base_url else ""
-                                proxy_video_url = f"{base_url}/api/proxy/ragie/stream?url={urllib.parse.quote(ragie_video_url)}"
-                                
-                                # Emit citation event for guaranteed display of video streaming link
-                                if __event_emitter__:
-                                    citation_name = f"🎬 {document_name}"
-                                    if start_time is not None and end_time is not None:
-                                        duration = end_time - start_time
-                                        citation_name += f" ({start_time:.1f}s-{end_time:.1f}s, {duration:.1f}s)"
-                                    
-                                    # Format the content for better display
-                                    formatted_content = self._format_citation_content(text, document_name, start_time, end_time, "video")
-                                    
-                                    await __event_emitter__({
-                                        "type": "citation",
-                                        "data": {
-                                            "document": [formatted_content],
-                                            "metadata": [
-                                                {
-                                                    "date_accessed": datetime.now().isoformat(),
-                                                    "source": self._clean_document_name(document_name),
-                                                    "start_time": start_time,
-                                                    "end_time": end_time,
-                                                    "media_type": "video",
-                                                    "duration": f"{end_time - start_time:.1f}s" if start_time and end_time else None
-                                                }
-                                            ],
-                                            "source": {
-                                                "name": citation_name,
-                                                "url": proxy_video_url
-                                            },
-                                        },
-                                    })
+                        # Collect both audio and video URLs if available
+                        streaming_urls = {}
+                        
+                        if has_audio and (links.get('self_audio_stream') or links.get('document_audio_stream')):
+                            # Try to extract the correct document ID from the provided links first
+                            ragie_audio_url = None
+                            if links.get('document_audio_stream', {}).get('href'):
+                                ragie_audio_url = links['document_audio_stream']['href']
+                                logger.info(f"[DEBUG] Using document audio URL from Ragie links: {ragie_audio_url}")
+                            else:
+                                # Fallback to constructed URL
+                                ragie_audio_url = f"https://api.ragie.ai/documents/{document_id}/content?media_type=audio/mpeg"
+                                logger.info(f"[DEBUG] Constructed document-level audio URL: {ragie_audio_url}")
+                            
+                            base_url = self.valves.base_url.rstrip('/') if self.valves.base_url else "https://chat.pvblic.org"
+                            proxy_audio_url = f"{base_url}/api/proxy/ragie/stream?url={urllib.parse.quote(ragie_audio_url, safe='')}"
+                            streaming_urls['audio'] = proxy_audio_url
+                            logger.info(f"[DEBUG] Generated proxy audio URL: {proxy_audio_url}")
+                        
+                        if has_video and (links.get('self_video_stream') or links.get('document_video_stream')):
+                            # Try to extract the correct document ID from the provided links first
+                            ragie_video_url = None
+                            if links.get('document_video_stream', {}).get('href'):
+                                ragie_video_url = links['document_video_stream']['href']
+                                logger.info(f"[DEBUG] Using document video URL from Ragie links: {ragie_video_url}")
+                            else:
+                                # Fallback to constructed URL
+                                ragie_video_url = f"https://api.ragie.ai/documents/{document_id}/content?media_type=video/mp4"
+                                logger.info(f"[DEBUG] Constructed document-level video URL: {ragie_video_url}")
+                            
+                            base_url = self.valves.base_url.rstrip('/') if self.valves.base_url else "https://chat.pvblic.org"
+                            proxy_video_url = f"{base_url}/api/proxy/ragie/stream?url={urllib.parse.quote(ragie_video_url, safe='')}"
+                            streaming_urls['video'] = proxy_video_url
+                            logger.info(f"[DEBUG] Generated proxy video URL: {proxy_video_url}")
+                        
+                        # Create a single citation with both audio and video options
+                        if streaming_urls and __event_emitter__:
+                            # Create citation name based on available media
+                            media_icons = []
+                            if 'audio' in streaming_urls:
+                                media_icons.append("🎵")
+                            if 'video' in streaming_urls:
+                                media_icons.append("🎬")
+                            
+                            citation_name = f"{''.join(media_icons)} {document_name}"
+                            if start_time is not None and end_time is not None:
+                                duration = end_time - start_time
+                                citation_name += f" ({start_time:.1f}s-{end_time:.1f}s, {duration:.1f}s)"
+                            
+                            # Format the content for better display
+                            media_type = "video" if 'video' in streaming_urls else "audio"
+                            formatted_content = self._format_citation_content(text, document_name, start_time, end_time, media_type)
+                            
+                            # Use video URL as primary, audio as fallback
+                            primary_url = streaming_urls.get('video', streaming_urls.get('audio'))
+                            
+                            # Note: Ragie's streaming URLs are currently returning 404 errors
+                            # This appears to be a data consistency issue on Ragie's side
+                            # For now, we'll provide both streaming URLs and Google Drive fallback
+                            
+                            await __event_emitter__({
+                                "type": "citation",
+                                "data": {
+                                    "document": [formatted_content],
+                                    "metadata": [
+                                        {
+                                            "date_accessed": datetime.now().isoformat(),
+                                            "source": self._clean_document_name(document_name),
+                                            "start_time": start_time,
+                                            "end_time": end_time,
+                                            "media_type": media_type,
+                                            "duration": f"{end_time - start_time:.1f}s" if start_time and end_time else None,
+                                            "embed_player": True,
+                                            "stream_url": primary_url,
+                                            "audio_url": streaming_urls.get('audio'),
+                                            "video_url": streaming_urls.get('video'),
+                                            "fallback_url": source_url,  # Google Drive link as fallback
+                                            "streaming_note": "Note: Streaming URLs may not work due to Ragie API issues. Use Google Drive link as fallback."
+                                        }
+                                    ],
+                                    "source": {
+                                        "name": citation_name,
+                                        "url": primary_url,
+                                        "display_type": "embedded_player",
+                                        "audio_url": streaming_urls.get('audio'),
+                                        "video_url": streaming_urls.get('video'),
+                                        "fallback_url": source_url  # Google Drive link as fallback
+                                    },
+                                },
+                            })
                         
                         # Emit citation event for the source document (Google Drive link)
                         if __event_emitter__:
@@ -1278,21 +1302,28 @@ class Filter:
                         
                         # Enhanced logging for audio/video content
                         media_info = []
-                        if links.get('self_audio_stream'):
+                        if has_audio:
                             if start_time is not None and end_time is not None:
                                 duration = end_time - start_time
-                                media_info.append(f"🎵 Direct audio stream ({start_time:.1f}s-{end_time:.1f}s, {duration:.1f}s)")
+                                media_info.append(f"🎵 Audio stream ({start_time:.1f}s-{end_time:.1f}s, {duration:.1f}s)")
                             else:
-                                media_info.append("🎵 Direct audio stream")
-                        if links.get('self_video_stream'):
+                                media_info.append("🎵 Audio stream")
+                        if has_video:
                             if start_time is not None and end_time is not None:
                                 duration = end_time - start_time
-                                media_info.append(f"🎬 Direct video stream ({start_time:.1f}s-{end_time:.1f}s, {duration:.1f}s)")
+                                media_info.append(f"🎬 Video stream ({start_time:.1f}s-{end_time:.1f}s, {duration:.1f}s)")
                             else:
-                                media_info.append("🎬 Direct video stream")
+                                media_info.append("🎬 Video stream")
+                        
+                        # Show what type of content this is
+                        content_type = "📄 Document"
+                        if has_audio or has_video:
+                            content_type = "🎬 Media"
+                        elif 'self_image' in links:
+                            content_type = "🖼️ Image"
                         
                         media_str = f" + {', '.join(media_info)}" if media_info else ""
-                        logger.info(f"[DEBUG] ✅ Emitted citation events for: {document_name} -> {source_url}{media_str}")
+                        logger.info(f"[DEBUG] ✅ {content_type}: {document_name} -> {source_url}{media_str}")
                     else:
                         attributed_text = text
                         logger.info(f"[DEBUG] No citation events - missing document name or URL")

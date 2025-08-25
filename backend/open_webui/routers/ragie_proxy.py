@@ -52,8 +52,10 @@ async def proxy_ragie_stream(url: str, request: Request, user=Depends(get_verifi
         HTTPException: 400 for invalid URLs, 500 for configuration errors,
                       503 for network errors
     """
-    # Log the authenticated user
+    # Log the authenticated user and URL details
     log.info(f"Ragie proxy request from user: {user.email if user else 'unknown'}")
+    log.info(f"[DEBUG] Received URL parameter: {url}")
+    log.info(f"[DEBUG] URL length: {len(url)}")
     
     # Get Ragie API key from environment at runtime
     RAGIE_API_KEY = os.getenv("RAGIE_API_KEY", "")
@@ -80,6 +82,16 @@ async def proxy_ragie_stream(url: str, request: Request, user=Depends(get_verifi
     
     # Build upstream headers
     headers = {"Authorization": f"Bearer {RAGIE_API_KEY}", "Accept": accept_type}
+    
+    # Add partition header - this is required for Ragie streaming to work
+    # Without this header, Ragie defaults to "default" partition and returns 404
+    ragie_partition = os.getenv("RAGIE_PARTITION", "")
+    if ragie_partition:
+        headers["partition"] = ragie_partition
+        log.info(f"Using Ragie partition: {ragie_partition}")
+    else:
+        log.warning("RAGIE_PARTITION not set - streaming may fail with 404 errors")
+    
     # Forward range requests for proper media seeking
     range_header = request.headers.get("range")
     if range_header:
@@ -104,34 +116,36 @@ async def proxy_ragie_stream(url: str, request: Request, user=Depends(get_verifi
                     if resp.status_code == 404:
                         # Log the specific URL that failed for debugging
                         log.warning(f"Ragie chunk not found (404): {url}")
+                        if not ragie_partition:
+                            log.error("404 error likely due to missing RAGIE_PARTITION environment variable")
                         raise HTTPException(
                             status_code=404, 
-                            detail="Audio/video segment temporarily unavailable. The content may be re-indexing. Please try again in a moment or search for updated content."
+                            detail="Audio/video segment not found. Check RAGIE_PARTITION configuration."
                         )
                     else:
                         raise HTTPException(status_code=resp.status_code, detail="Failed to stream from Ragie")
+            
+            upstream_content_type = resp.headers.get("content-type", accept_type)
 
-                upstream_content_type = resp.headers.get("content-type", accept_type)
+            # Select headers to forward to the client
+            response_headers = {}
+            for header_name in ("content-length", "content-range", "accept-ranges", "cache-control", "content-disposition"):
+                if header_name in resp.headers:
+                    response_headers[header_name.title()] = resp.headers[header_name]
+            # Ensure inline disposition to allow in-browser playback when Ragie doesn't set it
+            response_headers.setdefault("Content-Disposition", "inline")
 
-                # Select headers to forward to the client
-                response_headers = {}
-                for header_name in ("content-length", "content-range", "accept-ranges", "cache-control", "content-disposition"):
-                    if header_name in resp.headers:
-                        response_headers[header_name.title()] = resp.headers[header_name]
-                # Ensure inline disposition to allow in-browser playback when Ragie doesn't set it
-                response_headers.setdefault("Content-Disposition", "inline")
+            async def byte_iterator():
+                async for chunk in resp.aiter_bytes(chunk_size=64 * 1024):
+                    if chunk:
+                        yield chunk
 
-                async def byte_iterator():
-                    async for chunk in resp.aiter_bytes(chunk_size=64 * 1024):
-                        if chunk:
-                            yield chunk
-
-                return StreamingResponse(
-                    byte_iterator(),
-                    status_code=resp.status_code,
-                    media_type=upstream_content_type,
-                    headers=response_headers,
-                )
+            return StreamingResponse(
+                byte_iterator(),
+                status_code=resp.status_code,
+                media_type=upstream_content_type,
+                headers=response_headers,
+            )
             
     except httpx.RequestError as e:
         log.error(f"Network error proxying Ragie stream: {e}")
