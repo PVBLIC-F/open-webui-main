@@ -365,6 +365,9 @@
 												.replace(/\\u[\da-f]{4}/gi, '')
 												.replace(/\s+/g, ' ')
 												.trim()}
+											{@const docId = extractDocumentId(document.source) || extractDocumentId(document.metadata) || extractDocumentId(document)}
+											{@const videoUrl = document.source?.video_url || document.metadata?.video_url || (docId && parsedContent.video_description ? constructProxyUrl(docId, 'video/mp4') : null)}
+											{@const fallbackUrl = document.source?.fallback_url || document.metadata?.fallback_url}
 											<div>
 												<div class="flex items-center gap-2 mb-3">
 													<span class="text-lg">🎬</span>
@@ -377,23 +380,20 @@
 												</div>
 												
 												<!-- Embedded Video Player -->
-												{@const docId = extractDocumentId(document.source) || extractDocumentId(document.metadata) || extractDocumentId(document)}
-												{@const videoUrl = document.source?.video_url || document.metadata?.video_url || (docId && parsedContent.video_description ? constructProxyUrl(docId, 'video/mp4') : null)}
-												{@const fallbackUrl = document.source?.fallback_url || document.metadata?.fallback_url}
-								{@const videoDebug = (() => {
-									console.log('=== Video URL Debug ===');
-									console.log('Full document:', document);
-									console.log('document.source:', document.source);
-									console.log('document.metadata:', document.metadata);
-									console.log('Extracted docId:', docId);
-									console.log('document.source?.video_url:', document.source?.video_url);
-									console.log('document.metadata?.video_url:', document.metadata?.video_url);
-									console.log('Constructed videoUrl:', videoUrl);
-									console.log('Final fallbackUrl:', fallbackUrl);
-									console.log('parsedContent.video_description exists:', !!parsedContent.video_description);
-									return true;
-								})()}
 												{#if videoUrl || fallbackUrl}
+													{@const videoDebug = (() => {
+														console.log('=== Video URL Debug ===');
+														console.log('Full document:', document);
+														console.log('document.source:', document.source);
+														console.log('document.metadata:', document.metadata);
+														console.log('Extracted docId:', docId);
+														console.log('document.source?.video_url:', document.source?.video_url);
+														console.log('document.metadata?.video_url:', document.metadata?.video_url);
+														console.log('Constructed videoUrl:', videoUrl);
+														console.log('Final fallbackUrl:', fallbackUrl);
+														console.log('parsedContent.video_description exists:', !!parsedContent.video_description);
+														return true;
+													})()}
 													<div class="mt-4 pl-6">
 														<div class="bg-black rounded-lg overflow-hidden shadow-lg">
 															<video 
@@ -477,6 +477,9 @@
 												.replace(/\\u[\da-f]{4}/gi, '')
 												.replace(/\s+/g, ' ')
 												.trim()}
+											{@const audioDocId = extractDocumentId(document.source) || extractDocumentId(document.metadata) || extractDocumentId(document)}
+											{@const audioUrl = document.source?.audio_url || document.metadata?.audio_url || (audioDocId && parsedContent.audio_transcript ? constructProxyUrl(audioDocId, 'audio/mpeg') : null)}
+											{@const audioFallbackUrl = document.source?.fallback_url || document.metadata?.fallback_url}
 											<div>
 												<div class="flex items-center gap-2 mb-3">
 													<span class="text-lg">🎵</span>
@@ -489,23 +492,20 @@
 												</div>
 												
 												<!-- Embedded Audio Player -->
-												{@const audioDocId = extractDocumentId(document.source) || extractDocumentId(document.metadata) || extractDocumentId(document)}
-												{@const audioUrl = document.source?.audio_url || document.metadata?.audio_url || (audioDocId && parsedContent.audio_transcript ? constructProxyUrl(audioDocId, 'audio/mpeg') : null)}
-												{@const audioFallbackUrl = document.source?.fallback_url || document.metadata?.fallback_url}
-												{@const audioDebug = (() => {
-													console.log('=== Audio URL Debug ===');
-													console.log('Full document:', document);
-													console.log('document.source:', document.source);
-													console.log('document.metadata:', document.metadata);
-													console.log('Extracted audioDocId:', audioDocId);
-													console.log('document.source?.audio_url:', document.source?.audio_url);
-													console.log('document.metadata?.audio_url:', document.metadata?.audio_url);
-													console.log('Constructed audioUrl:', audioUrl);
-													console.log('Final audioFallbackUrl:', audioFallbackUrl);
-													console.log('parsedContent.audio_transcript exists:', !!parsedContent.audio_transcript);
-													return true;
-												})()}
 												{#if audioUrl || audioFallbackUrl}
+													{@const audioDebug = (() => {
+														console.log('=== Audio URL Debug ===');
+														console.log('Full document:', document);
+														console.log('document.source:', document.source);
+														console.log('document.metadata:', document.metadata);
+														console.log('Extracted audioDocId:', audioDocId);
+														console.log('document.source?.audio_url:', document.source?.audio_url);
+														console.log('document.metadata?.audio_url:', document.metadata?.audio_url);
+														console.log('Constructed audioUrl:', audioUrl);
+														console.log('Final audioFallbackUrl:', audioFallbackUrl);
+														console.log('parsedContent.audio_transcript exists:', !!parsedContent.audio_transcript);
+														return true;
+													})()}
 													<div class="mt-4 pl-6">
 														<div class="bg-gray-100 dark:bg-gray-800 rounded-lg p-4 shadow-inner">
 															<audio 
