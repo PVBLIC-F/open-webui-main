@@ -15,6 +15,7 @@
 	export let showRelevance = true;
 
 	let mergedDocuments = [];
+	let documentsArray = [];
 
 	function calculatePercentage(distance: number) {
 		if (typeof distance !== 'number') return null;
@@ -43,11 +44,22 @@
 		console.log('Citation.document length:', Array.isArray(citation.document) ? citation.document.length : 'Not an array');
 		
 		// Convert object to array if needed
-		let documentsArray = citation.document;
+		documentsArray = citation.document;
+		console.log('Initial documentsArray:', documentsArray);
+		console.log('Initial documentsArray type:', typeof documentsArray);
+		console.log('Initial documentsArray isArray:', Array.isArray(documentsArray));
+		
 		if (citation.document && typeof citation.document === 'object' && !Array.isArray(citation.document)) {
+			console.log('Detected object, checking for length property...');
 			// If it's an object with numeric keys, convert to array
 			if (citation.document.length && typeof citation.document.length === 'number') {
-				documentsArray = Array.from({ length: citation.document.length }, (_, i) => citation.document[i]);
+				console.log('Object has length property:', citation.document.length);
+				console.log('Object keys:', Object.keys(citation.document));
+				documentsArray = Array.from({ length: citation.document.length }, (_, i) => {
+					const item = citation.document[i];
+					console.log(`Item ${i}:`, item);
+					return item;
+				});
 				console.log('Converted object to array:', documentsArray);
 			} else {
 				// If it's a single object, wrap it in an array
@@ -55,6 +67,11 @@
 				console.log('Wrapped single object in array:', documentsArray);
 			}
 		}
+		
+		console.log('Final documentsArray:', documentsArray);
+		console.log('Final documentsArray type:', typeof documentsArray);
+		console.log('Final documentsArray isArray:', Array.isArray(documentsArray));
+		console.log('Final documentsArray length:', documentsArray?.length);
 		
 		mergedDocuments = documentsArray?.map((c, i) => {
 			const doc = {
@@ -111,7 +128,9 @@
 				<div class="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-700 rounded p-2 mb-2 text-xs">
 					<strong>Debug:</strong> mergedDocuments.length = {mergedDocuments?.length || 0} | 
 					citation.document type = {typeof citation?.document} | 
-					citation.document length = {Array.isArray(citation?.document) ? citation?.document?.length : 'Not array'}
+					citation.document length = {citation?.document?.length || 'No length'} | 
+					documentsArray type = {typeof documentsArray} | 
+					documentsArray length = {Array.isArray(documentsArray) ? documentsArray?.length : 'Not array'}
 				</div>
 				
 				{#each mergedDocuments as document, documentIdx}
@@ -214,11 +233,13 @@
 								title={$i18n.t('Content')}
 							></iframe>
 						{:else}
-							{@const isJsonContent = document.document.trim().startsWith('{')}
+							{@const isJsonContent = document.document && typeof document.document === 'string' && document.document.trim().startsWith('{')}
 							{#if isJsonContent}
 								{@const parsedContent = (() => {
 									try {
+										console.log('Attempting to parse JSON:', document.document);
 										const parsed = JSON.parse(document.document);
+										console.log('Parsed content:', parsed);
 										// Validate that it's an object with expected properties
 										return typeof parsed === 'object' && parsed !== null ? parsed : null;
 									} catch (error) {
@@ -248,7 +269,7 @@
 													<span class="text-lg">🎬</span>
 													<span class="text-sm font-semibold text-gray-700 dark:text-gray-300">Video Content</span>
 												</div>
-												<div class="text-sm dark:text-gray-200 leading-relaxed pl-6 border-l-2 border-blue-200 dark:border-blue-600 max-h-96 overflow-y-auto">
+												<div class="text-sm dark:text-gray-200 leading-relaxed pl-6 border-l-2 border-blue-200 dark:border-blue-600">
 													<div class="whitespace-pre-wrap break-words">
 														{cleanDescription}
 													</div>
@@ -295,7 +316,7 @@
 													<span class="text-lg">🎵</span>
 													<span class="text-sm font-semibold text-gray-700 dark:text-gray-300">Audio Transcript</span>
 												</div>
-												<div class="text-sm dark:text-gray-200 leading-relaxed pl-6 border-l-2 border-green-200 dark:border-green-600 max-h-96 overflow-y-auto">
+												<div class="text-sm dark:text-gray-200 leading-relaxed pl-6 border-l-2 border-green-200 dark:border-green-600">
 													<div class="whitespace-pre-wrap break-words">
 														{cleanTranscript}
 													</div>
@@ -337,7 +358,7 @@
 											<span class="text-lg">📄</span>
 											<span class="text-sm font-semibold text-gray-700 dark:text-gray-300">Raw Content</span>
 										</div>
-										<div class="text-sm dark:text-gray-300 leading-relaxed pl-6 border-l-2 border-gray-200 dark:border-gray-600 max-h-96 overflow-y-auto">
+										<div class="text-sm dark:text-gray-300 leading-relaxed pl-6 border-l-2 border-gray-200 dark:border-gray-600">
 											<div class="whitespace-pre-wrap break-words">
 												{document.document}
 											</div>
@@ -351,7 +372,7 @@
 										<span class="text-lg">📝</span>
 										<span class="text-sm font-semibold text-gray-700 dark:text-gray-300">Text Content</span>
 									</div>
-									<div class="text-sm dark:text-gray-300 leading-relaxed pl-6 border-l-2 border-gray-200 dark:border-gray-600 max-h-96 overflow-y-auto">
+									<div class="text-sm dark:text-gray-300 leading-relaxed pl-6 border-l-2 border-gray-200 dark:border-gray-600">
 										<div class="whitespace-pre-wrap break-words">
 											{document.document}
 										</div>
