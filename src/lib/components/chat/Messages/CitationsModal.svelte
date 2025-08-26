@@ -234,6 +234,14 @@
 							></iframe>
 						{:else}
 							{@const isJsonContent = document.document && typeof document.document === 'string' && document.document.trim().startsWith('{')}
+							{@const debugContent = (() => {
+								console.log('=== Content Debug ===');
+								console.log('document.document:', document.document);
+								console.log('document.document type:', typeof document.document);
+								console.log('document.document starts with {:', document.document?.trim().startsWith('{'));
+								console.log('isJsonContent:', isJsonContent);
+								return true;
+							})()}
 							{#if isJsonContent}
 								{@const parsedContent = (() => {
 									try {
@@ -353,6 +361,13 @@
 									</div>
 								{:else}
 									<!-- Fallback for non-media JSON or failed parsing -->
+									{@const fallbackDebug = (() => {
+										console.log('=== Fallback Debug ===');
+										console.log('Content fell through to fallback section');
+										console.log('document.document:', document.document);
+										console.log('parsedContent was falsy or missing video_description/audio_transcript');
+										return true;
+									})()}
 									<div class="bg-gray-50 dark:bg-gray-800 rounded-lg p-4 mt-2">
 										<div class="flex items-center gap-2 mb-3">
 											<span class="text-lg">📄</span>
