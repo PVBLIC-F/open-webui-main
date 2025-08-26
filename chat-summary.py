@@ -1230,13 +1230,11 @@ class Filter:
                             else:
                                 media_type = "document"
                             
-                            # Format the content for better display
-                            formatted_content = self._format_citation_content(text, document_name, start_time, end_time, media_type)
-                            
+                            # Send raw text so frontend can parse JSON and format appropriately
                             await __event_emitter__({
                                 "type": "citation",
                                 "data": {
-                                    "document": [formatted_content],
+                                    "document": [text],  # Send raw text, not formatted
                                     "metadata": [
                                         {
                                             "date_accessed": datetime.now().isoformat(),
