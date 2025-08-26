@@ -199,6 +199,7 @@
 												 parsedContent.video_description ? 'Video Content' : 'Audio Content'}
 											</span>
 										</div>
+										
 										{#if parsedContent.video_description}
 											{@const cleanDescription = parsedContent.video_description
 												.replace(/\*\*([^*]+)\*\*/g, '$1')
@@ -292,8 +293,6 @@
 												</div>
 											</div>
 										{/if}
-										
-
 									</div>
 								{:else}
 									<!-- Fallback for non-media JSON or failed parsing -->
