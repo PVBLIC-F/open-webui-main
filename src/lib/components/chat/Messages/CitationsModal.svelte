@@ -34,6 +34,34 @@
 		return 'bg-red-200 dark:bg-red-800 text-red-800 dark:text-red-200';
 	}
 
+	// Helper functions for constructing proxy URLs
+	function constructProxyUrl(docId: string, mediaType: string) {
+		if (!docId) return null;
+		const baseUrl = `/api/proxy/ragie/stream`;
+		const ragieUrl = `https://api.ragie.ai/documents/${docId}/content?media_type=${encodeURIComponent(mediaType)}`;
+		return `${baseUrl}?url=${encodeURIComponent(ragieUrl)}`;
+	}
+	
+	function extractDocumentId(source: any) {
+		// Try to extract document ID from various possible locations
+		if (source?.id) return source.id;
+		if (source?.document_id) return source.document_id;
+		// Try to extract from URL if present
+		if (source?.url) {
+			const match = source.url.match(/documents\/([^\/]+)/);
+			if (match) return match[1];
+		}
+		// Try to extract from source string if it's a document ID
+		if (typeof source === 'string' && source.match(/^[a-f0-9-]{36}$/)) {
+			return source;
+		}
+		// Try metadata.source if it's a document ID
+		if (source?.source && typeof source.source === 'string' && source.source.match(/^[a-f0-9-]{36}$/)) {
+			return source.source;
+		}
+		return null;
+	}
+
 	$: if (citation) {
 		console.log('=== CitationsModal Debug ===');
 		console.log('Citation prop received:', citation);
@@ -252,39 +280,60 @@
 										return typeof parsed === 'object' && parsed !== null ? parsed : null;
 									} catch (error) {
 										console.warn('Failed to parse JSON content:', error);
-										// Try to extract content from malformed JSON using regex patterns
+										// Try to extract content from malformed JSON using more robust regex patterns
 										const content = document.document;
 										console.log('Attempting to extract from malformed JSON:', content);
 										
-										// Extract video_description using regex
-										const videoDescMatch = content.match(/"video_description":\s*"([^"]*(?:"[^"]*"[^"]*)*)"/);
-										const audioTranscriptMatch = content.match(/"audio_transcript":\s*"([^"]*(?:"[^"]*"[^"]*)*)"/);
+										// More robust extraction patterns
+										const extracted = {};
 										
-										if (videoDescMatch || audioTranscriptMatch) {
-											const extracted = {};
-											if (videoDescMatch) {
-												extracted.video_description = videoDescMatch[1];
+										// Extract video_description - handle various formats including truncated JSON
+										const videoPatterns = [
+											/"video_description"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/,
+											/"video_description":\s*"([^"]+)/,
+											/video_description['":\s]+([^"'\n]+)/i
+										];
+										
+										for (const pattern of videoPatterns) {
+											const match = content.match(pattern);
+											if (match) {
+												extracted.video_description = match[1].replace(/\\"/g, '"').replace(/\\n/g, '\n');
 												console.log('Extracted video_description:', extracted.video_description);
+												break;
 											}
-											if (audioTranscriptMatch) {
-												extracted.audio_transcript = audioTranscriptMatch[1];
+										}
+										
+										// Extract audio_transcript - handle various formats including truncated JSON
+										const audioPatterns = [
+											/"audio_transcript"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/,
+											/"audio_transcript":\s*"([^"]+)/,
+											/audio_transcript['":\s]+([^"'\n]+)/i
+										];
+										
+										for (const pattern of audioPatterns) {
+											const match = content.match(pattern);
+											if (match) {
+												extracted.audio_transcript = match[1].replace(/\\"/g, '"').replace(/\\n/g, '\n');
 												console.log('Extracted audio_transcript:', extracted.audio_transcript);
+												break;
 											}
+										}
+										
+										// If we found anything, return it
+										if (Object.keys(extracted).length > 0) {
 											return extracted;
 										}
 										
-										// Fallback: simple string extraction
-										const videoDescStart = content.indexOf('"video_description": "');
-										if (videoDescStart !== -1) {
-											const startPos = videoDescStart + '"video_description": "'.length;
-											const extractedDescription = content.substring(startPos);
-											console.log('Extracted video_description from malformed JSON:', extractedDescription);
-											return { video_description: extractedDescription };
+										// Final fallback: if content looks like it contains relevant data, show it as-is
+										if (content.includes('video_description') || content.includes('audio_transcript')) {
+											console.log('Showing raw content as fallback');
+											return { raw_content: content };
 										}
+										
 										return null;
 									}
 								})()}
-								{#if parsedContent && (parsedContent.video_description || parsedContent.audio_transcript)}
+								{#if parsedContent && (parsedContent.video_description || parsedContent.audio_transcript || parsedContent.raw_content)}
 									<div class="bg-gray-50 dark:bg-gray-800 rounded-lg p-4 mt-2 space-y-4">
 										<!-- Debug: Show available metadata -->
 										<div class="bg-yellow-100 dark:bg-yellow-900 p-3 rounded-lg mb-4 text-xs">
@@ -295,7 +344,10 @@
 											source.url: {document.source?.url || 'NOT SET'}<br/>
 											source.video_url: {document.source?.video_url || 'NOT SET'}<br/>
 											source.audio_url: {document.source?.audio_url || 'NOT SET'}<br/>
-											source.fallback_url: {document.source?.fallback_url || 'NOT SET'}
+											source.fallback_url: {document.source?.fallback_url || 'NOT SET'}<br/>
+											<br/>
+											<strong>Full document structure:</strong><br/>
+											<pre>{JSON.stringify(document, null, 2)}</pre>
 										</div>
 										
 										<!-- Content Type Indicator -->
@@ -325,7 +377,23 @@
 												</div>
 												
 												<!-- Embedded Video Player -->
-												{#if document.source?.video_url}
+												{@const docId = extractDocumentId(document.source) || extractDocumentId(document.metadata) || extractDocumentId(document)}
+												{@const videoUrl = document.source?.video_url || document.metadata?.video_url || (docId && parsedContent.video_description ? constructProxyUrl(docId, 'video/mp4') : null)}
+												{@const fallbackUrl = document.source?.fallback_url || document.metadata?.fallback_url}
+								{@const videoDebug = (() => {
+									console.log('=== Video URL Debug ===');
+									console.log('Full document:', document);
+									console.log('document.source:', document.source);
+									console.log('document.metadata:', document.metadata);
+									console.log('Extracted docId:', docId);
+									console.log('document.source?.video_url:', document.source?.video_url);
+									console.log('document.metadata?.video_url:', document.metadata?.video_url);
+									console.log('Constructed videoUrl:', videoUrl);
+									console.log('Final fallbackUrl:', fallbackUrl);
+									console.log('parsedContent.video_description exists:', !!parsedContent.video_description);
+									return true;
+								})()}
+												{#if videoUrl || fallbackUrl}
 													<div class="mt-4 pl-6">
 														<div class="bg-black rounded-lg overflow-hidden shadow-lg">
 															<video 
@@ -334,15 +402,17 @@
 																class="w-full max-h-96"
 																poster=""
 															>
-																<source src={document.source.video_url} type="video/mp4" />
-																{#if document.source?.fallback_url}
-																	<source src={document.source.fallback_url} type="video/mp4" />
+																{#if videoUrl}
+																	<source src={videoUrl} type="video/mp4" />
+																{/if}
+																{#if fallbackUrl}
+																	<source src={fallbackUrl} type="video/mp4" />
 																{/if}
 																<!-- Add empty track for accessibility -->
 																<track kind="captions" />
 																<p class="text-sm text-gray-500 p-4">
 																	Your browser doesn't support embedded video. 
-																	<a href={document.source?.fallback_url || document.source?.video_url} class="text-blue-500 hover:underline" target="_blank">
+																	<a href={fallbackUrl || videoUrl} class="text-blue-500 hover:underline" target="_blank">
 																		Click here to view the video.
 																	</a>
 																</p>
@@ -362,9 +432,9 @@
 												<!-- Show video streaming links -->
 												<div class="mt-3 pl-6 space-y-2">
 													<!-- External streaming link (if proxy fails) -->
-													{#if document.source?.video_url}
+													{#if videoUrl}
 														<a 
-															href={document.source.video_url} 
+															href={videoUrl} 
 															class="inline-flex items-center gap-2 px-3 py-2 bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 rounded-lg hover:bg-blue-200 dark:hover:bg-blue-800 transition-colors text-sm font-medium"
 															target="_blank"
 														>
@@ -374,9 +444,9 @@
 													{/if}
 													
 													<!-- Google Drive fallback -->
-													{#if document.source?.fallback_url}
+													{#if fallbackUrl}
 														<a 
-															href={document.source.fallback_url} 
+															href={fallbackUrl} 
 															class="inline-flex items-center gap-2 px-3 py-2 bg-blue-50 dark:bg-blue-800 text-blue-600 dark:text-blue-200 rounded-lg hover:bg-blue-100 dark:hover:bg-blue-700 transition-colors text-sm border border-blue-200 dark:border-blue-600"
 															target="_blank"
 														>
@@ -419,7 +489,23 @@
 												</div>
 												
 												<!-- Embedded Audio Player -->
-												{#if document.source?.audio_url}
+												{@const audioDocId = extractDocumentId(document.source) || extractDocumentId(document.metadata) || extractDocumentId(document)}
+												{@const audioUrl = document.source?.audio_url || document.metadata?.audio_url || (audioDocId && parsedContent.audio_transcript ? constructProxyUrl(audioDocId, 'audio/mpeg') : null)}
+												{@const audioFallbackUrl = document.source?.fallback_url || document.metadata?.fallback_url}
+												{@const audioDebug = (() => {
+													console.log('=== Audio URL Debug ===');
+													console.log('Full document:', document);
+													console.log('document.source:', document.source);
+													console.log('document.metadata:', document.metadata);
+													console.log('Extracted audioDocId:', audioDocId);
+													console.log('document.source?.audio_url:', document.source?.audio_url);
+													console.log('document.metadata?.audio_url:', document.metadata?.audio_url);
+													console.log('Constructed audioUrl:', audioUrl);
+													console.log('Final audioFallbackUrl:', audioFallbackUrl);
+													console.log('parsedContent.audio_transcript exists:', !!parsedContent.audio_transcript);
+													return true;
+												})()}
+												{#if audioUrl || audioFallbackUrl}
 													<div class="mt-4 pl-6">
 														<div class="bg-gray-100 dark:bg-gray-800 rounded-lg p-4 shadow-inner">
 															<audio 
@@ -427,13 +513,15 @@
 																preload="metadata"
 																class="w-full"
 															>
-																<source src={document.source.audio_url} type="audio/mpeg" />
-																{#if document.source?.fallback_url}
-																	<source src={document.source.fallback_url} />
+																{#if audioUrl}
+																	<source src={audioUrl} type="audio/mpeg" />
+																{/if}
+																{#if audioFallbackUrl}
+																	<source src={audioFallbackUrl} />
 																{/if}
 																<p class="text-sm text-gray-500">
 																	Your browser doesn't support embedded audio. 
-																	<a href={document.source?.fallback_url || document.source?.audio_url} class="text-blue-500 hover:underline" target="_blank">
+																	<a href={audioFallbackUrl || audioUrl} class="text-blue-500 hover:underline" target="_blank">
 																		Click here to play the audio.
 																	</a>
 																</p>
@@ -453,9 +541,9 @@
 												<!-- Show audio streaming links -->
 												<div class="mt-3 pl-6 space-y-2">
 													<!-- External streaming link (if proxy fails) -->
-													{#if document.source?.audio_url}
+													{#if audioUrl}
 														<a 
-															href={document.source.audio_url} 
+															href={audioUrl} 
 															class="inline-flex items-center gap-2 px-3 py-2 bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300 rounded-lg hover:bg-green-200 dark:hover:bg-green-800 transition-colors text-sm font-medium"
 															target="_blank"
 														>
@@ -465,9 +553,9 @@
 													{/if}
 													
 													<!-- Google Drive fallback -->
-													{#if document.source?.fallback_url}
+													{#if audioFallbackUrl}
 														<a 
-															href={document.source.fallback_url} 
+															href={audioFallbackUrl} 
 															class="inline-flex items-center gap-2 px-3 py-2 bg-green-50 dark:bg-green-800 text-green-600 dark:text-green-200 rounded-lg hover:bg-green-100 dark:hover:bg-green-700 transition-colors text-sm border border-green-200 dark:border-green-600"
 															target="_blank"
 														>
@@ -490,6 +578,27 @@
 												</div>
 											</div>
 										{/if}
+										
+										{#if parsedContent.raw_content && !(parsedContent.video_description || parsedContent.audio_transcript)}
+											<div>
+												<div class="flex items-center gap-2 mb-3">
+													<span class="text-lg">📄</span>
+													<span class="text-sm font-semibold text-gray-700 dark:text-gray-300">Content</span>
+												</div>
+												<div class="text-sm dark:text-gray-200 leading-relaxed pl-6 border-l-2 border-gray-300 dark:border-gray-600">
+													<pre class="whitespace-pre-wrap break-words text-xs font-mono bg-gray-100 dark:bg-gray-900 p-3 rounded overflow-x-auto">{parsedContent.raw_content}</pre>
+												</div>
+											</div>
+										{/if}
+									</div>
+								{:else if parsedContent && parsedContent.raw_content}
+									<!-- Raw content extracted from malformed JSON -->
+									<div class="bg-gray-50 dark:bg-gray-800 rounded-lg p-4 mt-2">
+										<div class="flex items-center gap-2 mb-3">
+											<span class="text-lg">📄</span>
+											<span class="text-sm font-semibold text-gray-700 dark:text-gray-300">Content (Extracted)</span>
+										</div>
+										<pre class="whitespace-pre-wrap break-words text-xs font-mono bg-gray-100 dark:bg-gray-900 p-3 rounded overflow-x-auto">{parsedContent.raw_content}</pre>
 									</div>
 								{:else}
 									<!-- Fallback for non-media JSON or failed parsing -->
