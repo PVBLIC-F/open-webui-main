@@ -26,7 +26,7 @@ from fastapi.responses import StreamingResponse
 import logging
 
 from open_webui.env import SRC_LOG_LEVELS
-from open_webui.utils.auth import get_verified_user
+# No auth required - this is a public endpoint for media streaming
 
 # Configure router and logging
 router = APIRouter(tags=["ragie"], prefix="/api")
@@ -213,19 +213,23 @@ def create_response_headers(upstream_headers: httpx.Headers) -> Dict[str, str]:
 @router.get("/proxy/ragie/stream")
 async def proxy_ragie_stream(
     url: str, 
-    request: Request, 
-    user=Depends(get_verified_user)
+    request: Request
 ) -> StreamingResponse:
     """
     High-performance proxy for Ragie streaming content.
     
-    Provides authenticated access to Ragie's streaming API with optimized
+    Provides access to Ragie's streaming API with optimized
     connection pooling, error handling, and security validation.
+    
+    NOTE: This endpoint is public to support HTML5 video/audio elements
+    which cannot send custom headers. Security is maintained by:
+    - Only proxying validated Ragie API URLs
+    - Rate limiting at infrastructure level
+    - URLs are time-limited by Ragie
     
     Args:
         url: Ragie streaming URL to proxy
         request: FastAPI request object
-        user: Authenticated user
         
     Returns:
         StreamingResponse: Streamed media content
@@ -269,7 +273,7 @@ async def proxy_ragie_stream(
         range_header=request.headers.get("range")
     )
     
-    log.info(f"Proxying Ragie stream for user {user.email}: {url[:100]}...")
+    log.info(f"Proxying Ragie stream: {url[:100]}...")
     
     try:
         client = await get_http_client()
@@ -339,8 +343,7 @@ async def proxy_ragie_stream(
 async def intercept_ragie_direct(
     document_id: str,
     chunk_id: str,
-    request: Request,
-    user=Depends(get_verified_user)
+    request: Request
 ) -> StreamingResponse:
     """
     Intercept and proxy direct Ragie URLs.
@@ -352,7 +355,7 @@ async def intercept_ragie_direct(
         document_id: Ragie document identifier
         chunk_id: Ragie chunk identifier
         request: FastAPI request object
-        user: Authenticated user
+
         
     Returns:
         StreamingResponse: Proxied content stream
@@ -367,7 +370,7 @@ async def intercept_ragie_direct(
     log.info(f"Intercepting direct Ragie URL: {document_id}/{chunk_id}")
     
     # Delegate to main proxy
-    return await proxy_ragie_stream(ragie_url, request, user)
+    return await proxy_ragie_stream(ragie_url, request)
 
 
 @asynccontextmanager
