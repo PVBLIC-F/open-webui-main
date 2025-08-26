@@ -63,8 +63,21 @@ async def proxy_ragie_stream(url: str, request: Request) -> StreamingResponse:
                 
                 log.info(f"Streaming {response.headers.get('content-type', 'unknown')} - Status: {response.status_code}")
                 
+                # Create a safe streaming generator that handles disconnections
+                async def safe_stream():
+                    try:
+                        async for chunk in response.aiter_bytes(chunk_size=8192):
+                            if chunk:
+                                yield chunk
+                    except (httpx.StreamClosed, ConnectionResetError, BrokenPipeError) as e:
+                        log.debug(f"Stream closed by client: {type(e).__name__}")
+                        return
+                    except Exception as e:
+                        log.warning(f"Stream error: {e}")
+                        return
+                
                 return StreamingResponse(
-                    response.aiter_bytes(chunk_size=8192),
+                    safe_stream(),
                     status_code=response.status_code,
                     headers=response_headers
                 )
