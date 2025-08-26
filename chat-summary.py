@@ -410,9 +410,8 @@ class Filter:
         # Clean the text first
         clean_text = self._clean_text(text)
         
-        # Truncate if too long (keep first 300 characters)
-        if len(clean_text) > 300:
-            clean_text = clean_text[:300] + "..."
+        # Don't truncate - send full content to frontend
+        # The frontend will handle display appropriately
         
         # Create a structured format
         formatted_parts = []
@@ -1334,15 +1333,19 @@ class Filter:
                     )
                     
                     # Debug: Show a preview of the clean text (citations are handled separately)
+                    # IMPORTANT: Only truncate for logging, NOT for the actual response
                     if len(attributed_text) > 300:
                         preview_text = attributed_text[:300] + "..."
+                        logger.info(f"[DEBUG] Clean text for LLM (citations handled separately): {preview_text}")
+                        logger.info(f"[DEBUG] Full text length: {len(attributed_text)} characters")
                     else:
                         preview_text = attributed_text
-                    logger.info(f"[DEBUG] Clean text for LLM (citations handled separately): {preview_text}")
+                        logger.info(f"[DEBUG] Clean text for LLM (citations handled separately): {preview_text}")
                     
+                    # Store the FULL text, not the truncated preview
                     items.append({
                         "type": "knowledge",
-                        "text": attributed_text,
+                        "text": attributed_text,  # Use full text, not preview_text
                         "document_name": document_name,
                         "score": score,
                         "quality_score": 5,  # Ragie results are pre-qualified
