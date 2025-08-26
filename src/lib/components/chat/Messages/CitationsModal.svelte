@@ -252,6 +252,14 @@
 										return typeof parsed === 'object' && parsed !== null ? parsed : null;
 									} catch (error) {
 										console.warn('Failed to parse JSON content:', error);
+										// Try to extract video_description from malformed JSON
+										const content = document.document;
+										const videoDescMatch = content.match(/"video_description":\s*"([^"]*(?:"[^"]*"[^"]*)*)"/);
+										if (videoDescMatch) {
+											const extractedDescription = videoDescMatch[1];
+											console.log('Extracted video_description from malformed JSON:', extractedDescription);
+											return { video_description: extractedDescription };
+										}
 										return null;
 									}
 								})()}
