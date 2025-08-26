@@ -413,6 +413,15 @@
 																preload="metadata"
 																class="w-full max-h-96"
 																poster=""
+																on:error={(e) => {
+																	console.error('Video error:', e);
+																	console.error('Video src:', e.target.src);
+																	console.error('Video error code:', e.target.error?.code);
+																	console.error('Video error message:', e.target.error?.message);
+																}}
+																on:loadstart={() => console.log('Video load started')}
+																on:loadedmetadata={() => console.log('Video metadata loaded')}
+																on:canplay={() => console.log('Video can play')}
 															>
 																{#if videoUrl}
 																	<source src={videoUrl} type="video/mp4" />
@@ -528,6 +537,15 @@
 																controls
 																preload="metadata"
 																class="w-full"
+																on:error={(e) => {
+																	console.error('Audio error:', e);
+																	console.error('Audio src:', e.target.src);
+																	console.error('Audio error code:', e.target.error?.code);
+																	console.error('Audio error message:', e.target.error?.message);
+																}}
+																on:loadstart={() => console.log('Audio load started')}
+																on:loadedmetadata={() => console.log('Audio metadata loaded')}
+																on:canplay={() => console.log('Audio can play')}
 															>
 																{#if audioUrl}
 																	<source src={audioUrl} type="audio/mpeg" />

@@ -11,6 +11,20 @@ import logging
 router = APIRouter(tags=["ragie"], prefix="/api")
 log = logging.getLogger(__name__)
 
+@router.options("/proxy/ragie/stream")
+async def proxy_ragie_stream_options():
+    """Handle CORS preflight requests for media players."""
+    from fastapi.responses import Response
+    return Response(
+        status_code=200,
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+            "Access-Control-Allow-Headers": "Range, Content-Type",
+            "Access-Control-Max-Age": "3600"
+        }
+    )
+
 @router.get("/proxy/ragie/stream")
 async def proxy_ragie_stream(url: str, request: Request) -> StreamingResponse:
     """
@@ -60,6 +74,14 @@ async def proxy_ragie_stream(url: str, request: Request) -> StreamingResponse:
                 for header in ["content-type", "content-length", "content-range", "accept-ranges"]:
                     if header in response.headers:
                         response_headers[header] = response.headers[header]
+                
+                # Add CORS headers for browser media players
+                response_headers.update({
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+                    "Access-Control-Allow-Headers": "Range, Content-Type",
+                    "Access-Control-Expose-Headers": "Content-Length, Content-Range, Accept-Ranges"
+                })
                 
                 log.info(f"Streaming {response.headers.get('content-type', 'unknown')} - Status: {response.status_code}")
                 
