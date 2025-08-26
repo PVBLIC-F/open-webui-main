@@ -372,23 +372,12 @@ async def proxy_ragie_stream(
     
     log.info(f"Proxying Ragie stream: {url[:100]}...")
     
+    # TEMPORARILY DISABLED: Fresh URL generation (testing original URLs)
     # Extract document and chunk IDs to generate fresh URL if needed
-    document_id, chunk_id = extract_document_and_chunk_ids(url)
-    fresh_url = url  # Default to original URL
+    # document_id, chunk_id = extract_document_and_chunk_ids(url)
+    fresh_url = url  # Use original URL for now
     
-    if document_id and chunk_id:
-        log.info(f"Attempting to generate fresh streaming URL for {document_id}/{chunk_id}")
-        fresh_streaming_url = await get_fresh_streaming_url(
-            document_id, chunk_id, media_type, api_key, partition
-        )
-        
-        if fresh_streaming_url:
-            fresh_url = fresh_streaming_url
-            log.info(f"Using fresh streaming URL: {fresh_url[:100]}...")
-        else:
-            log.warning(f"Could not generate fresh URL, using original: {url[:100]}...")
-    else:
-        log.info(f"Could not extract IDs from URL, using original: {url[:100]}...")
+    log.info(f"Using original URL (fresh generation disabled): {url[:100]}...")
     
     try:
         client = await get_http_client()
