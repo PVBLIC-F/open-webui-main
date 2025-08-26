@@ -58,7 +58,7 @@
 	};
 </script>
 
-<Modal size="lg" bind:show>
+<Modal size="xl" bind:show>
 	<div>
 		<div class=" flex justify-between dark:text-gray-300 px-5 pt-4 pb-2">
 			<div class=" text-lg font-medium self-center capitalize">
@@ -76,7 +76,7 @@
 
 		<div class="flex flex-col md:flex-row w-full px-6 pb-5 md:space-x-4">
 			<div
-				class="flex flex-col w-full dark:text-gray-200 overflow-y-scroll max-h-[22rem] scrollbar-hidden"
+				class="flex flex-col w-full dark:text-gray-200 overflow-y-auto max-h-[32rem] scrollbar-thin scrollbar-thumb-gray-300 dark:scrollbar-thumb-gray-600 scrollbar-track-transparent"
 			>
 				{#each mergedDocuments as document, documentIdx}
 					<div class="flex flex-col w-full">
@@ -178,9 +178,58 @@
 								title={$i18n.t('Content')}
 							></iframe>
 						{:else}
-							<pre class="text-sm dark:text-gray-400 whitespace-pre-line">
-                {document.document}
-              </pre>
+							{@const isJsonContent = document.document.trim().startsWith('{') && document.document.includes('video_description')}
+							{#if isJsonContent}
+								{@const parsedContent = (() => {
+									try {
+										return JSON.parse(document.document);
+									} catch {
+										return null;
+									}
+								})()}
+								{#if parsedContent}
+									<div class="bg-gray-50 dark:bg-gray-800 rounded-lg p-4 mt-2 space-y-3">
+										{#if parsedContent.video_description}
+											<div>
+												<div class="text-xs font-semibold text-gray-600 dark:text-gray-400 mb-2">
+													🎬 Video Description
+												</div>
+												<div class="text-sm dark:text-gray-300 leading-relaxed whitespace-pre-wrap">
+													{parsedContent.video_description}
+												</div>
+											</div>
+										{/if}
+										{#if parsedContent.audio_transcript}
+											<div>
+												<div class="text-xs font-semibold text-gray-600 dark:text-gray-400 mb-2">
+													🎵 Audio Transcript
+												</div>
+												<div class="text-sm dark:text-gray-300 leading-relaxed whitespace-pre-wrap">
+													{parsedContent.audio_transcript}
+												</div>
+											</div>
+										{/if}
+										{#if Object.keys(parsedContent).some(key => !['video_description', 'audio_transcript'].includes(key))}
+											<details class="mt-3">
+												<summary class="text-xs font-semibold text-gray-600 dark:text-gray-400 cursor-pointer hover:text-gray-800 dark:hover:text-gray-200">
+													📋 Additional Data
+												</summary>
+												<pre class="text-xs dark:text-gray-400 mt-2 whitespace-pre-wrap bg-gray-100 dark:bg-gray-900 p-2 rounded">
+{JSON.stringify(parsedContent, null, 2)}
+												</pre>
+											</details>
+										{/if}
+									</div>
+								{:else}
+									<pre class="text-sm dark:text-gray-400 whitespace-pre-wrap leading-relaxed bg-gray-50 dark:bg-gray-800 rounded-lg p-4 mt-2">
+{document.document}
+									</pre>
+								{/if}
+							{:else}
+								<pre class="text-sm dark:text-gray-400 whitespace-pre-wrap leading-relaxed bg-gray-50 dark:bg-gray-800 rounded-lg p-4 mt-2">
+{document.document}
+								</pre>
+							{/if}
 						{/if}
 					</div>
 
