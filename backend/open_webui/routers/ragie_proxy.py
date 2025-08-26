@@ -16,8 +16,9 @@ Features:
 
 import os
 import asyncio
+import re
 from typing import Optional, Dict, Any, AsyncGenerator
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, unquote
 from contextlib import asynccontextmanager
 
 import httpx
@@ -93,6 +94,102 @@ def validate_ragie_url(url: str) -> bool:
         )
     except Exception:
         return False
+
+
+async def get_fresh_streaming_url(document_id: str, chunk_id: str, media_type: str, api_key: str, partition: str) -> Optional[str]:
+    """
+    Get a fresh streaming URL from Ragie API for the given document/chunk.
+    
+    Args:
+        document_id: Ragie document ID
+        chunk_id: Ragie chunk ID  
+        media_type: video/mp4 or audio/mpeg
+        api_key: Ragie API key
+        partition: Ragie partition
+        
+    Returns:
+        Fresh streaming URL or None if not available
+    """
+    try:
+        # Query Ragie's retrieval API to get fresh streaming links
+        retrieval_url = "https://api.ragie.ai/retrievals"
+        
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "partition": partition
+        }
+        
+        # Use a simple query to find the specific chunk
+        payload = {
+            "query": f"document:{document_id} chunk:{chunk_id}",
+            "top_k": 1,
+            "include_metadata": True
+        }
+        
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(retrieval_url, json=payload, headers=headers)
+            
+            if response.status_code != 200:
+                log.warning(f"Failed to get fresh streaming URL: {response.status_code}")
+                return None
+                
+            data = response.json()
+            scored_chunks = data.get("scored_chunks", [])
+            
+            for chunk in scored_chunks:
+                links = chunk.get("links", {})
+                
+                # Look for the appropriate streaming link
+                if media_type.startswith("video"):
+                    stream_link = links.get("self_video_stream", {}).get("href")
+                elif media_type.startswith("audio"):
+                    stream_link = links.get("self_audio_stream", {}).get("href")
+                else:
+                    continue
+                    
+                if stream_link:
+                    log.info(f"Generated fresh streaming URL for {document_id}/{chunk_id}")
+                    return stream_link
+                    
+            log.warning(f"No streaming URL found for {document_id}/{chunk_id}")
+            return None
+            
+    except Exception as e:
+        log.error(f"Error getting fresh streaming URL: {e}")
+        return None
+
+
+def extract_document_and_chunk_ids(url: str) -> tuple[Optional[str], Optional[str]]:
+    """
+    Extract document and chunk IDs from a Ragie streaming URL.
+    
+    Args:
+        url: Ragie streaming URL
+        
+    Returns:
+        Tuple of (document_id, chunk_id) or (None, None) if not found
+    """
+    try:
+        # Pattern: /documents/{document_id}/chunks/{chunk_id}/content
+        pattern = r'/documents/([a-f0-9-]+)/chunks/([a-f0-9-]+)/content'
+        match = re.search(pattern, url)
+        
+        if match:
+            return match.group(1), match.group(2)
+        
+        # Fallback: try to extract just document ID for document-level streaming
+        doc_pattern = r'/documents/([a-f0-9-]+)/content'
+        doc_match = re.search(doc_pattern, url)
+        
+        if doc_match:
+            return doc_match.group(1), None
+            
+        return None, None
+        
+    except Exception as e:
+        log.error(f"Error extracting IDs from URL: {e}")
+        return None, None
 
 
 def extract_media_type(url: str) -> str:
@@ -275,10 +372,30 @@ async def proxy_ragie_stream(
     
     log.info(f"Proxying Ragie stream: {url[:100]}...")
     
+    # Extract document and chunk IDs to generate fresh URL if needed
+    document_id, chunk_id = extract_document_and_chunk_ids(url)
+    fresh_url = url  # Default to original URL
+    
+    if document_id and chunk_id:
+        log.info(f"Attempting to generate fresh streaming URL for {document_id}/{chunk_id}")
+        fresh_streaming_url = await get_fresh_streaming_url(
+            document_id, chunk_id, media_type, api_key, partition
+        )
+        
+        if fresh_streaming_url:
+            fresh_url = fresh_streaming_url
+            log.info(f"Using fresh streaming URL: {fresh_url[:100]}...")
+        else:
+            log.warning(f"Could not generate fresh URL, using original: {url[:100]}...")
+    else:
+        log.info(f"Could not extract IDs from URL, using original: {url[:100]}...")
+    
     try:
         client = await get_http_client()
         
-        async with client.stream("GET", url, headers=headers) as response:
+        log.info(f"Attempting to connect to Ragie API: {fresh_url[:100]}...")
+        
+        async with client.stream("GET", fresh_url, headers=headers) as response:
             # Handle non-success responses
             if response.status_code not in (200, 206):
                 error_text = ""
@@ -320,10 +437,10 @@ async def proxy_ragie_stream(
             )
             
     except httpx.TimeoutException as e:
-        log.error(f"Timeout accessing Ragie: {e}")
+        log.error(f"Timeout accessing Ragie API after {e}: {url[:100]}")
         raise HTTPException(
             status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-            detail="Timeout accessing Ragie API"
+            detail=f"Timeout accessing Ragie streaming API. The video chunk may be unavailable or the streaming service is overloaded."
         )
     except httpx.NetworkError as e:
         log.error(f"Network error accessing Ragie: {e}")
