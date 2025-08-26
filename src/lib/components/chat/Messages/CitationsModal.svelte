@@ -42,7 +42,21 @@
 		console.log('Citation.document type:', typeof citation.document);
 		console.log('Citation.document length:', Array.isArray(citation.document) ? citation.document.length : 'Not an array');
 		
-		mergedDocuments = citation.document?.map((c, i) => {
+		// Convert object to array if needed
+		let documentsArray = citation.document;
+		if (citation.document && typeof citation.document === 'object' && !Array.isArray(citation.document)) {
+			// If it's an object with numeric keys, convert to array
+			if (citation.document.length && typeof citation.document.length === 'number') {
+				documentsArray = Array.from({ length: citation.document.length }, (_, i) => citation.document[i]);
+				console.log('Converted object to array:', documentsArray);
+			} else {
+				// If it's a single object, wrap it in an array
+				documentsArray = [citation.document];
+				console.log('Wrapped single object in array:', documentsArray);
+			}
+		}
+		
+		mergedDocuments = documentsArray?.map((c, i) => {
 			const doc = {
 				source: citation.source,
 				document: c,
