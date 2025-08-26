@@ -254,9 +254,13 @@
 										console.warn('Failed to parse JSON content:', error);
 										// Try to extract video_description from malformed JSON
 										const content = document.document;
-										const videoDescMatch = content.match(/"video_description":\s*"([^"]*(?:"[^"]*"[^"]*)*)"/);
-										if (videoDescMatch) {
-											const extractedDescription = videoDescMatch[1];
+										console.log('Attempting to extract from malformed JSON:', content);
+										
+										// Simple pattern: find "video_description": " and extract everything after it
+										const videoDescStart = content.indexOf('"video_description": "');
+										if (videoDescStart !== -1) {
+											const startPos = videoDescStart + '"video_description": "'.length;
+											const extractedDescription = content.substring(startPos);
 											console.log('Extracted video_description from malformed JSON:', extractedDescription);
 											return { video_description: extractedDescription };
 										}
