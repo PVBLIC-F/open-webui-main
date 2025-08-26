@@ -34,13 +34,7 @@
 		return 'bg-red-200 dark:bg-red-800 text-red-800 dark:text-red-200';
 	}
 
-	// Helper functions for constructing proxy URLs
-	function constructProxyUrl(docId: string, mediaType: string) {
-		if (!docId) return null;
-		const baseUrl = `/api/proxy/ragie/stream`;
-		const ragieUrl = `https://api.ragie.ai/documents/${docId}/content?media_type=${encodeURIComponent(mediaType)}`;
-		return `${baseUrl}?url=${encodeURIComponent(ragieUrl)}`;
-	}
+	// Helper function to normalize proxy URLs (backend now provides correct URLs)
 	
 	function normalizeProxyUrl(url: string) {
 		if (!url) return null;
@@ -58,25 +52,7 @@
 		return url;
 	}
 	
-	function extractDocumentId(source: any) {
-		// Try to extract document ID from various possible locations
-		if (source?.id) return source.id;
-		if (source?.document_id) return source.document_id;
-		// Try to extract from URL if present
-		if (source?.url) {
-			const match = source.url.match(/documents\/([^\/]+)/);
-			if (match) return match[1];
-		}
-		// Try to extract from source string if it's a document ID
-		if (typeof source === 'string' && source.match(/^[a-f0-9-]{36}$/)) {
-			return source;
-		}
-		// Try metadata.source if it's a document ID
-		if (source?.source && typeof source.source === 'string' && source.source.match(/^[a-f0-9-]{36}$/)) {
-			return source.source;
-		}
-		return null;
-	}
+
 
 	$: if (citation) {
 		console.log('=== CitationsModal Debug ===');
@@ -381,8 +357,7 @@
 												.replace(/\\u[\da-f]{4}/gi, '')
 												.replace(/\s+/g, ' ')
 												.trim()}
-											{@const docId = extractDocumentId(document.source) || extractDocumentId(document.metadata) || extractDocumentId(document)}
-											{@const rawVideoUrl = document.source?.video_url || document.metadata?.video_url || (docId && parsedContent.video_description ? constructProxyUrl(docId, 'video/mp4') : null)}
+											{@const rawVideoUrl = document.source?.video_url || document.metadata?.video_url}
 											{@const videoUrl = normalizeProxyUrl(rawVideoUrl)}
 											{@const fallbackUrl = document.source?.fallback_url || document.metadata?.fallback_url}
 											<div>
@@ -400,16 +375,24 @@
 												{#if videoUrl || fallbackUrl}
 													{@const videoDebug = (() => {
 														console.log('=== Video URL Debug ===');
-														console.log('Full document:', document);
-														console.log('document.source:', document.source);
-														console.log('document.metadata:', document.metadata);
-														console.log('Extracted docId:', docId);
-														console.log('document.source?.video_url:', document.source?.video_url);
-														console.log('document.metadata?.video_url:', document.metadata?.video_url);
 														console.log('Raw videoUrl:', rawVideoUrl);
 														console.log('Normalized videoUrl:', videoUrl);
 														console.log('Final fallbackUrl:', fallbackUrl);
-														console.log('parsedContent.video_description exists:', !!parsedContent.video_description);
+														
+														// Test the URL by making a HEAD request
+														if (videoUrl) {
+															console.log('Testing video URL:', videoUrl);
+															fetch(videoUrl, { method: 'HEAD' })
+																.then(response => {
+																	console.log('Video URL test response:', response.status, response.statusText);
+																	if (!response.ok) {
+																		console.error('Video URL failed:', response.status, response.statusText);
+																	}
+																})
+																.catch(error => {
+																	console.error('Video URL test error:', error);
+																});
+														}
 														return true;
 													})()}
 													<div class="mt-4 pl-6">
@@ -495,8 +478,7 @@
 												.replace(/\\u[\da-f]{4}/gi, '')
 												.replace(/\s+/g, ' ')
 												.trim()}
-											{@const audioDocId = extractDocumentId(document.source) || extractDocumentId(document.metadata) || extractDocumentId(document)}
-											{@const rawAudioUrl = document.source?.audio_url || document.metadata?.audio_url || (audioDocId && parsedContent.audio_transcript ? constructProxyUrl(audioDocId, 'audio/mpeg') : null)}
+											{@const rawAudioUrl = document.source?.audio_url || document.metadata?.audio_url}
 											{@const audioUrl = normalizeProxyUrl(rawAudioUrl)}
 											{@const audioFallbackUrl = document.source?.fallback_url || document.metadata?.fallback_url}
 											<div>
@@ -514,16 +496,11 @@
 												{#if audioUrl || audioFallbackUrl}
 													{@const audioDebug = (() => {
 														console.log('=== Audio URL Debug ===');
-														console.log('Full document:', document);
-														console.log('document.source:', document.source);
-														console.log('document.metadata:', document.metadata);
-														console.log('Extracted audioDocId:', audioDocId);
 														console.log('document.source?.audio_url:', document.source?.audio_url);
 														console.log('document.metadata?.audio_url:', document.metadata?.audio_url);
 														console.log('Raw audioUrl:', rawAudioUrl);
 														console.log('Normalized audioUrl:', audioUrl);
 														console.log('Final audioFallbackUrl:', audioFallbackUrl);
-														console.log('parsedContent.audio_transcript exists:', !!parsedContent.audio_transcript);
 														return true;
 													})()}
 													<div class="mt-4 pl-6">

@@ -1169,8 +1169,8 @@ class Filter:
                     # The citations will display in the UI, so we don't need text attribution
                     if source_url and document_name:
                         # Check if this chunk has any streaming links before processing
-                        has_audio = links.get('self_audio_stream') is not None
-                        has_video = links.get('self_video_stream') is not None
+                        has_audio = links.get('self_audio_stream', {}).get('href') is not None
+                        has_video = links.get('self_video_stream', {}).get('href') is not None
                         
                         logger.info(f"[DEBUG] Chunk {chunk_id} - has_audio: {has_audio}, has_video: {has_video}")
                         logger.info(f"[DEBUG] Available links: {list(links.keys())}")
@@ -1185,34 +1185,22 @@ class Filter:
                         # Collect both audio and video URLs if available
                         streaming_urls = {}
                         
-                        if has_audio and (links.get('self_audio_stream') or links.get('document_audio_stream')):
-                            # Try to extract the correct document ID from the provided links first
-                            ragie_audio_url = None
-                            if links.get('document_audio_stream', {}).get('href'):
-                                ragie_audio_url = links['document_audio_stream']['href']
-                                logger.info(f"[DEBUG] Using document audio URL from Ragie links: {ragie_audio_url}")
-                            else:
-                                # Fallback to constructed URL
-                                ragie_audio_url = f"https://api.ragie.ai/documents/{document_id}/content?media_type=audio/mpeg"
-                                logger.info(f"[DEBUG] Constructed document-level audio URL: {ragie_audio_url}")
+                        if has_audio and links.get('self_audio_stream', {}).get('href'):
+                            # Use the chunk-specific audio URL provided by Ragie API
+                            ragie_audio_url = links['self_audio_stream']['href']
+                            logger.info(f"[DEBUG] Using chunk-specific audio URL from Ragie API: {ragie_audio_url}")
                             
-                            base_url = self.valves.base_url.rstrip('/') if self.valves.base_url else "https://chat.pvblic.org"
+                            base_url = self.valves.base_url.rstrip('/') if self.valves.base_url else ""
                             proxy_audio_url = f"{base_url}/api/proxy/ragie/stream?url={urllib.parse.quote(ragie_audio_url, safe='')}"
                             streaming_urls['audio'] = proxy_audio_url
                             logger.info(f"[DEBUG] Generated proxy audio URL: {proxy_audio_url}")
                         
-                        if has_video and (links.get('self_video_stream') or links.get('document_video_stream')):
-                            # Try to extract the correct document ID from the provided links first
-                            ragie_video_url = None
-                            if links.get('document_video_stream', {}).get('href'):
-                                ragie_video_url = links['document_video_stream']['href']
-                                logger.info(f"[DEBUG] Using document video URL from Ragie links: {ragie_video_url}")
-                            else:
-                                # Fallback to constructed URL
-                                ragie_video_url = f"https://api.ragie.ai/documents/{document_id}/content?media_type=video/mp4"
-                                logger.info(f"[DEBUG] Constructed document-level video URL: {ragie_video_url}")
+                        if has_video and links.get('self_video_stream', {}).get('href'):
+                            # Use the chunk-specific video URL provided by Ragie API
+                            ragie_video_url = links['self_video_stream']['href']
+                            logger.info(f"[DEBUG] Using chunk-specific video URL from Ragie API: {ragie_video_url}")
                             
-                            base_url = self.valves.base_url.rstrip('/') if self.valves.base_url else "https://chat.pvblic.org"
+                            base_url = self.valves.base_url.rstrip('/') if self.valves.base_url else ""
                             proxy_video_url = f"{base_url}/api/proxy/ragie/stream?url={urllib.parse.quote(ragie_video_url, safe='')}"
                             streaming_urls['video'] = proxy_video_url
                             logger.info(f"[DEBUG] Generated proxy video URL: {proxy_video_url}")
@@ -1259,7 +1247,7 @@ class Filter:
                                             "audio_url": streaming_urls.get('audio'),
                                             "video_url": streaming_urls.get('video'),
                                             "fallback_url": source_url,  # Google Drive link as fallback
-                                            "streaming_note": "Note: Streaming URLs may not work due to Ragie API issues. Use Google Drive link as fallback."
+                                            "streaming_note": "Streaming chunk-specific media from Ragie API via authenticated proxy."
                                         }
                                     ],
                                     "source": {
