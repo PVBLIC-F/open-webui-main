@@ -42,6 +42,22 @@
 		return `${baseUrl}?url=${encodeURIComponent(ragieUrl)}`;
 	}
 	
+	function normalizeProxyUrl(url: string) {
+		if (!url) return null;
+		// If it's already a relative URL, return as-is
+		if (url.startsWith('/api/proxy/ragie/stream')) {
+			return url;
+		}
+		// If it's an absolute URL with our proxy path, make it relative
+		if (url.includes('/api/proxy/ragie/stream')) {
+			const match = url.match(/\/api\/proxy\/ragie\/stream\?.*$/);
+			if (match) {
+				return match[0];
+			}
+		}
+		return url;
+	}
+	
 	function extractDocumentId(source: any) {
 		// Try to extract document ID from various possible locations
 		if (source?.id) return source.id;
@@ -366,7 +382,8 @@
 												.replace(/\s+/g, ' ')
 												.trim()}
 											{@const docId = extractDocumentId(document.source) || extractDocumentId(document.metadata) || extractDocumentId(document)}
-											{@const videoUrl = document.source?.video_url || document.metadata?.video_url || (docId && parsedContent.video_description ? constructProxyUrl(docId, 'video/mp4') : null)}
+											{@const rawVideoUrl = document.source?.video_url || document.metadata?.video_url || (docId && parsedContent.video_description ? constructProxyUrl(docId, 'video/mp4') : null)}
+											{@const videoUrl = normalizeProxyUrl(rawVideoUrl)}
 											{@const fallbackUrl = document.source?.fallback_url || document.metadata?.fallback_url}
 											<div>
 												<div class="flex items-center gap-2 mb-3">
@@ -389,7 +406,8 @@
 														console.log('Extracted docId:', docId);
 														console.log('document.source?.video_url:', document.source?.video_url);
 														console.log('document.metadata?.video_url:', document.metadata?.video_url);
-														console.log('Constructed videoUrl:', videoUrl);
+														console.log('Raw videoUrl:', rawVideoUrl);
+														console.log('Normalized videoUrl:', videoUrl);
 														console.log('Final fallbackUrl:', fallbackUrl);
 														console.log('parsedContent.video_description exists:', !!parsedContent.video_description);
 														return true;
@@ -478,7 +496,8 @@
 												.replace(/\s+/g, ' ')
 												.trim()}
 											{@const audioDocId = extractDocumentId(document.source) || extractDocumentId(document.metadata) || extractDocumentId(document)}
-											{@const audioUrl = document.source?.audio_url || document.metadata?.audio_url || (audioDocId && parsedContent.audio_transcript ? constructProxyUrl(audioDocId, 'audio/mpeg') : null)}
+											{@const rawAudioUrl = document.source?.audio_url || document.metadata?.audio_url || (audioDocId && parsedContent.audio_transcript ? constructProxyUrl(audioDocId, 'audio/mpeg') : null)}
+											{@const audioUrl = normalizeProxyUrl(rawAudioUrl)}
 											{@const audioFallbackUrl = document.source?.fallback_url || document.metadata?.fallback_url}
 											<div>
 												<div class="flex items-center gap-2 mb-3">
@@ -501,7 +520,8 @@
 														console.log('Extracted audioDocId:', audioDocId);
 														console.log('document.source?.audio_url:', document.source?.audio_url);
 														console.log('document.metadata?.audio_url:', document.metadata?.audio_url);
-														console.log('Constructed audioUrl:', audioUrl);
+														console.log('Raw audioUrl:', rawAudioUrl);
+														console.log('Normalized audioUrl:', audioUrl);
 														console.log('Final audioFallbackUrl:', audioFallbackUrl);
 														console.log('parsedContent.audio_transcript exists:', !!parsedContent.audio_transcript);
 														return true;
@@ -599,6 +619,7 @@
 											<span class="text-sm font-semibold text-gray-700 dark:text-gray-300">Content (Extracted)</span>
 										</div>
 										<pre class="whitespace-pre-wrap break-words text-xs font-mono bg-gray-100 dark:bg-gray-900 p-3 rounded overflow-x-auto">{parsedContent.raw_content}</pre>
+
 									</div>
 								{:else}
 									<!-- Fallback for non-media JSON or failed parsing -->
