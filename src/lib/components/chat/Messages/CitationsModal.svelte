@@ -233,7 +233,7 @@
 								title={$i18n.t('Content')}
 							></iframe>
 						{:else}
-							{@const isJsonContent = document.document && typeof document.document === 'string' && document.document.trim().startsWith('{')}
+							{@const isJsonContent = document.document && typeof document.document === 'string' && (document.document.trim().startsWith('{') || document.document.includes('"video_description"') || document.document.includes('"audio_transcript"'))}
 							{@const debugContent = (() => {
 								console.log('=== Content Debug ===');
 								console.log('document.document:', document.document);
@@ -252,11 +252,28 @@
 										return typeof parsed === 'object' && parsed !== null ? parsed : null;
 									} catch (error) {
 										console.warn('Failed to parse JSON content:', error);
-										// Try to extract video_description from malformed JSON
+										// Try to extract content from malformed JSON using regex patterns
 										const content = document.document;
 										console.log('Attempting to extract from malformed JSON:', content);
 										
-										// Simple pattern: find "video_description": " and extract everything after it
+										// Extract video_description using regex
+										const videoDescMatch = content.match(/"video_description":\s*"([^"]*(?:"[^"]*"[^"]*)*)"/);
+										const audioTranscriptMatch = content.match(/"audio_transcript":\s*"([^"]*(?:"[^"]*"[^"]*)*)"/);
+										
+										if (videoDescMatch || audioTranscriptMatch) {
+											const extracted = {};
+											if (videoDescMatch) {
+												extracted.video_description = videoDescMatch[1];
+												console.log('Extracted video_description:', extracted.video_description);
+											}
+											if (audioTranscriptMatch) {
+												extracted.audio_transcript = audioTranscriptMatch[1];
+												console.log('Extracted audio_transcript:', extracted.audio_transcript);
+											}
+											return extracted;
+										}
+										
+										// Fallback: simple string extraction
 										const videoDescStart = content.indexOf('"video_description": "');
 										if (videoDescStart !== -1) {
 											const startPos = videoDescStart + '"video_description": "'.length;
