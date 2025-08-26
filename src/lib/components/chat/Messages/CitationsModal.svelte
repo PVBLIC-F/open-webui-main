@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { getContext, onMount, tick } from 'svelte';
+	import { getContext } from 'svelte';
 	import Modal from '$lib/components/common/Modal.svelte';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import { WEBUI_API_BASE_URL } from '$lib/constants';
@@ -60,8 +60,8 @@
 
 <Modal size="xl" bind:show>
 	<div>
-		<div class=" flex justify-between dark:text-gray-300 px-5 pt-4 pb-2">
-			<div class=" text-lg font-medium self-center capitalize">
+		<div class="flex justify-between dark:text-gray-300 px-5 pt-4 pb-2">
+			<div class="text-lg font-medium self-center capitalize">
 				{$i18n.t('Citation')}
 			</div>
 			<button
@@ -167,7 +167,7 @@
 						{/if}
 					</div>
 					<div class="flex flex-col w-full">
-						<div class=" text-sm font-medium dark:text-gray-300 mt-2">
+						<div class="text-sm font-medium dark:text-gray-300 mt-2">
 							{$i18n.t('Content')}
 						</div>
 						{#if document.metadata?.html}
@@ -182,112 +182,144 @@
 							{#if isJsonContent}
 								{@const parsedContent = (() => {
 									try {
-										return JSON.parse(document.document);
-									} catch {
+										const parsed = JSON.parse(document.document);
+										// Validate that it's an object with expected properties
+										return typeof parsed === 'object' && parsed !== null ? parsed : null;
+									} catch (error) {
+										console.warn('Failed to parse JSON content:', error);
 										return null;
 									}
 								})()}
 								{#if parsedContent && (parsedContent.video_description || parsedContent.audio_transcript)}
 									<div class="bg-gray-50 dark:bg-gray-800 rounded-lg p-4 mt-2 space-y-4">
+										<!-- Content Type Indicator -->
+										<div class="flex items-center gap-2 mb-2 pb-2 border-b border-gray-200 dark:border-gray-700">
+											<span class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+												{parsedContent.video_description && parsedContent.audio_transcript ? 'Multimedia Content' : 
+												 parsedContent.video_description ? 'Video Content' : 'Audio Content'}
+											</span>
+										</div>
 										{#if parsedContent.video_description}
+											{@const cleanDescription = parsedContent.video_description
+												.replace(/\*\*([^*]+)\*\*/g, '$1')
+												.replace(/\*([^*]+)\*/g, '$1')
+												.replace(/\\u[\da-f]{4}/gi, '')
+												.replace(/\s+/g, ' ')
+												.trim()}
 											<div>
 												<div class="flex items-center gap-2 mb-3">
 													<span class="text-lg">🎬</span>
 													<span class="text-sm font-semibold text-gray-700 dark:text-gray-300">Video Content</span>
 												</div>
-												{@const cleanDescription = parsedContent.video_description
-													.replace(/\*\*([^*]+)\*\*/g, '$1')
-													.replace(/\*([^*]+)\*/g, '$1')
-													.replace(/\\u[\da-f]{4}/gi, '')
-													.replace(/\s+/g, ' ')
-													.trim()}
-												<div class="text-sm dark:text-gray-200 leading-relaxed pl-6 border-l-2 border-blue-200 dark:border-blue-600">
-													{cleanDescription}
+												<div class="text-sm dark:text-gray-200 leading-relaxed pl-6 border-l-2 border-blue-200 dark:border-blue-600 max-h-96 overflow-y-auto">
+													<div class="whitespace-pre-wrap break-words">
+														{cleanDescription}
+													</div>
 												</div>
 												
-												<!-- Show video streaming link if available -->
-												{#if document.metadata?.video_url}
-													<div class="mt-3 pl-6">
+												<!-- Show video streaming links -->
+												<div class="mt-3 pl-6 space-y-2">
+													<!-- Primary video link from metadata -->
+													{#if document.metadata?.video_url}
 														<a 
 															href={document.metadata.video_url} 
-															class="inline-flex items-center gap-2 px-3 py-2 bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 rounded-lg hover:bg-blue-200 dark:hover:bg-blue-800 transition-colors text-sm"
+															class="inline-flex items-center gap-2 px-3 py-2 bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 rounded-lg hover:bg-blue-200 dark:hover:bg-blue-800 transition-colors text-sm font-medium"
 															target="_blank"
 														>
 															<span>🎬</span>
-															<span>Play Video</span>
+															<span>Play Video (Stream)</span>
 														</a>
-													</div>
-												{/if}
+													{/if}
+													
+													<!-- Fallback video link from source file -->
+													{#if document.source?.name && (document.source.name.toLowerCase().includes('.mp4') || document.source.name.toLowerCase().includes('.avi') || document.source.name.toLowerCase().includes('.mov') || document.source.name.toLowerCase().includes('.mkv'))}
+														<a 
+															href={document.source.url || `#`}
+															class="inline-flex items-center gap-2 px-3 py-2 bg-blue-50 dark:bg-blue-800 text-blue-600 dark:text-blue-200 rounded-lg hover:bg-blue-100 dark:hover:bg-blue-700 transition-colors text-sm border border-blue-200 dark:border-blue-600"
+															target="_blank"
+														>
+															<span>📁</span>
+															<span>Open Video File</span>
+														</a>
+													{/if}
+												</div>
 											</div>
 										{/if}
 										
 										{#if parsedContent.audio_transcript}
+											{@const cleanTranscript = parsedContent.audio_transcript
+												.replace(/\*\*([^*]+)\*\*/g, '$1')
+												.replace(/\*([^*]+)\*/g, '$1')
+												.replace(/\\u[\da-f]{4}/gi, '')
+												.replace(/\s+/g, ' ')
+												.trim()}
 											<div>
 												<div class="flex items-center gap-2 mb-3">
 													<span class="text-lg">🎵</span>
 													<span class="text-sm font-semibold text-gray-700 dark:text-gray-300">Audio Transcript</span>
 												</div>
-												{@const cleanTranscript = parsedContent.audio_transcript
-													.replace(/\*\*([^*]+)\*\*/g, '$1')
-													.replace(/\*([^*]+)\*/g, '$1')
-													.replace(/\\u[\da-f]{4}/gi, '')
-													.replace(/\s+/g, ' ')
-													.trim()}
-												<div class="text-sm dark:text-gray-200 leading-relaxed pl-6 border-l-2 border-green-200 dark:border-green-600">
-													{cleanTranscript}
+												<div class="text-sm dark:text-gray-200 leading-relaxed pl-6 border-l-2 border-green-200 dark:border-green-600 max-h-96 overflow-y-auto">
+													<div class="whitespace-pre-wrap break-words">
+														{cleanTranscript}
+													</div>
 												</div>
 												
-												<!-- Show audio streaming link if available and no video -->
-												{#if document.metadata?.audio_url && !document.metadata?.video_url}
-													<div class="mt-3 pl-6">
+												<!-- Show audio streaming links -->
+												<div class="mt-3 pl-6 space-y-2">
+													<!-- Primary audio link from metadata -->
+													{#if document.metadata?.audio_url}
 														<a 
 															href={document.metadata.audio_url} 
-															class="inline-flex items-center gap-2 px-3 py-2 bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300 rounded-lg hover:bg-green-200 dark:hover:bg-green-800 transition-colors text-sm"
+															class="inline-flex items-center gap-2 px-3 py-2 bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300 rounded-lg hover:bg-green-200 dark:hover:bg-green-800 transition-colors text-sm font-medium"
 															target="_blank"
 														>
 															<span>🎵</span>
-															<span>Play Audio</span>
+															<span>Play Audio (Stream)</span>
 														</a>
-													</div>
-												{/if}
+													{/if}
+													
+													<!-- Fallback audio link from source file -->
+													{#if document.source?.name && (document.source.name.toLowerCase().includes('.mp3') || document.source.name.toLowerCase().includes('.wav') || document.source.name.toLowerCase().includes('.m4a') || document.source.name.toLowerCase().includes('.aac'))}
+														<a 
+															href={document.source.url || `#`}
+															class="inline-flex items-center gap-2 px-3 py-2 bg-green-50 dark:bg-green-800 text-green-600 dark:text-green-200 rounded-lg hover:bg-green-100 dark:hover:bg-green-700 transition-colors text-sm border border-green-200 dark:border-green-600"
+															target="_blank"
+														>
+															<span>📁</span>
+															<span>Open Audio File</span>
+														</a>
+													{/if}
+												</div>
 											</div>
 										{/if}
 										
-										<!-- Show both links if both are available -->
-										{#if document.metadata?.video_url && document.metadata?.audio_url}
-											<div class="flex gap-2 pl-6">
-												<a 
-													href={document.metadata.video_url} 
-													class="inline-flex items-center gap-2 px-3 py-2 bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 rounded-lg hover:bg-blue-200 dark:hover:bg-blue-800 transition-colors text-sm"
-													target="_blank"
-												>
-													<span>🎬</span>
-													<span>Video</span>
-												</a>
-												<a 
-													href={document.metadata.audio_url} 
-													class="inline-flex items-center gap-2 px-3 py-2 bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300 rounded-lg hover:bg-green-200 dark:hover:bg-green-800 transition-colors text-sm"
-													target="_blank"
-												>
-													<span>🎵</span>
-													<span>Audio</span>
-												</a>
-											</div>
-										{/if}
+
 									</div>
 								{:else}
 									<!-- Fallback for non-media JSON or failed parsing -->
 									<div class="bg-gray-50 dark:bg-gray-800 rounded-lg p-4 mt-2">
-										<pre class="text-sm dark:text-gray-300 whitespace-pre-wrap leading-relaxed overflow-x-auto">
-{document.document}
-										</pre>
+										<div class="flex items-center gap-2 mb-3">
+											<span class="text-lg">📄</span>
+											<span class="text-sm font-semibold text-gray-700 dark:text-gray-300">Raw Content</span>
+										</div>
+										<div class="text-sm dark:text-gray-300 leading-relaxed pl-6 border-l-2 border-gray-200 dark:border-gray-600 max-h-96 overflow-y-auto">
+											<div class="whitespace-pre-wrap break-words">
+												{document.document}
+											</div>
+										</div>
 									</div>
 								{/if}
 							{:else}
 								<!-- Regular text content -->
 								<div class="bg-gray-50 dark:bg-gray-800 rounded-lg p-4 mt-2">
-									<div class="text-sm dark:text-gray-300 whitespace-pre-wrap leading-relaxed">
-										{document.document}
+									<div class="flex items-center gap-2 mb-3">
+										<span class="text-lg">📝</span>
+										<span class="text-sm font-semibold text-gray-700 dark:text-gray-300">Text Content</span>
+									</div>
+									<div class="text-sm dark:text-gray-300 leading-relaxed pl-6 border-l-2 border-gray-200 dark:border-gray-600 max-h-96 overflow-y-auto">
+										<div class="whitespace-pre-wrap break-words">
+											{document.document}
+										</div>
 									</div>
 								</div>
 							{/if}
