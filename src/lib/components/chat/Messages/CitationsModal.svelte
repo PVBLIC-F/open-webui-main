@@ -34,19 +34,34 @@
 	}
 
 	$: if (citation) {
+		console.log('=== CitationsModal Debug ===');
+		console.log('Citation prop received:', citation);
+		console.log('Citation type:', typeof citation);
+		console.log('Citation keys:', Object.keys(citation || {}));
+		console.log('Citation.document:', citation.document);
+		console.log('Citation.document type:', typeof citation.document);
+		console.log('Citation.document length:', Array.isArray(citation.document) ? citation.document.length : 'Not an array');
+		
 		mergedDocuments = citation.document?.map((c, i) => {
-			return {
+			const doc = {
 				source: citation.source,
 				document: c,
 				metadata: citation.metadata?.[i],
 				distance: citation.distances?.[i]
 			};
+			console.log(`Document ${i}:`, doc);
+			return doc;
 		});
-		if (mergedDocuments.every((doc) => doc.distance !== undefined)) {
+		
+		console.log('Final mergedDocuments:', mergedDocuments);
+		console.log('mergedDocuments length:', mergedDocuments?.length || 0);
+		
+		if (mergedDocuments?.every((doc) => doc.distance !== undefined)) {
 			mergedDocuments = mergedDocuments.sort(
 				(a, b) => (b.distance ?? Infinity) - (a.distance ?? Infinity)
 			);
 		}
+		console.log('=== End CitationsModal Debug ===');
 	}
 
 	const decodeString = (str: string) => {
@@ -62,7 +77,7 @@
 	<div>
 		<div class="flex justify-between dark:text-gray-300 px-5 pt-4 pb-2">
 			<div class="text-lg font-medium self-center capitalize">
-				{$i18n.t('Citation')}
+				{$i18n.t('Citation')} {mergedDocuments.length > 1 ? `(${mergedDocuments.length} sources)` : ''}
 			</div>
 			<button
 				class="self-center"
@@ -78,10 +93,17 @@
 			<div
 				class="flex flex-col w-full dark:text-gray-200 overflow-y-auto max-h-[32rem] scrollbar-thin scrollbar-thumb-gray-300 dark:scrollbar-thumb-gray-600 scrollbar-track-transparent"
 			>
+				<!-- Debug Info -->
+				<div class="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-700 rounded p-2 mb-2 text-xs">
+					<strong>Debug:</strong> mergedDocuments.length = {mergedDocuments?.length || 0} | 
+					citation.document type = {typeof citation?.document} | 
+					citation.document length = {Array.isArray(citation?.document) ? citation?.document?.length : 'Not array'}
+				</div>
+				
 				{#each mergedDocuments as document, documentIdx}
 					<div class="flex flex-col w-full">
 						<div class="text-sm font-medium dark:text-gray-300">
-							{$i18n.t('Source')}
+							{$i18n.t('Source')} #{documentIdx + 1}
 						</div>
 
 						{#if document.source?.name}
