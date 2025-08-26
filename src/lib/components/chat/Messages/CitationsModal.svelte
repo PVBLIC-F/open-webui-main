@@ -325,7 +325,7 @@
 												</div>
 												
 												<!-- Embedded Video Player -->
-												{#if document.source?.video_url || document.source?.fallback_url}
+												{#if document.source?.video_url}
 													<div class="mt-4 pl-6">
 														<div class="bg-black rounded-lg overflow-hidden shadow-lg">
 															<video 
@@ -334,9 +334,7 @@
 																class="w-full max-h-96"
 																poster=""
 															>
-																{#if document.source?.video_url}
-																	<source src={document.source.video_url} type="video/mp4" />
-																{/if}
+																<source src={document.source.video_url} type="video/mp4" />
 																{#if document.source?.fallback_url}
 																	<source src={document.source.fallback_url} type="video/mp4" />
 																{/if}
@@ -344,26 +342,26 @@
 																<track kind="captions" />
 																<p class="text-sm text-gray-500 p-4">
 																	Your browser doesn't support embedded video. 
-																	<a href={document.source?.video_url || document.source?.fallback_url} class="text-blue-500 hover:underline" target="_blank">
-																		Click here to download the video.
+																	<a href={document.source?.fallback_url || document.source?.video_url} class="text-blue-500 hover:underline" target="_blank">
+																		Click here to view the video.
 																	</a>
 																</p>
 															</video>
 														</div>
-														
-														<!-- Video time info if available -->
-														{#if document.metadata?.start_time && document.metadata?.end_time}
-															<div class="mt-2 text-xs text-gray-500 dark:text-gray-400">
-																Segment: {document.metadata.start_time}s - {document.metadata.end_time}s 
-																({document.metadata.duration || `${(document.metadata.end_time - document.metadata.start_time).toFixed(1)}s`})
-															</div>
-														{/if}
+													</div>
+												{/if}
+												
+												<!-- Video time info if available -->
+												{#if document.metadata?.start_time && document.metadata?.end_time}
+													<div class="mt-2 text-xs text-gray-500 dark:text-gray-400 pl-6">
+														Segment: {document.metadata.start_time}s - {document.metadata.end_time}s 
+														({document.metadata.duration || `${(document.metadata.end_time - document.metadata.start_time).toFixed(1)}s`})
 													</div>
 												{/if}
 												
 												<!-- Show video streaming links -->
 												<div class="mt-3 pl-6 space-y-2">
-													<!-- External video link -->
+													<!-- External streaming link (if proxy fails) -->
 													{#if document.source?.video_url}
 														<a 
 															href={document.source.video_url} 
@@ -371,11 +369,11 @@
 															target="_blank"
 														>
 															<span>🎬</span>
-															<span>Open Video Externally</span>
+															<span>Open Video Stream</span>
 														</a>
 													{/if}
 													
-													<!-- Fallback video link from source file -->
+													<!-- Google Drive fallback -->
 													{#if document.source?.fallback_url}
 														<a 
 															href={document.source.fallback_url} 
@@ -421,7 +419,7 @@
 												</div>
 												
 												<!-- Embedded Audio Player -->
-												{#if document.source?.audio_url || (document.source?.fallback_url && document.source?.fallback_url.match(/\.(mp3|wav|m4a|aac|ogg)$/i))}
+												{#if document.source?.audio_url}
 													<div class="mt-4 pl-6">
 														<div class="bg-gray-100 dark:bg-gray-800 rounded-lg p-4 shadow-inner">
 															<audio 
@@ -429,34 +427,32 @@
 																preload="metadata"
 																class="w-full"
 															>
-																{#if document.source?.audio_url}
-																	<source src={document.source.audio_url} type="audio/mpeg" />
-																{/if}
-																{#if document.source?.fallback_url && document.source.fallback_url.match(/\.(mp3|wav|m4a|aac|ogg)$/i)}
+																<source src={document.source.audio_url} type="audio/mpeg" />
+																{#if document.source?.fallback_url}
 																	<source src={document.source.fallback_url} />
 																{/if}
 																<p class="text-sm text-gray-500">
 																	Your browser doesn't support embedded audio. 
-																	<a href={document.source?.audio_url || document.source?.fallback_url} class="text-blue-500 hover:underline" target="_blank">
-																		Click here to download the audio.
+																	<a href={document.source?.fallback_url || document.source?.audio_url} class="text-blue-500 hover:underline" target="_blank">
+																		Click here to play the audio.
 																	</a>
 																</p>
 															</audio>
 														</div>
-														
-														<!-- Audio time info if available -->
-														{#if document.metadata?.start_time && document.metadata?.end_time}
-															<div class="mt-2 text-xs text-gray-500 dark:text-gray-400">
-																Segment: {document.metadata.start_time}s - {document.metadata.end_time}s 
-																({document.metadata.duration || `${(document.metadata.end_time - document.metadata.start_time).toFixed(1)}s`})
-															</div>
-														{/if}
+													</div>
+												{/if}
+												
+												<!-- Audio time info if available -->
+												{#if document.metadata?.start_time && document.metadata?.end_time}
+													<div class="mt-2 text-xs text-gray-500 dark:text-gray-400 pl-6">
+														Segment: {document.metadata.start_time}s - {document.metadata.end_time}s 
+														({document.metadata.duration || `${(document.metadata.end_time - document.metadata.start_time).toFixed(1)}s`})
 													</div>
 												{/if}
 												
 												<!-- Show audio streaming links -->
 												<div class="mt-3 pl-6 space-y-2">
-													<!-- External audio link -->
+													<!-- External streaming link (if proxy fails) -->
 													{#if document.source?.audio_url}
 														<a 
 															href={document.source.audio_url} 
@@ -464,7 +460,19 @@
 															target="_blank"
 														>
 															<span>🎵</span>
-															<span>Open Audio Externally</span>
+															<span>Open Audio Stream</span>
+														</a>
+													{/if}
+													
+													<!-- Google Drive fallback -->
+													{#if document.source?.fallback_url}
+														<a 
+															href={document.source.fallback_url} 
+															class="inline-flex items-center gap-2 px-3 py-2 bg-green-50 dark:bg-green-800 text-green-600 dark:text-green-200 rounded-lg hover:bg-green-100 dark:hover:bg-green-700 transition-colors text-sm border border-green-200 dark:border-green-600"
+															target="_blank"
+														>
+															<span>📁</span>
+															<span>Open in Google Drive</span>
 														</a>
 													{/if}
 													
