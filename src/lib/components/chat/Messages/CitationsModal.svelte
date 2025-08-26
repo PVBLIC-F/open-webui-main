@@ -382,59 +382,43 @@
 													</div>
 												</div>
 												
-												<!-- Embedded Video Player -->
+												<!-- Professional Video Player -->
 												{#if videoUrl || fallbackUrl}
-													{@const videoDebug = (() => {
-														console.log('=== Video URL Debug ===');
-														console.log('Raw videoUrl:', rawVideoUrl);
-														console.log('Normalized videoUrl:', videoUrl);
-														console.log('Final fallbackUrl:', fallbackUrl);
-														
-														// Test the URL by making a HEAD request
-														if (videoUrl) {
-															console.log('Testing video URL:', videoUrl);
-															fetch(videoUrl, { method: 'HEAD' })
-																.then(response => {
-																	console.log('Video URL test response:', response.status, response.statusText);
-																	if (!response.ok) {
-																		console.error('Video URL failed:', response.status, response.statusText);
-																	}
-																})
-																.catch(error => {
-																	console.error('Video URL test error:', error);
-																});
-														}
-														return true;
-													})()}
 													<div class="mt-4 pl-6">
 														<div class="bg-black rounded-lg overflow-hidden shadow-lg">
-															<video 
-																controls
-																preload="metadata"
-																class="w-full max-h-96"
-																poster=""
-																on:error={(e) => {
-																	console.error('Video error:', e);
-																	console.error('Video src:', e.target.src);
-																	console.error('Video error code:', e.target.error?.code);
-																	console.error('Video error message:', e.target.error?.message);
-																}}
-																on:loadstart={() => console.log('Video load started')}
-																on:loadedmetadata={() => console.log('Video metadata loaded')}
-																on:canplay={() => console.log('Video can play')}
+															<div 
+																class="video-player-container w-full max-h-96 bg-black flex items-center justify-center relative"
+																style="min-height: 200px;"
 															>
 																{#if videoUrl}
-																	<source src={videoUrl} type="video/mp4" />
+																	<iframe
+																		src={videoUrl}
+																		class="w-full h-full absolute inset-0"
+																		frameborder="0"
+																		allowfullscreen
+																		title="Video Player"
+																		on:error={() => console.error('Video iframe failed to load')}
+																	></iframe>
+																{:else}
+																	<div class="text-white text-center p-8">
+																		<div class="mb-4">
+																			<svg class="w-16 h-16 mx-auto text-gray-400" fill="currentColor" viewBox="0 0 20 20">
+																				<path d="M2 6a2 2 0 012-2h6l2 2h6a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6zM5 8a1 1 0 000 2h8a1 1 0 100-2H5z"/>
+																			</svg>
+																		</div>
+																		<p class="text-gray-300">Video not available</p>
+																		{#if fallbackUrl}
+																			<a 
+																				href={fallbackUrl} 
+																				class="inline-block mt-3 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
+																				target="_blank"
+																			>
+																				Open in Google Drive
+																			</a>
+																		{/if}
+																	</div>
 																{/if}
-																<!-- Add empty track for accessibility -->
-																<track kind="captions" />
-																<p class="text-sm text-gray-500 p-4">
-																	Your browser doesn't support embedded video. 
-																	<a href={fallbackUrl || videoUrl} class="text-blue-500 hover:underline" target="_blank">
-																		Click here to view the video.
-																	</a>
-																</p>
-															</video>
+															</div>
 														</div>
 													</div>
 												{/if}
@@ -520,43 +504,38 @@
 													</div>
 												</div>
 												
-												<!-- Embedded Audio Player -->
+												<!-- Professional Audio Player -->
 												{#if audioUrl || audioFallbackUrl}
-													{@const audioDebug = (() => {
-														console.log('=== Audio URL Debug ===');
-														console.log('document.source?.audio_url:', document.source?.audio_url);
-														console.log('document.metadata?.audio_url:', document.metadata?.audio_url);
-														console.log('Raw audioUrl:', rawAudioUrl);
-														console.log('Normalized audioUrl:', audioUrl);
-														console.log('Final audioFallbackUrl:', audioFallbackUrl);
-														return true;
-													})()}
 													<div class="mt-4 pl-6">
 														<div class="bg-gray-100 dark:bg-gray-800 rounded-lg p-4 shadow-inner">
-															<audio 
-																controls
-																preload="metadata"
-																class="w-full"
-																on:error={(e) => {
-																	console.error('Audio error:', e);
-																	console.error('Audio src:', e.target.src);
-																	console.error('Audio error code:', e.target.error?.code);
-																	console.error('Audio error message:', e.target.error?.message);
-																}}
-																on:loadstart={() => console.log('Audio load started')}
-																on:loadedmetadata={() => console.log('Audio metadata loaded')}
-																on:canplay={() => console.log('Audio can play')}
-															>
-																{#if audioUrl}
-																	<source src={audioUrl} type="audio/mpeg" />
-																{/if}
-																<p class="text-sm text-gray-500">
-																	Your browser doesn't support embedded audio. 
-																	<a href={audioFallbackUrl || audioUrl} class="text-blue-500 hover:underline" target="_blank">
-																		Click here to play the audio.
-																	</a>
-																</p>
-															</audio>
+															{#if audioUrl}
+																<div class="audio-player-container">
+																	<iframe
+																		src={audioUrl}
+																		class="w-full h-12 border-0"
+																		title="Audio Player"
+																		on:error={() => console.error('Audio iframe failed to load')}
+																	></iframe>
+																</div>
+															{:else}
+																<div class="text-center p-4">
+																	<div class="mb-3">
+																		<svg class="w-8 h-8 mx-auto text-gray-400" fill="currentColor" viewBox="0 0 20 20">
+																			<path d="M18 3a1 1 0 00-1.196-.98l-10 2A1 1 0 006 5v9.114A4.369 4.369 0 005 14c-1.657 0-3 .895-3 2s1.343 2 3 2 3-.895 3-2V7.82l8-1.6v5.894A4.37 4.37 0 0015 12c-1.657 0-3 .895-3 2s1.343 2 3 2 3-.895 3-2V3z"/>
+																		</svg>
+																	</div>
+																	<p class="text-gray-500 text-sm mb-3">Audio not available</p>
+																	{#if audioFallbackUrl}
+																		<a 
+																			href={audioFallbackUrl} 
+																			class="inline-block px-3 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 transition-colors"
+																			target="_blank"
+																		>
+																			Open in Google Drive
+																		</a>
+																	{/if}
+																</div>
+															{/if}
 														</div>
 													</div>
 												{/if}
