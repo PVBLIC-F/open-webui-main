@@ -1206,7 +1206,7 @@ class Filter:
                             logger.info(f"[DEBUG] Generated proxy video URL: {proxy_video_url}")
                         
                         # Create a single citation with both audio and video options
-                        if streaming_urls and __event_emitter__:
+                        if __event_emitter__:
                             # Create citation name based on available media
                             media_icons = []
                             if 'audio' in streaming_urls:
@@ -1219,16 +1219,19 @@ class Filter:
                                 duration = end_time - start_time
                                 citation_name += f" ({start_time:.1f}s-{end_time:.1f}s, {duration:.1f}s)"
                             
+                            # Use video URL as primary, audio as fallback, then Google Drive
+                            primary_url = streaming_urls.get('video') or streaming_urls.get('audio') or source_url
+                            
+                            # Determine media type based on what's available
+                            if streaming_urls.get('video'):
+                                media_type = "video"
+                            elif streaming_urls.get('audio'):
+                                media_type = "audio"
+                            else:
+                                media_type = "document"
+                            
                             # Format the content for better display
-                            media_type = "video" if 'video' in streaming_urls else "audio"
                             formatted_content = self._format_citation_content(text, document_name, start_time, end_time, media_type)
-                            
-                            # Use video URL as primary, audio as fallback
-                            primary_url = streaming_urls.get('video', streaming_urls.get('audio'))
-                            
-                            # Note: Ragie's streaming URLs are currently returning 404 errors
-                            # This appears to be a data consistency issue on Ragie's side
-                            # For now, we'll provide both streaming URLs and Google Drive fallback
                             
                             await __event_emitter__({
                                 "type": "citation",
@@ -1242,47 +1245,25 @@ class Filter:
                                             "end_time": end_time,
                                             "media_type": media_type,
                                             "duration": f"{end_time - start_time:.1f}s" if start_time and end_time else None,
-                                            "embed_player": True,
+                                            "embed_player": bool(streaming_urls),
                                             "stream_url": primary_url,
                                             "audio_url": streaming_urls.get('audio'),
                                             "video_url": streaming_urls.get('video'),
                                             "fallback_url": source_url,  # Google Drive link as fallback
-                                            "streaming_note": "Streaming chunk-specific media from Ragie API via authenticated proxy."
+                                            "streaming_note": "Streaming chunk-specific media from Ragie API via authenticated proxy." if streaming_urls else "Streaming not available, using Google Drive fallback."
                                         }
                                     ],
                                     "source": {
                                         "name": citation_name,
                                         "url": primary_url,
-                                        "display_type": "embedded_player",
+                                        "display_type": "embedded_player" if streaming_urls else "external_link",
                                         "audio_url": streaming_urls.get('audio'),
                                         "video_url": streaming_urls.get('video'),
                                         "fallback_url": source_url  # Google Drive link as fallback
                                     },
                                 },
                             })
-                        
-                        # Emit citation event for the source document (Google Drive link)
-                        if __event_emitter__:
-                            # Format the content for better display
-                            formatted_content = self._format_citation_content(text, document_name, None, None, "document")
-                            
-                            await __event_emitter__({
-                                "type": "citation",
-                                "data": {
-                                    "document": [formatted_content],
-                                    "metadata": [
-                                        {
-                                            "date_accessed": datetime.now().isoformat(),
-                                            "source": self._clean_document_name(document_name),
-                                            "media_type": "document"
-                                        }
-                                    ],
-                                    "source": {
-                                        "name": f"📄 {self._clean_document_name(document_name)}",
-                                        "url": source_url
-                                    },
-                                },
-                            })
+
                         
                         # Use clean text without attribution since citations handle the links
                         attributed_text = text
