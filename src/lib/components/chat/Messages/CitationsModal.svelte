@@ -286,6 +286,18 @@
 								})()}
 								{#if parsedContent && (parsedContent.video_description || parsedContent.audio_transcript)}
 									<div class="bg-gray-50 dark:bg-gray-800 rounded-lg p-4 mt-2 space-y-4">
+										<!-- Debug: Show available metadata -->
+										<div class="bg-yellow-100 dark:bg-yellow-900 p-3 rounded-lg mb-4 text-xs">
+											<strong>Debug - Available URLs:</strong><br/>
+											metadata.video_url: {document.metadata?.video_url || 'NOT SET'}<br/>
+											metadata.audio_url: {document.metadata?.audio_url || 'NOT SET'}<br/>
+											metadata.stream_url: {document.metadata?.stream_url || 'NOT SET'}<br/>
+											source.url: {document.source?.url || 'NOT SET'}<br/>
+											source.video_url: {document.source?.video_url || 'NOT SET'}<br/>
+											source.audio_url: {document.source?.audio_url || 'NOT SET'}<br/>
+											source.fallback_url: {document.source?.fallback_url || 'NOT SET'}
+										</div>
+										
 										<!-- Content Type Indicator -->
 										<div class="flex items-center gap-2 mb-2 pb-2 border-b border-gray-200 dark:border-gray-700">
 											<span class="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">
@@ -314,15 +326,27 @@
 												
 												<!-- Show video streaming links -->
 												<div class="mt-3 pl-6 space-y-2">
-													<!-- Primary video link from metadata -->
-													{#if document.metadata?.video_url}
+													<!-- Primary video link from source -->
+													{#if document.source?.video_url}
 														<a 
-															href={document.metadata.video_url} 
+															href={document.source.video_url} 
 															class="inline-flex items-center gap-2 px-3 py-2 bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 rounded-lg hover:bg-blue-200 dark:hover:bg-blue-800 transition-colors text-sm font-medium"
 															target="_blank"
 														>
 															<span>🎬</span>
 															<span>Play Video (Stream)</span>
+														</a>
+													{/if}
+													
+													<!-- Fallback video link from source file -->
+													{#if document.source?.fallback_url}
+														<a 
+															href={document.source.fallback_url} 
+															class="inline-flex items-center gap-2 px-3 py-2 bg-blue-50 dark:bg-blue-800 text-blue-600 dark:text-blue-200 rounded-lg hover:bg-blue-100 dark:hover:bg-blue-700 transition-colors text-sm border border-blue-200 dark:border-blue-600"
+															target="_blank"
+														>
+															<span>📁</span>
+															<span>Open in Google Drive</span>
 														</a>
 													{/if}
 													
@@ -361,10 +385,10 @@
 												
 												<!-- Show audio streaming links -->
 												<div class="mt-3 pl-6 space-y-2">
-													<!-- Primary audio link from metadata -->
-													{#if document.metadata?.audio_url}
+													<!-- Primary audio link from source -->
+													{#if document.source?.audio_url}
 														<a 
-															href={document.metadata.audio_url} 
+															href={document.source.audio_url} 
 															class="inline-flex items-center gap-2 px-3 py-2 bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300 rounded-lg hover:bg-green-200 dark:hover:bg-green-800 transition-colors text-sm font-medium"
 															target="_blank"
 														>
