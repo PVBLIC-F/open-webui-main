@@ -86,7 +86,7 @@ from open_webui.routers import (
     users,
     utils,
     scim,
-    ragie_proxy,
+    ragie_proxy_simple as ragie_proxy,
 )
 
 from open_webui.routers.retrieval import (
