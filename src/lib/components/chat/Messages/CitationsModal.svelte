@@ -417,9 +417,6 @@
 																{#if videoUrl}
 																	<source src={videoUrl} type="video/mp4" />
 																{/if}
-																{#if fallbackUrl}
-																	<source src={fallbackUrl} type="video/mp4" />
-																{/if}
 																<!-- Add empty track for accessibility -->
 																<track kind="captions" />
 																<p class="text-sm text-gray-500 p-4">
@@ -534,9 +531,6 @@
 															>
 																{#if audioUrl}
 																	<source src={audioUrl} type="audio/mpeg" />
-																{/if}
-																{#if audioFallbackUrl}
-																	<source src={audioFallbackUrl} />
 																{/if}
 																<p class="text-sm text-gray-500">
 																	Your browser doesn't support embedded audio. 
