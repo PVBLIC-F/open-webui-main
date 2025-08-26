@@ -360,6 +360,17 @@
 											{@const rawVideoUrl = document.source?.video_url || document.metadata?.video_url}
 											{@const videoUrl = normalizeProxyUrl(rawVideoUrl)}
 											{@const fallbackUrl = document.source?.fallback_url || document.metadata?.fallback_url}
+											{@const debugVideoUrls = (() => {
+												console.log('=== VIDEO URL DEBUG ===');
+												console.log('document.source:', document.source);
+												console.log('document.metadata:', document.metadata);
+												console.log('document.source?.video_url:', document.source?.video_url);
+												console.log('document.metadata?.video_url:', document.metadata?.video_url);
+												console.log('rawVideoUrl:', rawVideoUrl);
+												console.log('videoUrl after normalize:', videoUrl);
+												console.log('fallbackUrl:', fallbackUrl);
+												return true;
+											})()}
 											<div>
 												<div class="flex items-center gap-2 mb-3">
 													<span class="text-lg">🎬</span>
@@ -481,6 +492,17 @@
 											{@const rawAudioUrl = document.source?.audio_url || document.metadata?.audio_url}
 											{@const audioUrl = normalizeProxyUrl(rawAudioUrl)}
 											{@const audioFallbackUrl = document.source?.fallback_url || document.metadata?.fallback_url}
+											{@const debugAudioUrls = (() => {
+												console.log('=== AUDIO URL DEBUG ===');
+												console.log('document.source:', document.source);
+												console.log('document.metadata:', document.metadata);
+												console.log('document.source?.audio_url:', document.source?.audio_url);
+												console.log('document.metadata?.audio_url:', document.metadata?.audio_url);
+												console.log('rawAudioUrl:', rawAudioUrl);
+												console.log('audioUrl after normalize:', audioUrl);
+												console.log('audioFallbackUrl:', audioFallbackUrl);
+												return true;
+											})()}
 											<div>
 												<div class="flex items-center gap-2 mb-3">
 													<span class="text-lg">🎵</span>
