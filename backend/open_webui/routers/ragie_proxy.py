@@ -38,10 +38,10 @@ _http_client: Optional[httpx.AsyncClient] = None
 
 # Configuration constants
 RAGIE_BASE_URL = "https://api.ragie.ai"
-CHUNK_SIZE = 128 * 1024  # 128KB chunks for optimal streaming
+CHUNK_SIZE = 8 * 1024  # 8KB chunks for responsive streaming
 MAX_CONNECTIONS = 50
 MAX_KEEPALIVE = 20
-REQUEST_TIMEOUT = 60.0
+REQUEST_TIMEOUT = None  # No timeout for streaming
 CONNECT_TIMEOUT = 10.0
 
 
@@ -59,8 +59,8 @@ async def get_http_client() -> httpx.AsyncClient:
             timeout=httpx.Timeout(
                 connect=CONNECT_TIMEOUT,
                 read=REQUEST_TIMEOUT,
-                write=REQUEST_TIMEOUT,
-                pool=REQUEST_TIMEOUT
+                write=None,  # No write timeout for streaming
+                pool=None  # No pool timeout for streaming
             ),
             limits=httpx.Limits(
                 max_connections=MAX_CONNECTIONS,
@@ -140,8 +140,10 @@ def build_headers(
         "Authorization": f"Bearer {api_key}",
         "Accept": media_type,
         "User-Agent": "OpenWebUI-RagieProxy/1.0",
-        "Accept-Encoding": "gzip, deflate",
-        "Connection": "keep-alive"
+        "Accept-Encoding": "identity",  # Don't compress streaming content
+        "Connection": "keep-alive",
+        "Cache-Control": "no-cache",  # Ensure fresh content
+        "Pragma": "no-cache"
     }
     
     if partition:
@@ -164,7 +166,8 @@ async def stream_content(response: httpx.Response) -> AsyncGenerator[bytes, None
         bytes: Content chunks
     """
     try:
-        async for chunk in response.aiter_bytes(chunk_size=CHUNK_SIZE):
+        # Stream immediately without buffering
+        async for chunk in response.aiter_raw(chunk_size=CHUNK_SIZE):
             if chunk:
                 yield chunk
     except (httpx.StreamClosed, asyncio.CancelledError) as e:
@@ -301,6 +304,9 @@ async def proxy_ragie_stream(
             # Prepare response
             content_type = response.headers.get("content-type", media_type)
             response_headers = create_response_headers(response.headers)
+            
+            # Log successful streaming start
+            log.info(f"Streaming {content_type} content, status: {response.status_code}")
             
             return StreamingResponse(
                 stream_content(response),
