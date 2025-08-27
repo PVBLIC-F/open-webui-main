@@ -1191,7 +1191,7 @@ class Filter:
                             logger.info(f"[DEBUG] Using chunk-specific audio URL from Ragie API: {ragie_audio_url}")
                             
                             base_url = self.valves.base_url.rstrip('/') if self.valves.base_url else ""
-                            proxy_audio_url = f"{base_url}/api/proxy/ragie/stream?url={urllib.parse.quote(ragie_audio_url, safe='')}"
+                            proxy_audio_url = f"{base_url}/proxy/ragie/stream?url={urllib.parse.quote(ragie_audio_url, safe='')}"
                             streaming_urls['audio'] = proxy_audio_url
                             logger.info(f"[DEBUG] Generated proxy audio URL: {proxy_audio_url}")
                         
@@ -1201,7 +1201,7 @@ class Filter:
                             logger.info(f"[DEBUG] Using chunk-specific video URL from Ragie API: {ragie_video_url}")
                             
                             base_url = self.valves.base_url.rstrip('/') if self.valves.base_url else ""
-                            proxy_video_url = f"{base_url}/api/proxy/ragie/stream?url={urllib.parse.quote(ragie_video_url, safe='')}"
+                            proxy_video_url = f"{base_url}/proxy/ragie/stream?url={urllib.parse.quote(ragie_video_url, safe='')}"
                             streaming_urls['video'] = proxy_video_url
                             logger.info(f"[DEBUG] Generated proxy video URL: {proxy_video_url}")
                         
