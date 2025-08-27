@@ -8,6 +8,7 @@ import urllib.parse
 import logging
 import html
 import re
+import json
 
 log = logging.getLogger(__name__)
 
@@ -45,7 +46,10 @@ def _is_safe_url(url: str) -> bool:
 @router.get("/video", response_class=HTMLResponse)
 async def video_player(
     request: Request,
-    stream: str = Query(..., description="The video stream URL to play")
+    stream: str = Query(..., description="The video stream URL to play"),
+    start_time: float = Query(None, description="Chunk start time in seconds"),
+    end_time: float = Query(None, description="Chunk end time in seconds"),
+    chunk_text: str = Query(None, description="Chunk text content")
 ):
     """
     Simple, clean video player that loads the stream directly.
@@ -69,6 +73,17 @@ async def video_player(
         # Escape URL for safe HTML injection
         safe_stream_url = html.escape(stream_url, quote=True)
         log.info(f"Video player loading stream: {stream_url}")
+        
+        # Process chunk metadata
+        chunk_info = {}
+        if start_time is not None and end_time is not None:
+            chunk_info = {
+                'start_time': start_time,
+                'end_time': end_time,
+                'duration': end_time - start_time,
+                'text': chunk_text or "Video segment"
+            }
+            log.info(f"Loading video chunk: {start_time}s - {end_time}s ({chunk_info['duration']:.1f}s)")
         
         # Enhanced HTML5 video player for chunked streaming
         html_content = f"""
@@ -131,12 +146,37 @@ async def video_player(
             font-size: 18px;
             margin: 20px 0;
         }}
+        .chunk-info {{
+            background: rgba(255,255,255,0.1);
+            border-radius: 8px;
+            padding: 15px;
+            margin: 20px 0;
+            color: white;
+            border: 1px solid rgba(255,255,255,0.2);
+        }}
+        .chunk-info h3 {{
+            margin: 0 0 10px 0;
+            color: #4A9EFF;
+            font-size: 18px;
+        }}
+        .chunk-info p {{
+            margin: 5px 0;
+            font-size: 14px;
+            line-height: 1.4;
+        }}
     </style>
 </head>
 <body>
     <div class="video-container">
-        <div id="loading" class="loading">Click play to start streaming</div>
+        <div id="loading" class="loading">Loading video stream...</div>
         <div id="error" class="error" style="display: none;"></div>
+        
+        {f'''<div class="chunk-info">
+            <h3>📹 Video Segment</h3>
+            <p><strong>Duration:</strong> {chunk_info['duration']:.1f} seconds</p>
+            <p><strong>Timing:</strong> {chunk_info['start_time']:.1f}s - {chunk_info['end_time']:.1f}s</p>
+            <p><strong>Content:</strong> {html.escape(chunk_info['text'][:100] + ('...' if len(chunk_info['text']) > 100 else ''))}</p>
+        </div>''' if chunk_info else ''}
         
         <video id="videoPlayer" controls preload="none" playsinline crossorigin="anonymous">
             <p style="color: white; text-align: center;">
@@ -144,7 +184,7 @@ async def video_player(
             </p>
         </video>
         
-        <div class="status" id="status">Click play button to start streaming</div>
+        <div class="status" id="status">Ready to play video segment</div>
         
         <div>
             <a href="{safe_stream_url}" class="download-link" target="_blank">Download Video</a>
@@ -176,13 +216,14 @@ async def video_player(
             loading.style.display = 'none';
         }}
         
-        // Simple, direct streaming approach
+        // Stream through the proxy with proper chunked handling
         function loadVideo() {{
             try {{
                 showStatus('Loading video stream...');
                 
-                // Set video source directly - let browser handle streaming
-                video.src = '{safe_stream_url}';
+                // Use the proxy endpoint for streaming
+                const proxyUrl = '/proxy/ragie/stream?url=' + encodeURIComponent('{safe_stream_url}');
+                video.src = proxyUrl;
                 video.load();
                 
             }} catch (err) {{
@@ -198,7 +239,12 @@ async def video_player(
         
         video.addEventListener('loadedmetadata', () => {{
             hideLoading();
-            showStatus(`Video loaded: ${{video.videoWidth}}x${{video.videoHeight}}, Duration: ${{Math.round(video.duration)}}s`);
+            const chunkInfo = {json.dumps(chunk_info) if chunk_info else 'null'};
+            if (chunkInfo) {{
+                showStatus(`Chunk loaded: ${{chunkInfo.duration.toFixed(1)}}s segment (${{video.videoWidth}}x${{video.videoHeight}})`);
+            }} else {{
+                showStatus(`Video loaded: ${{video.videoWidth}}x${{video.videoHeight}}, Duration: ${{Math.round(video.duration)}}s`);
+            }}
         }});
         
         video.addEventListener('canplay', () => {{
@@ -243,8 +289,8 @@ async def video_player(
             showError(errorMessage + '<br><br>Try refreshing the page or use the download links below.');
         }});
         
-        // Load initial clip when page loads
-        document.addEventListener('DOMContentLoaded', loadInitialClip);
+        // Load video when page loads
+        document.addEventListener('DOMContentLoaded', loadVideo);
         
         // Add keyboard shortcuts
         document.addEventListener('keydown', (e) => {{
@@ -289,7 +335,10 @@ async def video_player(
 @router.get("/audio", response_class=HTMLResponse)
 async def audio_player(
     request: Request,
-    stream: str = Query(..., description="The audio stream URL to play")
+    stream: str = Query(..., description="The audio stream URL to play"),
+    start_time: float = Query(None, description="Chunk start time in seconds"),
+    end_time: float = Query(None, description="Chunk end time in seconds"),
+    chunk_text: str = Query(None, description="Chunk text content")
 ):
     """
     Simple, clean audio player that loads the stream directly.
@@ -313,6 +362,17 @@ async def audio_player(
         # Escape URL for safe HTML injection
         safe_stream_url = html.escape(stream_url, quote=True)
         log.info(f"Audio player loading stream: {stream_url}")
+        
+        # Process chunk metadata
+        chunk_info = {}
+        if start_time is not None and end_time is not None:
+            chunk_info = {
+                'start_time': start_time,
+                'end_time': end_time,
+                'duration': end_time - start_time,
+                'text': chunk_text or "Audio segment"
+            }
+            log.info(f"Loading audio chunk: {start_time}s - {end_time}s ({chunk_info['duration']:.1f}s)")
         
         # Enhanced HTML5 audio player for streaming
         html_content = f"""
@@ -403,20 +463,45 @@ async def audio_player(
         .control-btn:active {{
             transform: scale(0.95);
         }}
+        .chunk-info-audio {{
+            background: rgba(74,158,255,0.1);
+            border-radius: 8px;
+            padding: 15px;
+            margin: 20px 0;
+            border: 1px solid rgba(74,158,255,0.3);
+        }}
+        .chunk-info-audio h3 {{
+            margin: 0 0 10px 0;
+            color: #4A9EFF;
+            font-size: 18px;
+        }}
+        .chunk-info-audio p {{
+            margin: 5px 0;
+            font-size: 14px;
+            line-height: 1.4;
+            color: #333;
+        }}
     </style>
 </head>
 <body>
     <div class="audio-container">
         <div class="audio-title">🎵 Audio Player</div>
         
-        <div id="loading" class="loading">Click play to start streaming</div>
+        {f'''<div class="chunk-info-audio">
+            <h3>🎧 Audio Segment</h3>
+            <p><strong>Duration:</strong> {chunk_info['duration']:.1f} seconds</p>
+            <p><strong>Timing:</strong> {chunk_info['start_time']:.1f}s - {chunk_info['end_time']:.1f}s</p>
+            <p><strong>Content:</strong> {html.escape(chunk_info['text'][:100] + ('...' if len(chunk_info['text']) > 100 else ''))}</p>
+        </div>''' if chunk_info else ''}
+        
+        <div id="loading" class="loading">Loading audio stream...</div>
         <div id="error" class="error" style="display: none;"></div>
         
         <audio id="audioPlayer" controls preload="none" crossorigin="anonymous">
             <p>Your browser doesn't support audio playback.</p>
         </audio>
         
-        <div class="status" id="status">Click play button to start streaming</div>
+        <div class="status" id="status">Ready to play audio segment</div>
         
         <div class="controls">
             <button class="control-btn" onclick="document.getElementById('audioPlayer').play()">▶️ Play</button>
@@ -456,13 +541,14 @@ async def audio_player(
             loading.style.display = 'none';
         }}
         
-        // Simple, direct streaming approach
+        // Stream through the proxy with proper chunked handling
         function loadAudio() {{
             try {{
                 showStatus('Loading audio stream...');
                 
-                // Set audio source directly - let browser handle streaming
-                audio.src = '{safe_stream_url}';
+                // Use the proxy endpoint for streaming
+                const proxyUrl = '/proxy/ragie/stream?url=' + encodeURIComponent('{safe_stream_url}');
+                audio.src = proxyUrl;
                 audio.load();
                 
             }} catch (err) {{
@@ -478,7 +564,12 @@ async def audio_player(
         
         audio.addEventListener('loadedmetadata', () => {{
             hideLoading();
-            showStatus(`Audio loaded: Duration: ${{Math.round(audio.duration)}}s`);
+            const chunkInfo = {json.dumps(chunk_info) if chunk_info else 'null'};
+            if (chunkInfo) {{
+                showStatus(`Chunk loaded: ${{chunkInfo.duration.toFixed(1)}}s audio segment`);
+            }} else {{
+                showStatus(`Audio loaded: Duration: ${{Math.round(audio.duration)}}s`);
+            }}
         }});
         
         audio.addEventListener('canplay', () => {{
@@ -523,8 +614,8 @@ async def audio_player(
             showError(errorMessage + '<br><br>Try refreshing the page or use the download links below.');
         }});
         
-        // Load initial clip when page loads
-        document.addEventListener('DOMContentLoaded', loadInitialClip);
+        // Load audio when page loads
+        document.addEventListener('DOMContentLoaded', loadAudio);
         
         // Add keyboard shortcuts
         document.addEventListener('keydown', (e) => {{

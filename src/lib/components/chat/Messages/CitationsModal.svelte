@@ -34,17 +34,79 @@
 		return 'bg-red-200 dark:bg-red-800 text-red-800 dark:text-red-200';
 	}
 
-	// Simple functions to create player URLs
-	function createVideoPlayerUrl(videoStreamUrl: string) {
-		if (!videoStreamUrl) return null;
-		const encodedUrl = encodeURIComponent(videoStreamUrl);
-		return `/api/player/video?stream=${encodedUrl}`;
+	// Enhanced functions to create player URLs with chunk metadata following Ragie API structure
+	function createVideoPlayerUrl(videoStreamUrl: string, metadata?: any, documentContent?: string, links?: any) {
+		// Prefer chunk-level streaming URL from links if available
+		const chunkVideoUrl = links?.self_video_stream?.href;
+		const streamUrl = chunkVideoUrl || videoStreamUrl;
+		
+		if (!streamUrl) return null;
+		
+		const encodedUrl = encodeURIComponent(streamUrl);
+		let playerUrl = `/api/player/video?stream=${encodedUrl}`;
+		
+		// Add chunk metadata if available (from Ragie API structure)
+		if (metadata?.start_time !== undefined && metadata?.end_time !== undefined) {
+			playerUrl += `&start_time=${metadata.start_time}&end_time=${metadata.end_time}`;
+			
+			// Use document content as chunk text if available
+			const chunkText = documentContent || metadata.text || '';
+			if (chunkText) {
+				// Clean the text for URL encoding
+				const cleanText = chunkText.replace(/\*\*([^*]+)\*\*/g, '$1')
+					.replace(/\*([^*]+)\*/g, '$1')
+					.replace(/\\u[\da-f]{4}/gi, '')
+					.replace(/\s+/g, ' ')
+					.trim();
+				playerUrl += `&chunk_text=${encodeURIComponent(cleanText)}`;
+			}
+		}
+		
+		console.log('🎬 Video Player URL created:', {
+			chunkVideoUrl,
+			fallbackUrl: videoStreamUrl,
+			finalUrl: playerUrl,
+			hasChunkTiming: !!(metadata?.start_time && metadata?.end_time)
+		});
+		
+		return playerUrl;
 	}
 	
-	function createAudioPlayerUrl(audioStreamUrl: string) {
-		if (!audioStreamUrl) return null;
-		const encodedUrl = encodeURIComponent(audioStreamUrl);
-		return `/api/player/audio?stream=${encodedUrl}`;
+	function createAudioPlayerUrl(audioStreamUrl: string, metadata?: any, documentContent?: string, links?: any) {
+		// Prefer chunk-level streaming URL from links if available
+		const chunkAudioUrl = links?.self_audio_stream?.href;
+		const streamUrl = chunkAudioUrl || audioStreamUrl;
+		
+		if (!streamUrl) return null;
+		
+		const encodedUrl = encodeURIComponent(streamUrl);
+		let playerUrl = `/api/player/audio?stream=${encodedUrl}`;
+		
+		// Add chunk metadata if available (from Ragie API structure)
+		if (metadata?.start_time !== undefined && metadata?.end_time !== undefined) {
+			playerUrl += `&start_time=${metadata.start_time}&end_time=${metadata.end_time}`;
+			
+			// Use document content as chunk text if available
+			const chunkText = documentContent || metadata.text || '';
+			if (chunkText) {
+				// Clean the text for URL encoding
+				const cleanText = chunkText.replace(/\*\*([^*]+)\*\*/g, '$1')
+					.replace(/\*([^*]+)\*/g, '$1')
+					.replace(/\\u[\da-f]{4}/gi, '')
+					.replace(/\s+/g, ' ')
+					.trim();
+				playerUrl += `&chunk_text=${encodeURIComponent(cleanText)}`;
+			}
+		}
+		
+		console.log('🎧 Audio Player URL created:', {
+			chunkAudioUrl,
+			fallbackUrl: audioStreamUrl,
+			finalUrl: playerUrl,
+			hasChunkTiming: !!(metadata?.start_time && metadata?.end_time)
+		});
+		
+		return playerUrl;
 	}
 	
 
@@ -139,14 +201,22 @@
 			<div
 				class="flex flex-col w-full dark:text-gray-200 overflow-y-auto max-h-[32rem] scrollbar-thin scrollbar-thumb-gray-300 dark:scrollbar-thumb-gray-600 scrollbar-track-transparent"
 			>
-				<!-- Debug Info -->
-				<div class="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-700 rounded p-2 mb-2 text-xs">
-					<strong>Debug:</strong> mergedDocuments.length = {mergedDocuments?.length || 0} | 
-					citation.document type = {typeof citation?.document} | 
-					citation.document length = {citation?.document?.length || 'No length'} | 
-					documentsArray type = {typeof documentsArray} | 
-					documentsArray length = {Array.isArray(documentsArray) ? documentsArray?.length : 'Not array'}
-				</div>
+										<!-- Debug Info -->
+						<div class="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-700 rounded p-2 mb-2 text-xs">
+							<strong>Debug:</strong> mergedDocuments.length = {mergedDocuments?.length || 0} | 
+							citation.document type = {typeof citation?.document} | 
+							citation.document length = {citation?.document?.length || 'No length'} | 
+							documentsArray type = {typeof documentsArray} | 
+							documentsArray length = {Array.isArray(documentsArray) ? documentsArray?.length : 'Not array'}
+							<br/><strong>Ragie API Structure:</strong> 
+							{#if mergedDocuments?.[0]?.metadata?.links}
+								✅ Links found in metadata | 
+								Video: {mergedDocuments[0].metadata.links.self_video_stream ? '✅' : '❌'} | 
+								Audio: {mergedDocuments[0].metadata.links.self_audio_stream ? '✅' : '❌'}
+							{:else}
+								❌ No links in metadata
+							{/if}
+						</div>
 				
 				{#each mergedDocuments as document, documentIdx}
 					<div class="flex flex-col w-full">
@@ -353,13 +423,18 @@
 												.replace(/\s+/g, ' ')
 												.trim()}
 											{@const rawVideoUrl = document.metadata?.video_url}
-											{@const videoPlayerUrl = createVideoPlayerUrl(rawVideoUrl)}
+											{@const videoLinks = document.metadata?.links || document.links}
+											{@const videoPlayerUrl = createVideoPlayerUrl(rawVideoUrl, document.metadata, cleanDescription, videoLinks)}
 											{@const fallbackUrl = document.source?.fallback_url || document.metadata?.fallback_url}
 											{@const debugVideoUrls = (() => {
 												console.log('=== VIDEO URL DEBUG ===');
 												console.log('rawVideoUrl:', rawVideoUrl);
+												console.log('videoLinks:', videoLinks);
+												console.log('videoLinks.self_video_stream:', videoLinks?.self_video_stream);
+												console.log('videoLinks.document_video_stream:', videoLinks?.document_video_stream);
 												console.log('videoPlayerUrl:', videoPlayerUrl);
 												console.log('fallbackUrl:', fallbackUrl);
+												console.log('metadata:', document.metadata);
 												return true;
 											})()}
 											<div>
@@ -451,13 +526,18 @@
 												.replace(/\s+/g, ' ')
 												.trim()}
 											{@const rawAudioUrl = document.metadata?.audio_url}
-											{@const audioPlayerUrl = createAudioPlayerUrl(rawAudioUrl)}
+											{@const audioLinks = document.metadata?.links || document.links}
+											{@const audioPlayerUrl = createAudioPlayerUrl(rawAudioUrl, document.metadata, cleanTranscript, audioLinks)}
 											{@const audioFallbackUrl = document.source?.fallback_url || document.metadata?.fallback_url}
 											{@const debugAudioUrls = (() => {
 												console.log('=== AUDIO URL DEBUG ===');
 												console.log('rawAudioUrl:', rawAudioUrl);
+												console.log('audioLinks:', audioLinks);
+												console.log('audioLinks.self_audio_stream:', audioLinks?.self_audio_stream);
+												console.log('audioLinks.document_audio_stream:', audioLinks?.document_audio_stream);
 												console.log('audioPlayerUrl:', audioPlayerUrl);
 												console.log('audioFallbackUrl:', audioFallbackUrl);
+												console.log('metadata:', document.metadata);
 												return true;
 											})()}
 											<div>
