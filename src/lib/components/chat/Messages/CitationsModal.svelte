@@ -34,11 +34,72 @@
 		return 'bg-red-200 dark:bg-red-800 text-red-800 dark:text-red-200';
 	}
 
+	// Helper function to convert document-level URL to chunk-level URL
+	function convertToChunkUrl(documentUrl: string, metadata: any): string {
+		try {
+			// Extract the raw Ragie URL from the proxied URL
+			let ragieUrl = documentUrl;
+			
+			// If it's already a proxied URL, extract the original
+			if (documentUrl.includes('/proxy/ragie/stream?url=')) {
+				const urlMatch = documentUrl.match(/url=([^&]+)/);
+				if (urlMatch) {
+					ragieUrl = decodeURIComponent(urlMatch[1]);
+				}
+			}
+			
+			// Extract document ID from the Ragie URL
+			const docIdMatch = ragieUrl.match(/\/documents\/([^\/]+)\/content/);
+			if (!docIdMatch) {
+				console.warn('Could not extract document ID from URL:', ragieUrl);
+				return documentUrl; // Return original if we can't parse
+			}
+			
+			const documentId = docIdMatch[1];
+			
+			// Get the real chunk ID from metadata (now available from Ragie API)
+			const chunkId = metadata.chunk_id;
+			if (!chunkId) {
+				console.warn('No chunk ID available for URL conversion');
+				return documentUrl; // Return original if no chunk ID
+			}
+			
+			// Construct chunk-level URL
+			const mediaType = ragieUrl.includes('video') ? 'video/mp4' : 'audio/mpeg';
+			const chunkUrl = `https://api.ragie.ai/documents/${documentId}/chunks/${chunkId}/content?media_type=${mediaType}`;
+			
+			console.log('🔄 URL Conversion:', {
+				original: documentUrl,
+				extracted: ragieUrl,
+				documentId,
+				chunkId,
+				converted: chunkUrl
+			});
+			
+			// Return the converted chunk URL since we now have real chunk IDs
+			// Re-proxy the chunk URL through our system
+			const baseUrl = window.location.origin;
+			const proxiedChunkUrl = `${baseUrl}/proxy/ragie/stream?url=${encodeURIComponent(chunkUrl)}`;
+			
+			console.log('✅ Chunk URL created:', proxiedChunkUrl);
+			return proxiedChunkUrl;
+			
+		} catch (error) {
+			console.error('Error converting to chunk URL:', error);
+			return documentUrl; // Return original on error
+		}
+	}
+
 	// Enhanced functions to create player URLs with chunk metadata following Ragie API structure
 	function createVideoPlayerUrl(videoStreamUrl: string, metadata?: any, documentContent?: string, links?: any) {
 		// Prefer chunk-level streaming URL from links if available
 		const chunkVideoUrl = links?.self_video_stream?.href;
-		const streamUrl = chunkVideoUrl || videoStreamUrl;
+		let streamUrl = chunkVideoUrl || videoStreamUrl;
+		
+		// If we have chunk timing but no chunk-specific URL, try to convert document URL to chunk URL
+		if (!chunkVideoUrl && streamUrl && metadata?.start_time !== undefined && metadata?.end_time !== undefined) {
+			streamUrl = convertToChunkUrl(streamUrl, metadata);
+		}
 		
 		if (!streamUrl) return null;
 		
@@ -63,8 +124,9 @@
 		}
 		
 		console.log('🎬 Video Player URL created:', {
+			originalUrl: videoStreamUrl,
 			chunkVideoUrl,
-			fallbackUrl: videoStreamUrl,
+			convertedUrl: streamUrl,
 			finalUrl: playerUrl,
 			hasChunkTiming: !!(metadata?.start_time && metadata?.end_time)
 		});
@@ -75,7 +137,12 @@
 	function createAudioPlayerUrl(audioStreamUrl: string, metadata?: any, documentContent?: string, links?: any) {
 		// Prefer chunk-level streaming URL from links if available
 		const chunkAudioUrl = links?.self_audio_stream?.href;
-		const streamUrl = chunkAudioUrl || audioStreamUrl;
+		let streamUrl = chunkAudioUrl || audioStreamUrl;
+		
+		// If we have chunk timing but no chunk-specific URL, try to convert document URL to chunk URL
+		if (!chunkAudioUrl && streamUrl && metadata?.start_time !== undefined && metadata?.end_time !== undefined) {
+			streamUrl = convertToChunkUrl(streamUrl, metadata);
+		}
 		
 		if (!streamUrl) return null;
 		
@@ -100,8 +167,9 @@
 		}
 		
 		console.log('🎧 Audio Player URL created:', {
+			originalUrl: audioStreamUrl,
 			chunkAudioUrl,
-			fallbackUrl: audioStreamUrl,
+			convertedUrl: streamUrl,
 			finalUrl: playerUrl,
 			hasChunkTiming: !!(metadata?.start_time && metadata?.end_time)
 		});
@@ -209,12 +277,16 @@
 							documentsArray type = {typeof documentsArray} | 
 							documentsArray length = {Array.isArray(documentsArray) ? documentsArray?.length : 'Not array'}
 							<br/><strong>Ragie API Structure:</strong> 
-							{#if mergedDocuments?.[0]?.metadata?.links}
+							{#if mergedDocuments?.[0]?.metadata?.links && Object.keys(mergedDocuments[0].metadata.links).length > 0}
 								✅ Links found in metadata | 
-								Video: {mergedDocuments[0].metadata.links.self_video_stream ? '✅' : '❌'} | 
-								Audio: {mergedDocuments[0].metadata.links.self_audio_stream ? '✅' : '❌'}
+								Video: {mergedDocuments[0].metadata.links.self_video_stream ? '✅ Chunk' : mergedDocuments[0].metadata.links.document_video_stream ? '📄 Doc' : '❌'} | 
+								Audio: {mergedDocuments[0].metadata.links.self_audio_stream ? '✅ Chunk' : mergedDocuments[0].metadata.links.document_audio_stream ? '📄 Doc' : '❌'} |
+								IDs: {mergedDocuments[0].metadata.document_id ? `doc:${mergedDocuments[0].metadata.document_id.substring(0,8)}...` : 'No doc'} {mergedDocuments[0].metadata.chunk_id ? `chunk:${mergedDocuments[0].metadata.chunk_id.substring(0,8)}...` : 'No chunk'}
 							{:else}
-								❌ No links in metadata
+								❌ No official links object | 
+								URLs: {mergedDocuments?.[0]?.metadata?.video_url ? 'Document-level' : 'None'} | 
+								Timing: {mergedDocuments?.[0]?.metadata?.start_time ? `${mergedDocuments[0].metadata.start_time}s-${mergedDocuments[0].metadata.end_time}s` : 'None'} |
+								IDs: {mergedDocuments?.[0]?.metadata?.document_id ? `doc:${mergedDocuments[0].metadata.document_id.substring(0,8)}...` : 'No doc'} {mergedDocuments?.[0]?.metadata?.chunk_id ? `chunk:${mergedDocuments[0].metadata.chunk_id.substring(0,8)}...` : 'No chunk'}
 							{/if}
 						</div>
 				

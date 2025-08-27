@@ -1260,7 +1260,10 @@ class Filter:
                                             "audio_url": streaming_urls.get('audio'),
                                             "video_url": streaming_urls.get('video'),
                                             "fallback_url": source_url,  # Google Drive link as fallback
-                                            "streaming_note": "Streaming chunk-specific media from Ragie API via authenticated proxy." if streaming_urls else "Streaming not available, using Google Drive fallback."
+                                            "streaming_note": "Streaming chunk-specific media from Ragie API via authenticated proxy." if streaming_urls else "Streaming not available, using Google Drive fallback.",
+                                            "links": links,  # Pass through original Ragie API links object
+                                            "document_id": document_id,  # Include document and chunk IDs for debugging
+                                            "chunk_id": chunk_id
                                         }
                                     ],
                                     "source": {
