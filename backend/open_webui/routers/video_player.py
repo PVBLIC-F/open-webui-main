@@ -54,6 +54,13 @@ async def video_player(
         # Decode and validate the stream URL
         stream_url = urllib.parse.unquote(stream)
         
+        # Handle relative URLs by converting them to absolute URLs
+        if stream_url.startswith('/'):
+            # Convert relative URL to absolute URL using request info
+            base_url = f"{request.url.scheme}://{request.url.netloc}"
+            stream_url = f"{base_url}{stream_url}"
+            log.info(f"Converted relative URL to absolute: {stream_url}")
+        
         # Security: Validate URL format and prevent XSS
         if not _is_safe_url(stream_url):
             log.warning(f"Rejected unsafe URL: {stream_url}")
@@ -112,6 +119,13 @@ async def audio_player(
     try:
         # Decode and validate the stream URL
         stream_url = urllib.parse.unquote(stream)
+        
+        # Handle relative URLs by converting them to absolute URLs
+        if stream_url.startswith('/'):
+            # Convert relative URL to absolute URL using request info
+            base_url = f"{request.url.scheme}://{request.url.netloc}"
+            stream_url = f"{base_url}{stream_url}"
+            log.info(f"Converted relative URL to absolute: {stream_url}")
         
         # Security: Validate URL format and prevent XSS
         if not _is_safe_url(stream_url):

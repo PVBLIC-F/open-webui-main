@@ -352,7 +352,7 @@
 												.replace(/\\u[\da-f]{4}/gi, '')
 												.replace(/\s+/g, ' ')
 												.trim()}
-											{@const rawVideoUrl = document.source?.video_url || document.metadata?.video_url}
+											{@const rawVideoUrl = document.metadata?.video_url}
 											{@const videoPlayerUrl = createVideoPlayerUrl(rawVideoUrl)}
 											{@const fallbackUrl = document.source?.fallback_url || document.metadata?.fallback_url}
 											{@const debugVideoUrls = (() => {
@@ -450,7 +450,7 @@
 												.replace(/\\u[\da-f]{4}/gi, '')
 												.replace(/\s+/g, ' ')
 												.trim()}
-											{@const rawAudioUrl = document.source?.audio_url || document.metadata?.audio_url}
+											{@const rawAudioUrl = document.metadata?.audio_url}
 											{@const audioPlayerUrl = createAudioPlayerUrl(rawAudioUrl)}
 											{@const audioFallbackUrl = document.source?.fallback_url || document.metadata?.fallback_url}
 											{@const debugAudioUrls = (() => {
