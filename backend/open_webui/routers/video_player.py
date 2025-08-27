@@ -179,8 +179,11 @@ async def video_player(
         </div>''' if chunk_info else ''}
         
         <video id="videoPlayer" controls preload="none" playsinline crossorigin="anonymous">
+            <source src="" type="video/mp4">
+            <source src="" type="video/webm">
             <p style="color: white; text-align: center;">
-                Your browser doesn't support video playback.
+                Your browser doesn't support video playback or the video format is not supported.
+                <br>Try using a different browser or download the video directly.
             </p>
         </video>
         
@@ -226,7 +229,17 @@ async def video_player(
                 const proxyUrl = '/proxy/ragie/stream?url=' + encodeURIComponent(streamUrl);
                 
                 console.log('Loading video from:', proxyUrl);
-                video.src = proxyUrl;
+                
+                // Set source on the first source element
+                const sources = video.querySelectorAll('source');
+                if (sources.length > 0) {{
+                    sources[0].src = proxyUrl;
+                    sources[0].type = 'video/mp4';
+                }} else {{
+                    // Fallback to direct src if no source elements
+                    video.src = proxyUrl;
+                }}
+                
                 video.load();
                 
             }} catch (err) {{
@@ -287,7 +300,7 @@ async def video_player(
                         errorMessage = 'Video decoding failed. The stream format may be unsupported or corrupted.';
                         break;
                     case 4:
-                        errorMessage = 'Video format not supported by this browser.';
+                        errorMessage = 'Video format not supported by this browser. The video codec or container format is not compatible with HTML5 video playback.';
                         break;
                 }}
             }}

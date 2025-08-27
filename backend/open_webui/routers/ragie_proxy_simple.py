@@ -25,6 +25,46 @@ async def proxy_ragie_stream_options():
         }
     )
 
+@router.get("/proxy/ragie/debug")
+async def debug_ragie_stream(url: str, request: Request):
+    """Debug endpoint to check what Ragie returns without streaming."""
+    
+    # Validate it's a Ragie URL
+    if not url.startswith("https://api.ragie.ai/"):
+        raise HTTPException(status_code=400, detail="Only Ragie URLs allowed")
+    
+    # Get auth from environment
+    api_key = os.getenv("RAGIE_API_KEY")
+    partition = os.getenv("RAGIE_PARTITION")
+    
+    if not api_key:
+        raise HTTPException(status_code=500, detail="RAGIE_API_KEY not configured")
+    
+    # Build headers
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Accept": "*/*"
+    }
+    
+    if partition:
+        headers["partition"] = partition
+    
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.head(url, headers=headers)
+            
+            return {
+                "status_code": response.status_code,
+                "headers": dict(response.headers),
+                "content_type": response.headers.get('content-type'),
+                "content_length": response.headers.get('content-length'),
+                "accept_ranges": response.headers.get('accept-ranges'),
+                "url": url
+            }
+            
+    except Exception as e:
+        return {"error": str(e), "url": url}
+
 @router.get("/proxy/ragie/stream")
 async def proxy_ragie_stream(url: str, request: Request) -> StreamingResponse:
     """
@@ -92,7 +132,11 @@ async def proxy_ragie_stream(url: str, request: Request) -> StreamingResponse:
                 
                 content_type = response.headers.get('content-type', 'unknown')
                 content_length = response.headers.get('content-length', 'unknown')
+                accept_ranges = response.headers.get('accept-ranges', 'none')
+                
                 log.info(f"✅ SUCCESS: Streaming {content_type} ({content_length} bytes) - Status: {response.status_code}")
+                log.info(f"📊 Response Headers: content-type={content_type}, accept-ranges={accept_ranges}, content-length={content_length}")
+                log.info(f"🔗 All Headers: {dict(response.headers)}")
                 
                 # Create a safe streaming generator that handles disconnections
                 async def safe_stream():
