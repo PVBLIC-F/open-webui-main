@@ -106,16 +106,34 @@ async def video_player(
             const error = document.getElementById('error');
             
             try {{
-                // Fetch the video stream with authentication
-                const response = await fetch('{safe_stream_url}');
+                console.log('Fetching video from:', '{safe_stream_url}');
+                
+                // Fetch the video stream with authentication - disable range requests
+                const response = await fetch('{safe_stream_url}', {{
+                    method: 'GET',
+                    headers: {{
+                        'Range': '', // Explicitly disable range requests
+                        'Cache-Control': 'no-cache'
+                    }}
+                }});
+                
+                console.log('Response status:', response.status);
+                console.log('Response headers:', Object.fromEntries(response.headers.entries()));
                 
                 if (!response.ok) {{
-                    throw new Error(`HTTP ${{response.status}}`);
+                    throw new Error(`HTTP ${{response.status}}: ${{response.statusText}}`);
                 }}
+                
+                // Get content type to verify it's video
+                const contentType = response.headers.get('content-type');
+                console.log('Content type:', contentType);
                 
                 // Create blob URL from the response
                 const blob = await response.blob();
+                console.log('Blob created, size:', blob.size, 'type:', blob.type);
+                
                 const videoUrl = URL.createObjectURL(blob);
+                console.log('Blob URL created:', videoUrl);
                 
                 // Set video source and show player
                 video.src = videoUrl;
@@ -127,10 +145,17 @@ async def video_player(
                     console.log('Video loaded successfully');
                 }});
                 
+                video.addEventListener('error', (e) => {{
+                    console.error('Video playback error:', e);
+                    console.error('Video error details:', video.error);
+                }});
+                
             }} catch (err) {{
                 console.error('Video loading failed:', err);
+                console.error('Error details:', err.message);
                 loading.style.display = 'none';
                 error.style.display = 'block';
+                error.innerHTML = `Failed to load video: ${{err.message}}<br><a href="{safe_stream_url}" style="color: #4A9EFF;">Try direct link</a>`;
             }}
         }}
         
