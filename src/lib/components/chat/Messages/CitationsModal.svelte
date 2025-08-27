@@ -232,6 +232,21 @@
 		console.log('Final mergedDocuments:', mergedDocuments);
 		console.log('mergedDocuments length:', mergedDocuments?.length || 0);
 		
+		// Debug the metadata structure specifically
+		if (mergedDocuments?.length > 0) {
+			const firstDoc = mergedDocuments[0];
+			console.log('=== METADATA DEBUG ===');
+			console.log('firstDoc.metadata:', firstDoc.metadata);
+			console.log('firstDoc.metadata type:', typeof firstDoc.metadata);
+			console.log('firstDoc.metadata keys:', firstDoc.metadata ? Object.keys(firstDoc.metadata) : 'No metadata');
+			console.log('firstDoc.metadata.links:', firstDoc.metadata?.links);
+			console.log('firstDoc.metadata.links type:', typeof firstDoc.metadata?.links);
+			console.log('firstDoc.metadata.links keys:', firstDoc.metadata?.links ? Object.keys(firstDoc.metadata.links) : 'No links');
+			console.log('firstDoc.metadata.document_id:', firstDoc.metadata?.document_id);
+			console.log('firstDoc.metadata.chunk_id:', firstDoc.metadata?.chunk_id);
+			console.log('=== END METADATA DEBUG ===');
+		}
+		
 		if (mergedDocuments?.every((doc) => doc.distance !== undefined)) {
 			mergedDocuments = mergedDocuments.sort(
 				(a, b) => (b.distance ?? Infinity) - (a.distance ?? Infinity)

@@ -1242,6 +1242,13 @@ class Filter:
                             else:
                                 media_type = "document"
                             
+                            # Debug what we're about to emit
+                            logger.info(f"[DEBUG] About to emit citation with:")
+                            logger.info(f"[DEBUG] - document_id: {document_id}")
+                            logger.info(f"[DEBUG] - chunk_id: {chunk_id}")
+                            logger.info(f"[DEBUG] - links keys: {list(links.keys()) if links else 'No links'}")
+                            logger.info(f"[DEBUG] - links content: {links}")
+                            
                             # Send raw text so frontend can parse JSON and format appropriately
                             await __event_emitter__({
                                 "type": "citation",
