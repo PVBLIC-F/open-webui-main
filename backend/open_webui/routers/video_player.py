@@ -3,13 +3,63 @@ Video Player Router - Serves HTML video player pages for authenticated streaming
 """
 
 from fastapi import APIRouter, Request, HTTPException, Query
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 import urllib.parse
 import logging
+import httpx
 
 log = logging.getLogger(__name__)
 
 router = APIRouter()
+
+@router.get("/video/stream")
+async def video_stream_proxy(
+    request: Request,
+    url: str = Query(..., description="The video stream URL to proxy")
+):
+    """
+    Directly proxy the video stream with proper headers for browser playback.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            # Prepare headers for the upstream request
+            upstream_headers = {
+                "User-Agent": "Mozilla/5.0 (compatible; OpenWebUI/1.0)",
+                "Accept": "video/mp4,video/*,*/*",
+            }
+            
+            # Forward Range header if present (for video seeking)
+            if "Range" in request.headers:
+                upstream_headers["Range"] = request.headers["Range"]
+            
+            # Make request to the actual stream URL
+            response = await client.get(url, headers=upstream_headers)
+            
+            # Prepare response headers
+            response_headers = {
+                "Content-Type": response.headers.get("Content-Type", "video/mp4"),
+                "Accept-Ranges": "bytes",
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+                "Access-Control-Allow-Headers": "Range, Content-Type",
+            }
+            
+            # Forward important headers from upstream
+            for header in ["Content-Length", "Content-Range", "Last-Modified", "ETag"]:
+                if header in response.headers:
+                    response_headers[header] = response.headers[header]
+            
+            # Return streaming response
+            return StreamingResponse(
+                response.aiter_bytes(chunk_size=8192),
+                status_code=response.status_code,
+                headers=response_headers
+            )
+    except Exception as e:
+        log.error(f"Error proxying video stream: {e}")
+        raise HTTPException(status_code=500, detail="Failed to proxy video stream")
+
 
 @router.get("/video", response_class=HTMLResponse)
 async def video_player(
@@ -18,172 +68,173 @@ async def video_player(
     title: str = Query("Video Player", description="Title for the video")
 ):
     """
-    Serves an HTML page with a video player for the given stream URL.
-    This allows iframes to properly display video content.
+    Serves an HTML page with a video player that uses our stream proxy.
     """
     try:
-        # Use the URL as-is since it should already be properly formatted
-        decoded_url = url
+        # Create a proxy URL for the stream
+        proxy_url = f"/api/player/video/stream?url={urllib.parse.quote(url, safe='')}"
         
-        # Create a simple redirect page that opens the stream directly
+        # Create HTML page with Video.js player for better streaming support
         html_content = f"""
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{title}</title>
+    <link href="https://vjs.zencdn.net/8.6.1/video-js.css" rel="stylesheet">
     <style>
-        body {{
-            margin: 0;
-            padding: 0;
-            background: #000;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            color: white;
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{ background: #000; }}
+        .video-js {{ 
+            width: 100%; 
+            height: 100vh;
         }}
-        
-        .container {{
-            text-align: center;
-            max-width: 500px;
-            padding: 40px;
-        }}
-        
-        .video-icon {{
-            font-size: 80px;
-            margin-bottom: 20px;
-            opacity: 0.8;
-        }}
-        
-        .title {{
-            font-size: 24px;
-            font-weight: 600;
-            margin-bottom: 15px;
-            color: #fff;
-        }}
-        
-        .subtitle {{
-            font-size: 16px;
-            color: #ccc;
-            margin-bottom: 30px;
-            line-height: 1.5;
-        }}
-        
-        .play-button {{
-            display: inline-block;
-            padding: 15px 30px;
-            background: #4A9EFF;
-            color: white;
-            text-decoration: none;
-            border-radius: 25px;
-            font-size: 18px;
-            font-weight: 600;
-            transition: all 0.3s ease;
-            margin: 10px;
-        }}
-        
-        .play-button:hover {{
-            background: #357ABD;
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(74, 158, 255, 0.4);
-        }}
-        
-        .secondary-button {{
-            display: inline-block;
-            padding: 12px 25px;
-            background: transparent;
-            color: #ccc;
-            text-decoration: none;
-            border: 2px solid #555;
-            border-radius: 20px;
-            font-size: 16px;
-            transition: all 0.3s ease;
-            margin: 10px;
-        }}
-        
-        .secondary-button:hover {{
-            border-color: #777;
-            color: #fff;
-        }}
-        
-        .info {{
-            margin-top: 30px;
-            padding: 20px;
-            background: rgba(255, 255, 255, 0.1);
-            border-radius: 10px;
-            font-size: 14px;
-            color: #bbb;
-        }}
-        
-        .auto-redirect {{
-            margin-top: 20px;
-            font-size: 14px;
-            color: #888;
-        }}
-        
-        .countdown {{
-            font-weight: bold;
-            color: #4A9EFF;
+        .vjs-big-play-button {{
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
         }}
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="video-icon">🎬</div>
-        <div class="title">{title}</div>
-        <div class="subtitle">
-            This video requires authenticated streaming.<br>
-            Click below to open the video stream directly.
-        </div>
-        
-        <a href="{decoded_url}" class="play-button" target="_blank">
-            ▶ Play Video Stream
-        </a>
-        
-        <br>
-        
-        <a href="{decoded_url}" class="secondary-button" target="_self">
-            🔗 Open in Same Tab
-        </a>
-        
-        <div class="info">
-            <strong>Why this approach?</strong><br>
-            Authenticated video streams work best when opened directly in the browser,
-            bypassing iframe security restrictions that prevent embedded playback.
-        </div>
-        
-        <div class="auto-redirect">
-            Auto-redirecting in <span class="countdown" id="countdown">5</span> seconds...
-        </div>
-    </div>
+    <video
+        id="video-player"
+        class="video-js vjs-default-skin"
+        controls
+        preload="auto"
+        width="100%"
+        height="100%"
+        playsinline
+        data-setup="{{}}">
+        <source src="{proxy_url}" type="video/mp4">
+        <p class="vjs-no-js">
+            To view this video please enable JavaScript, and consider upgrading to a web browser that
+            <a href="https://videojs.com/html5-video-support/" target="_blank">supports HTML5 video</a>.
+        </p>
+    </video>
 
+    <script src="https://vjs.zencdn.net/8.6.1/video.min.js"></script>
     <script>
-        // Auto-redirect after 5 seconds
-        let countdown = 5;
-        const countdownElement = document.getElementById('countdown');
-        
-        const timer = setInterval(() => {{
-            countdown--;
-            countdownElement.textContent = countdown;
+        document.addEventListener('DOMContentLoaded', function() {{
+            var player = videojs('video-player', {{
+                // Responsive design
+                fluid: true,
+                responsive: true,
+                
+                // Playback controls
+                controls: true,
+                playbackRates: [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2],
+                
+                // Loading behavior - 'metadata' is recommended for better performance
+                preload: 'metadata',
+                
+                // Autoplay settings - 'muted' is most likely to work
+                autoplay: false,
+                muted: false,
+                
+                // Mobile optimization
+                playsinline: true,
+                
+                // User interaction settings
+                userActions: {{
+                    click: true,
+                    doubleClick: true,
+                    hotkeys: {{
+                        fullscreenKey: function(event) {{
+                            return (event.which === 70); // 'f' key
+                        }},
+                        muteKey: function(event) {{
+                            return (event.which === 77); // 'm' key
+                        }},
+                        playPauseKey: function(event) {{
+                            return (event.which === 32 || event.which === 75); // space or 'k' key
+                        }}
+                    }}
+                }},
+                
+                // Error handling
+                suppressNotSupportedError: false,
+                
+                // Sources configuration
+                sources: [{{
+                    src: '{proxy_url}',
+                    type: 'video/mp4'
+                }}],
+                
+                // HTML5 tech specific options
+                html5: {{
+                    nativeControlsForTouch: false,
+                    preloadTextTracks: false
+                }},
+                
+                // Breakpoints for responsive design
+                breakpoints: {{
+                    tiny: 300,
+                    xsmall: 400,
+                    small: 500,
+                    medium: 600,
+                    large: 700,
+                    xlarge: 800,
+                    huge: 900
+                }},
+                
+                // Inactivity timeout (in milliseconds)
+                inactivityTimeout: 2000
+            }});
             
-            if (countdown <= 0) {{
-                clearInterval(timer);
-                window.location.href = '{decoded_url}';
-            }}
-        }}, 1000);
-        
-        // Allow user to cancel auto-redirect by interacting with the page
-        document.addEventListener('click', () => {{
-            clearInterval(timer);
-            document.querySelector('.auto-redirect').style.display = 'none';
-        }});
-        
-        document.addEventListener('keydown', () => {{
-            clearInterval(timer);
-            document.querySelector('.auto-redirect').style.display = 'none';
+            // Event handlers following best practices
+            player.ready(function() {{
+                console.log('Video.js player ready');
+                console.log('Stream URL:', '{proxy_url}');
+                
+                // Set up additional error recovery
+                player.on('error', function() {{
+                    var error = player.error();
+                    console.error('Video.js error:', error);
+                    
+                    // Attempt to recover from certain errors
+                    if (error && error.code === 4) {{
+                        console.log('Attempting to reload video source...');
+                        setTimeout(function() {{
+                            player.src({{
+                                src: '{proxy_url}',
+                                type: 'video/mp4'
+                            }});
+                            player.load();
+                        }}, 1000);
+                    }}
+                }});
+            }});
+            
+            // Loading and playback event tracking
+            player.on('loadstart', function() {{
+                console.log('Video load started');
+            }});
+            
+            player.on('loadedmetadata', function() {{
+                console.log('Video metadata loaded');
+            }});
+            
+            player.on('canplay', function() {{
+                console.log('Video can play');
+            }});
+            
+            player.on('canplaythrough', function() {{
+                console.log('Video can play through');
+            }});
+            
+            player.on('waiting', function() {{
+                console.log('Video waiting for data');
+            }});
+            
+            player.on('playing', function() {{
+                console.log('Video playing');
+            }});
+            
+            // Handle fullscreen changes
+            player.on('fullscreenchange', function() {{
+                console.log('Fullscreen changed:', player.isFullscreen());
+            }});
         }});
     </script>
 </body>
