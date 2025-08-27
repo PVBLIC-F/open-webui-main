@@ -87,6 +87,7 @@ from open_webui.routers import (
     utils,
     scim,
     ragie_proxy_simple as ragie_proxy,
+    video_player,
 )
 
 from open_webui.routers.retrieval import (
@@ -1210,6 +1211,7 @@ app.include_router(images.router, prefix="/api/v1/images", tags=["images"])
 app.include_router(audio.router, prefix="/api/v1/audio", tags=["audio"])
 app.include_router(retrieval.router, prefix="/api/v1/retrieval", tags=["retrieval"])
 app.include_router(ragie_proxy.router, prefix="", tags=["ragie_proxy"])
+app.include_router(video_player.router, prefix="/api/player", tags=["video_player"])
 
 app.include_router(configs.router, prefix="/api/v1/configs", tags=["configs"])
 

@@ -34,22 +34,26 @@
 		return 'bg-red-200 dark:bg-red-800 text-red-800 dark:text-red-200';
 	}
 
-	// Helper function to normalize proxy URLs (backend now provides correct URLs)
-	
-	function normalizeProxyUrl(url: string) {
-		if (!url) return null;
-		// If it's already a relative URL, return as-is
-		if (url.startsWith('/api/proxy/ragie/stream')) {
-			return url;
-		}
-		// If it's an absolute URL with our proxy path, make it relative
-		if (url.includes('/api/proxy/ragie/stream')) {
-			const match = url.match(/\/api\/proxy\/ragie\/stream\?.*$/);
+	// Helper function to create player URLs that wrap stream URLs in video/audio player pages
+	function createPlayerUrl(streamUrl: string, type: 'video' | 'audio', title: string = '') {
+		if (!streamUrl) return null;
+		
+		// Normalize the stream URL first
+		let normalizedUrl = streamUrl;
+		if (streamUrl.startsWith('/api/proxy/ragie/stream')) {
+			normalizedUrl = streamUrl;
+		} else if (streamUrl.includes('/api/proxy/ragie/stream')) {
+			const match = streamUrl.match(/\/api\/proxy\/ragie\/stream\?.*$/);
 			if (match) {
-				return match[0];
+				normalizedUrl = match[0];
 			}
 		}
-		return url;
+		
+		// Create player URL
+		const encodedUrl = encodeURIComponent(normalizedUrl);
+		const encodedTitle = encodeURIComponent(title || `${type} Player`);
+		
+		return `/api/player/${type}?url=${encodedUrl}&title=${encodedTitle}`;
 	}
 	
 
@@ -358,7 +362,7 @@
 												.replace(/\s+/g, ' ')
 												.trim()}
 											{@const rawVideoUrl = document.source?.video_url || document.metadata?.video_url}
-											{@const videoUrl = normalizeProxyUrl(rawVideoUrl)}
+											{@const videoUrl = createPlayerUrl(rawVideoUrl, 'video', document.source?.name)}
 											{@const fallbackUrl = document.source?.fallback_url || document.metadata?.fallback_url}
 											{@const debugVideoUrls = (() => {
 												console.log('=== VIDEO URL DEBUG ===');
@@ -480,7 +484,7 @@
 												.replace(/\s+/g, ' ')
 												.trim()}
 											{@const rawAudioUrl = document.source?.audio_url || document.metadata?.audio_url}
-											{@const audioUrl = normalizeProxyUrl(rawAudioUrl)}
+											{@const audioUrl = createPlayerUrl(rawAudioUrl, 'audio', document.source?.name)}
 											{@const audioFallbackUrl = document.source?.fallback_url || document.metadata?.fallback_url}
 											{@const debugAudioUrls = (() => {
 												console.log('=== AUDIO URL DEBUG ===');
