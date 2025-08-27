@@ -229,18 +229,33 @@ async def video_player(
                 const proxyUrl = '/proxy/ragie/stream?url=' + encodeURIComponent(streamUrl);
                 
                 console.log('Loading video from:', proxyUrl);
+                console.log('Original stream URL:', streamUrl);
+                
+                // Test the debug endpoint first
+                fetch('/proxy/ragie/debug?url=' + encodeURIComponent(streamUrl))
+                    .then(response => response.json())
+                    .then(debugInfo => {{
+                        console.log('Debug info:', debugInfo);
+                        console.log('Content-Type:', debugInfo.content_type);
+                        console.log('Accept-Ranges:', debugInfo.accept_ranges);
+                        console.log('Content-Length:', debugInfo.content_length);
+                    }})
+                    .catch(err => console.error('Debug request failed:', err));
                 
                 // Set source on the first source element
                 const sources = video.querySelectorAll('source');
                 if (sources.length > 0) {{
                     sources[0].src = proxyUrl;
                     sources[0].type = 'video/mp4';
+                    console.log('Set source element src to:', proxyUrl);
                 }} else {{
                     // Fallback to direct src if no source elements
                     video.src = proxyUrl;
+                    console.log('Set video src to:', proxyUrl);
                 }}
                 
                 video.load();
+                console.log('Called video.load()');
                 
             }} catch (err) {{
                 console.error('Failed to load video:', err);
@@ -251,10 +266,24 @@ async def video_player(
         // Video event handlers
         video.addEventListener('loadstart', () => {{
             showStatus('Loading video stream...');
+            console.log('Video loadstart event fired');
+            
+            // Set a timeout to detect if video gets stuck loading
+            setTimeout(() => {{
+                if (video.readyState === 0) {{
+                    console.error('Video stuck in loading state after 10 seconds');
+                    showError('Video loading timeout. The stream may not be accessible or the format is unsupported.');
+                }}
+            }}, 10000);
         }});
         
         video.addEventListener('loadedmetadata', () => {{
             hideLoading();
+            console.log('Video loadedmetadata event fired');
+            console.log('Video dimensions:', video.videoWidth, 'x', video.videoHeight);
+            console.log('Video duration:', video.duration);
+            console.log('Video readyState:', video.readyState);
+            
             const chunkInfo = {json.dumps(chunk_info) if chunk_info else 'null'};
             if (chunkInfo) {{
                 showStatus(`Chunk loaded: ${{chunkInfo.duration.toFixed(1)}}s segment (${{video.videoWidth}}x${{video.videoHeight}})`);
