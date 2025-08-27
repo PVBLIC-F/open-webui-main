@@ -34,26 +34,17 @@
 		return 'bg-red-200 dark:bg-red-800 text-red-800 dark:text-red-200';
 	}
 
-	// Helper function to create player URLs that wrap stream URLs in video/audio player pages
-	function createPlayerUrl(streamUrl: string, type: 'video' | 'audio', title: string = '') {
-		if (!streamUrl) return null;
-		
-		// Normalize the stream URL first
-		let normalizedUrl = streamUrl;
-		if (streamUrl.startsWith('/api/proxy/ragie/stream')) {
-			normalizedUrl = streamUrl;
-		} else if (streamUrl.includes('/api/proxy/ragie/stream')) {
-			const match = streamUrl.match(/\/api\/proxy\/ragie\/stream\?.*$/);
-			if (match) {
-				normalizedUrl = match[0];
-			}
-		}
-		
-		// Create player URL - don't encode if it's already a complete URL
-		const encodedUrl = normalizedUrl.startsWith('http') ? normalizedUrl : encodeURIComponent(normalizedUrl);
-		const encodedTitle = encodeURIComponent(title || `${type} Player`);
-		
-		return `/api/player/${type}?url=${encodedUrl}&title=${encodedTitle}`;
+	// Simple functions to create player URLs
+	function createVideoPlayerUrl(videoStreamUrl: string) {
+		if (!videoStreamUrl) return null;
+		const encodedUrl = encodeURIComponent(videoStreamUrl);
+		return `/api/player/video?stream=${encodedUrl}`;
+	}
+	
+	function createAudioPlayerUrl(audioStreamUrl: string) {
+		if (!audioStreamUrl) return null;
+		const encodedUrl = encodeURIComponent(audioStreamUrl);
+		return `/api/player/audio?stream=${encodedUrl}`;
 	}
 	
 
@@ -362,16 +353,12 @@
 												.replace(/\s+/g, ' ')
 												.trim()}
 											{@const rawVideoUrl = document.source?.video_url || document.metadata?.video_url}
-											{@const videoUrl = createPlayerUrl(rawVideoUrl, 'video', document.source?.name)}
+											{@const videoPlayerUrl = createVideoPlayerUrl(rawVideoUrl)}
 											{@const fallbackUrl = document.source?.fallback_url || document.metadata?.fallback_url}
 											{@const debugVideoUrls = (() => {
 												console.log('=== VIDEO URL DEBUG ===');
-												console.log('document.source:', document.source);
-												console.log('document.metadata:', document.metadata);
-												console.log('document.source?.video_url:', document.source?.video_url);
-												console.log('document.metadata?.video_url:', document.metadata?.video_url);
 												console.log('rawVideoUrl:', rawVideoUrl);
-												console.log('videoUrl after normalize:', videoUrl);
+												console.log('videoPlayerUrl:', videoPlayerUrl);
 												console.log('fallbackUrl:', fallbackUrl);
 												return true;
 											})()}
@@ -387,41 +374,21 @@
 												</div>
 												
 												<!-- Professional Video Player -->
-												{#if videoUrl || fallbackUrl}
+												{#if videoPlayerUrl}
 													<div class="mt-4 pl-6">
 														<div class="bg-black rounded-lg overflow-hidden shadow-lg">
 															<div 
 																class="video-player-container w-full max-h-96 bg-black flex items-center justify-center relative"
 																style="min-height: 200px;"
 															>
-																{#if videoUrl}
-																	<iframe
-																		src={videoUrl}
-																		class="w-full h-full absolute inset-0"
-																		frameborder="0"
-																		allowfullscreen
-																		title="Video Player"
-																		on:error={() => console.error('Video iframe failed to load')}
-																	></iframe>
-																{:else}
-																	<div class="text-white text-center p-8">
-																		<div class="mb-4">
-																			<svg class="w-16 h-16 mx-auto text-gray-400" fill="currentColor" viewBox="0 0 20 20">
-																				<path d="M2 6a2 2 0 012-2h6l2 2h6a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6zM5 8a1 1 0 000 2h8a1 1 0 100-2H5z"/>
-																			</svg>
-																		</div>
-																		<p class="text-gray-300">Video not available</p>
-																		{#if fallbackUrl}
-																			<a 
-																				href={fallbackUrl} 
-																				class="inline-block mt-3 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
-																				target="_blank"
-																			>
-																				Open in Google Drive
-																			</a>
-																		{/if}
-																	</div>
-																{/if}
+																<iframe
+																	src={videoPlayerUrl}
+																	class="w-full h-full absolute inset-0"
+																	frameborder="0"
+																	allowfullscreen
+																	title="Video Player"
+																	on:error={() => console.error('Video iframe failed to load')}
+																></iframe>
 															</div>
 														</div>
 													</div>
@@ -438,9 +405,9 @@
 												<!-- Show video streaming links -->
 												<div class="mt-3 pl-6 space-y-2">
 													<!-- External streaming link (if proxy fails) -->
-													{#if videoUrl}
+													{#if rawVideoUrl}
 														<a 
-															href={videoUrl} 
+															href={rawVideoUrl} 
 															class="inline-flex items-center gap-2 px-3 py-2 bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 rounded-lg hover:bg-blue-200 dark:hover:bg-blue-800 transition-colors text-sm font-medium"
 															target="_blank"
 														>
@@ -484,16 +451,12 @@
 												.replace(/\s+/g, ' ')
 												.trim()}
 											{@const rawAudioUrl = document.source?.audio_url || document.metadata?.audio_url}
-											{@const audioUrl = createPlayerUrl(rawAudioUrl, 'audio', document.source?.name)}
+											{@const audioPlayerUrl = createAudioPlayerUrl(rawAudioUrl)}
 											{@const audioFallbackUrl = document.source?.fallback_url || document.metadata?.fallback_url}
 											{@const debugAudioUrls = (() => {
 												console.log('=== AUDIO URL DEBUG ===');
-												console.log('document.source:', document.source);
-												console.log('document.metadata:', document.metadata);
-												console.log('document.source?.audio_url:', document.source?.audio_url);
-												console.log('document.metadata?.audio_url:', document.metadata?.audio_url);
 												console.log('rawAudioUrl:', rawAudioUrl);
-												console.log('audioUrl after normalize:', audioUrl);
+												console.log('audioPlayerUrl:', audioPlayerUrl);
 												console.log('audioFallbackUrl:', audioFallbackUrl);
 												return true;
 											})()}
@@ -509,37 +472,17 @@
 												</div>
 												
 												<!-- Professional Audio Player -->
-												{#if audioUrl || audioFallbackUrl}
+												{#if audioPlayerUrl}
 													<div class="mt-4 pl-6">
 														<div class="bg-gray-100 dark:bg-gray-800 rounded-lg p-4 shadow-inner">
-															{#if audioUrl}
-																<div class="audio-player-container">
-																	<iframe
-																		src={audioUrl}
-																		class="w-full h-12 border-0"
-																		title="Audio Player"
-																		on:error={() => console.error('Audio iframe failed to load')}
-																	></iframe>
-																</div>
-															{:else}
-																<div class="text-center p-4">
-																	<div class="mb-3">
-																		<svg class="w-8 h-8 mx-auto text-gray-400" fill="currentColor" viewBox="0 0 20 20">
-																			<path d="M18 3a1 1 0 00-1.196-.98l-10 2A1 1 0 006 5v9.114A4.369 4.369 0 005 14c-1.657 0-3 .895-3 2s1.343 2 3 2 3-.895 3-2V7.82l8-1.6v5.894A4.37 4.37 0 0015 12c-1.657 0-3 .895-3 2s1.343 2 3 2 3-.895 3-2V3z"/>
-																		</svg>
-																	</div>
-																	<p class="text-gray-500 text-sm mb-3">Audio not available</p>
-																	{#if audioFallbackUrl}
-																		<a 
-																			href={audioFallbackUrl} 
-																			class="inline-block px-3 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 transition-colors"
-																			target="_blank"
-																		>
-																			Open in Google Drive
-																		</a>
-																	{/if}
-																</div>
-															{/if}
+															<div class="audio-player-container">
+																<iframe
+																	src={audioPlayerUrl}
+																	class="w-full h-12 border-0"
+																	title="Audio Player"
+																	on:error={() => console.error('Audio iframe failed to load')}
+																></iframe>
+															</div>
 														</div>
 													</div>
 												{/if}
@@ -555,9 +498,9 @@
 												<!-- Show audio streaming links -->
 												<div class="mt-3 pl-6 space-y-2">
 													<!-- External streaming link (if proxy fails) -->
-													{#if audioUrl}
+													{#if rawAudioUrl}
 														<a 
-															href={audioUrl} 
+															href={rawAudioUrl} 
 															class="inline-flex items-center gap-2 px-3 py-2 bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300 rounded-lg hover:bg-green-200 dark:hover:bg-green-800 transition-colors text-sm font-medium"
 															target="_blank"
 														>
