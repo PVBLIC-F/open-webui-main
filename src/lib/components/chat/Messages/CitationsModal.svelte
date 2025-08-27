@@ -49,8 +49,8 @@
 			}
 		}
 		
-		// Create player URL
-		const encodedUrl = encodeURIComponent(normalizedUrl);
+		// Create player URL - don't encode if it's already a complete URL
+		const encodedUrl = normalizedUrl.startsWith('http') ? normalizedUrl : encodeURIComponent(normalizedUrl);
 		const encodedTitle = encodeURIComponent(title || `${type} Player`);
 		
 		return `/api/player/${type}?url=${encodedUrl}&title=${encodedTitle}`;

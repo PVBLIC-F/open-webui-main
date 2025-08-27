@@ -22,8 +22,8 @@ async def video_player(
     This allows iframes to properly display video content.
     """
     try:
-        # Decode the URL if it's encoded
-        decoded_url = urllib.parse.unquote(url)
+        # Use the URL as-is since it should already be properly formatted
+        decoded_url = url
         
         # Create HTML page with video player
         html_content = f"""
@@ -137,8 +137,8 @@ async def audio_player(
     Serves an HTML page with an audio player for the given stream URL.
     """
     try:
-        # Decode the URL if it's encoded
-        decoded_url = urllib.parse.unquote(url)
+        # Use the URL as-is since it should already be properly formatted
+        decoded_url = url
         
         # Create HTML page with audio player
         html_content = f"""
