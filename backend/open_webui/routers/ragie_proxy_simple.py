@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 import logging
 
-router = APIRouter(tags=["ragie"], prefix="/api")
+router = APIRouter(tags=["ragie"])
 log = logging.getLogger(__name__)
 
 @router.options("/proxy/ragie/stream")
@@ -20,7 +20,7 @@ async def proxy_ragie_stream_options():
         headers={
             "Access-Control-Allow-Origin": "*",
             "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
-            "Access-Control-Allow-Headers": "Range, Content-Type",
+            "Access-Control-Allow-Headers": "Content-Type",
             "Access-Control-Max-Age": "3600"
         }
     )
@@ -52,9 +52,10 @@ async def proxy_ragie_stream(url: str, request: Request) -> StreamingResponse:
     if partition:
         headers["partition"] = partition
     
-    # Add Range header if browser sent one (for video seeking)
-    if "range" in request.headers:
-        headers["Range"] = request.headers["range"]
+    # DON'T add Range header - causes ERR_REQUEST_RANGE_NOT_SATISFIABLE
+    # Ragie API doesn't properly support range requests
+    # if "range" in request.headers:
+    #     headers["Range"] = request.headers["range"]
     
     log.info(f"Proxying: {url[:100]}...")
     
@@ -69,9 +70,9 @@ async def proxy_ragie_stream(url: str, request: Request) -> StreamingResponse:
                         detail=f"Ragie API error: {response.status_code}"
                     )
                 
-                # Forward the content type and other important headers
+                # Forward essential headers only (no range-related headers)
                 response_headers = {}
-                for header in ["content-type", "content-length", "content-range", "accept-ranges"]:
+                for header in ["content-type", "content-length"]:
                     if header in response.headers:
                         response_headers[header] = response.headers[header]
                 
@@ -79,11 +80,13 @@ async def proxy_ragie_stream(url: str, request: Request) -> StreamingResponse:
                 response_headers.update({
                     "Access-Control-Allow-Origin": "*",
                     "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
-                    "Access-Control-Allow-Headers": "Range, Content-Type",
-                    "Access-Control-Expose-Headers": "Content-Length, Content-Range, Accept-Ranges"
+                    "Access-Control-Allow-Headers": "Content-Type",
+                    "Access-Control-Expose-Headers": "Content-Length, Content-Type"
                 })
                 
-                log.info(f"Streaming {response.headers.get('content-type', 'unknown')} - Status: {response.status_code}")
+                content_type = response.headers.get('content-type', 'unknown')
+                content_length = response.headers.get('content-length', 'unknown')
+                log.info(f"✅ SUCCESS: Streaming {content_type} ({content_length} bytes) - Status: {response.status_code}")
                 
                 # Create a safe streaming generator that handles disconnections
                 async def safe_stream():
