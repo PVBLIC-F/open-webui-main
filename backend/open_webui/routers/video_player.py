@@ -21,6 +21,17 @@ async def video_stream_proxy(
     Directly proxy the video stream with proper headers for browser playback.
     """
     try:
+        # Convert relative URLs to absolute URLs
+        if url.startswith('/'):
+            # Get the base URL from the request
+            base_url = f"{request.url.scheme}://{request.url.netloc}"
+            absolute_url = f"{base_url}{url}"
+        else:
+            absolute_url = url
+            
+        log.info(f"Video stream proxy - Original URL: {url}")
+        log.info(f"Video stream proxy - Absolute URL: {absolute_url}")
+        
         async with httpx.AsyncClient(timeout=60.0) as client:
             # Prepare headers for the upstream request
             upstream_headers = {
@@ -33,7 +44,7 @@ async def video_stream_proxy(
                 upstream_headers["Range"] = request.headers["Range"]
             
             # Make request to the actual stream URL
-            response = await client.get(url, headers=upstream_headers)
+            response = await client.get(absolute_url, headers=upstream_headers)
             
             # Prepare response headers
             response_headers = {
