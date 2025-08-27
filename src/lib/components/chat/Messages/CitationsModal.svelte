@@ -415,14 +415,19 @@
 								return true;
 							})()}
 							{#if isJsonContent}
-								{@const parsedContent = (() => {
-									try {
-										console.log('Attempting to parse JSON:', document.document);
-										const parsed = JSON.parse(document.document);
-										console.log('Parsed content:', parsed);
-										// Validate that it's an object with expected properties
-										return typeof parsed === 'object' && parsed !== null ? parsed : null;
-									} catch (error) {
+															{@const parsedContent = (() => {
+								try {
+									if (!document.document || typeof document.document !== 'string') {
+										console.warn('Document content is not a string:', typeof document.document);
+										return null;
+									}
+									
+									console.log('Attempting to parse JSON:', document.document.substring(0, 200) + '...');
+									const parsed = JSON.parse(document.document);
+									console.log('Parsed content successfully');
+									// Validate that it's an object with expected properties
+									return typeof parsed === 'object' && parsed !== null ? parsed : null;
+								} catch (error) {
 										console.warn('Failed to parse JSON content:', error);
 										// Try to extract content from malformed JSON using more robust regex patterns
 										const content = document.document;

@@ -222,7 +222,10 @@ async def video_player(
                 showStatus('Loading video stream...');
                 
                 // Use the proxy endpoint for streaming
-                const proxyUrl = '/proxy/ragie/stream?url=' + encodeURIComponent('{safe_stream_url}');
+                const streamUrl = {json.dumps(stream_url)};
+                const proxyUrl = '/proxy/ragie/stream?url=' + encodeURIComponent(streamUrl);
+                
+                console.log('Loading video from:', proxyUrl);
                 video.src = proxyUrl;
                 video.load();
                 
@@ -266,6 +269,9 @@ async def video_player(
         video.addEventListener('error', (e) => {{
             console.error('Video error:', e);
             console.error('Video error details:', video.error);
+            console.error('Video src:', video.src);
+            console.error('Video networkState:', video.networkState);
+            console.error('Video readyState:', video.readyState);
             
             let errorMessage = 'Failed to load video stream.';
             
@@ -278,10 +284,10 @@ async def video_player(
                         errorMessage = 'Network error. Check your connection and try again.';
                         break;
                     case 3:
-                        errorMessage = 'Video decoding failed. The stream format may be unsupported.';
+                        errorMessage = 'Video decoding failed. The stream format may be unsupported or corrupted.';
                         break;
                     case 4:
-                        errorMessage = 'Audio not supported. Try downloading instead.';
+                        errorMessage = 'Video format not supported by this browser.';
                         break;
                 }}
             }}
@@ -547,7 +553,10 @@ async def audio_player(
                 showStatus('Loading audio stream...');
                 
                 // Use the proxy endpoint for streaming
-                const proxyUrl = '/proxy/ragie/stream?url=' + encodeURIComponent('{safe_stream_url}');
+                const streamUrl = {json.dumps(stream_url)};
+                const proxyUrl = '/proxy/ragie/stream?url=' + encodeURIComponent(streamUrl);
+                
+                console.log('Loading audio from:', proxyUrl);
                 audio.src = proxyUrl;
                 audio.load();
                 
