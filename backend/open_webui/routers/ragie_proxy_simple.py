@@ -19,8 +19,8 @@ async def proxy_ragie_stream_options():
         status_code=200,
         headers={
             "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type",
+            "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS", 
+            "Access-Control-Allow-Headers": "Range, Content-Type",
             "Access-Control-Max-Age": "3600"
         }
     )
@@ -52,10 +52,9 @@ async def proxy_ragie_stream(url: str, request: Request) -> StreamingResponse:
     if partition:
         headers["partition"] = partition
     
-    # DON'T add Range header - causes ERR_REQUEST_RANGE_NOT_SATISFIABLE
-    # Ragie API doesn't properly support range requests
-    # if "range" in request.headers:
-    #     headers["Range"] = request.headers["range"]
+    # Forward Range header if present (BaseChat does this successfully)
+    if "range" in request.headers:
+        headers["Range"] = request.headers["range"]
     
     log.info(f"Proxying: {url[:100]}...")
     
@@ -70,9 +69,16 @@ async def proxy_ragie_stream(url: str, request: Request) -> StreamingResponse:
                         detail=f"Ragie API error: {response.status_code}"
                     )
                 
-                # Forward essential headers only (no range-related headers)
+                # Forward headers exactly like BaseChat does
                 response_headers = {}
-                for header in ["content-type", "content-length"]:
+                basechat_headers = [
+                    "content-type",
+                    "accept-ranges", 
+                    "content-length",
+                    "content-range",
+                    "transfer-encoding"
+                ]
+                for header in basechat_headers:
                     if header in response.headers:
                         response_headers[header] = response.headers[header]
                 
@@ -80,8 +86,8 @@ async def proxy_ragie_stream(url: str, request: Request) -> StreamingResponse:
                 response_headers.update({
                     "Access-Control-Allow-Origin": "*",
                     "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
-                    "Access-Control-Allow-Headers": "Content-Type",
-                    "Access-Control-Expose-Headers": "Content-Length, Content-Type"
+                    "Access-Control-Allow-Headers": "Range, Content-Type",
+                    "Access-Control-Expose-Headers": "Content-Length, Content-Range, Accept-Ranges, Content-Type"
                 })
                 
                 content_type = response.headers.get('content-type', 'unknown')

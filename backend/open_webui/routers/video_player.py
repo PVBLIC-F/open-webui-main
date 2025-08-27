@@ -70,7 +70,7 @@ async def video_player(
         safe_stream_url = html.escape(stream_url, quote=True)
         log.info(f"Video player loading stream: {stream_url}")
         
-        # Simple, clean HTML5 video player with blob streaming
+        # Simple HTML5 video player - BaseChat style (direct stream URL)
         html_content = f"""
 <!DOCTYPE html>
 <html>
@@ -79,89 +79,18 @@ async def video_player(
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-        body {{ background: #000; display: flex; align-items: center; justify-content: center; min-height: 100vh; font-family: system-ui; }}
-        .container {{ text-align: center; color: white; }}
-        video {{ width: 100%; height: auto; max-height: 100vh; margin: 20px 0; }}
-        .loading {{ font-size: 18px; margin: 20px; }}
-        .error {{ color: #ff6b6b; margin: 20px; }}
+        body {{ background: #000; display: flex; align-items: center; justify-content: center; min-height: 100vh; }}
+        video {{ width: 100%; height: auto; max-height: 100vh; }}
     </style>
 </head>
 <body>
-    <div class="container">
-        <div id="loading" class="loading">Loading video...</div>
-        <video id="videoPlayer" controls preload="none" playsinline style="display: none;">
-            <p style="color: white; text-align: center;">
-                Your browser doesn't support video playback.
-            </p>
-        </video>
-        <div id="error" class="error" style="display: none;">
-            Failed to load video. <a href="{safe_stream_url}" style="color: #4A9EFF;">Try direct link</a>
-        </div>
-    </div>
-    
-    <script>
-        async function loadVideo() {{
-            const video = document.getElementById('videoPlayer');
-            const loading = document.getElementById('loading');
-            const error = document.getElementById('error');
-            
-            try {{
-                console.log('Fetching video from:', '{safe_stream_url}');
-                
-                // Fetch the video stream with authentication - disable range requests
-                const response = await fetch('{safe_stream_url}', {{
-                    method: 'GET',
-                    headers: {{
-                        'Range': '', // Explicitly disable range requests
-                        'Cache-Control': 'no-cache'
-                    }}
-                }});
-                
-                console.log('Response status:', response.status);
-                console.log('Response headers:', Object.fromEntries(response.headers.entries()));
-                
-                if (!response.ok) {{
-                    throw new Error(`HTTP ${{response.status}}: ${{response.statusText}}`);
-                }}
-                
-                // Get content type to verify it's video
-                const contentType = response.headers.get('content-type');
-                console.log('Content type:', contentType);
-                
-                // Create blob URL from the response
-                const blob = await response.blob();
-                console.log('Blob created, size:', blob.size, 'type:', blob.type);
-                
-                const videoUrl = URL.createObjectURL(blob);
-                console.log('Blob URL created:', videoUrl);
-                
-                // Set video source and show player
-                video.src = videoUrl;
-                video.style.display = 'block';
-                loading.style.display = 'none';
-                
-                // Clean up blob URL when video is done
-                video.addEventListener('loadeddata', () => {{
-                    console.log('Video loaded successfully');
-                }});
-                
-                video.addEventListener('error', (e) => {{
-                    console.error('Video playback error:', e);
-                    console.error('Video error details:', video.error);
-                }});
-                
-            }} catch (err) {{
-                console.error('Video loading failed:', err);
-                console.error('Error details:', err.message);
-                loading.style.display = 'none';
-                error.style.display = 'block';
-                error.innerHTML = `Failed to load video: ${{err.message}}<br><a href="{safe_stream_url}" style="color: #4A9EFF;">Try direct link</a>`;
-            }}
-        }}
-        
-        // Start loading when page loads
-        document.addEventListener('DOMContentLoaded', loadVideo);
-    </script>
+    <video controls preload="metadata" playsinline>
+        <source src="{safe_stream_url}" type="video/mp4">
+        <p style="color: white; text-align: center;">
+            Your browser doesn't support video playback.
+            <br><a href="{safe_stream_url}" style="color: #4A9EFF;">Download video</a>
+        </p>
+    </video>
 </body>
 </html>
         """

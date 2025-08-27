@@ -1182,28 +1182,40 @@ class Filter:
                         # Add streaming links using proxy for authentication and SSL compatibility
                         # Route all Ragie URLs through our proxy to handle SSL/TLS properly
                         
-                        # Collect both audio and video URLs if available
+                        # Collect both audio and video URLs exactly like BaseChat
                         streaming_urls = {}
                         
-                        if has_audio and links.get('self_audio_stream', {}).get('href'):
-                            # Use the chunk-specific audio URL provided by Ragie API
-                            ragie_audio_url = links['self_audio_stream']['href']
-                            logger.info(f"[DEBUG] Using chunk-specific audio URL from Ragie API: {ragie_audio_url}")
+                        if has_audio:
+                            # Prefer document_audio_stream over self_audio_stream (like BaseChat)
+                            ragie_audio_url = None
+                            if links.get('document_audio_stream', {}).get('href'):
+                                ragie_audio_url = links['document_audio_stream']['href']
+                                logger.info(f"[DEBUG] Using document audio stream from Ragie API: {ragie_audio_url}")
+                            elif links.get('self_audio_stream', {}).get('href'):
+                                ragie_audio_url = links['self_audio_stream']['href']
+                                logger.info(f"[DEBUG] Using chunk audio stream from Ragie API: {ragie_audio_url}")
                             
-                            base_url = self.valves.base_url.rstrip('/') if self.valves.base_url else ""
-                            proxy_audio_url = f"{base_url}/proxy/ragie/stream?url={urllib.parse.quote(ragie_audio_url, safe='')}"
-                            streaming_urls['audio'] = proxy_audio_url
-                            logger.info(f"[DEBUG] Generated proxy audio URL: {proxy_audio_url}")
+                            if ragie_audio_url:
+                                base_url = self.valves.base_url.rstrip('/') if self.valves.base_url else ""
+                                proxy_audio_url = f"{base_url}/proxy/ragie/stream?url={urllib.parse.quote(ragie_audio_url, safe='')}"
+                                streaming_urls['audio'] = proxy_audio_url
+                                logger.info(f"[DEBUG] Generated proxy audio URL: {proxy_audio_url}")
                         
-                        if has_video and links.get('self_video_stream', {}).get('href'):
-                            # Use the chunk-specific video URL provided by Ragie API
-                            ragie_video_url = links['self_video_stream']['href']
-                            logger.info(f"[DEBUG] Using chunk-specific video URL from Ragie API: {ragie_video_url}")
+                        if has_video:
+                            # Prefer document_video_stream over self_video_stream (like BaseChat)
+                            ragie_video_url = None
+                            if links.get('document_video_stream', {}).get('href'):
+                                ragie_video_url = links['document_video_stream']['href']
+                                logger.info(f"[DEBUG] Using document video stream from Ragie API: {ragie_video_url}")
+                            elif links.get('self_video_stream', {}).get('href'):
+                                ragie_video_url = links['self_video_stream']['href']
+                                logger.info(f"[DEBUG] Using chunk video stream from Ragie API: {ragie_video_url}")
                             
-                            base_url = self.valves.base_url.rstrip('/') if self.valves.base_url else ""
-                            proxy_video_url = f"{base_url}/proxy/ragie/stream?url={urllib.parse.quote(ragie_video_url, safe='')}"
-                            streaming_urls['video'] = proxy_video_url
-                            logger.info(f"[DEBUG] Generated proxy video URL: {proxy_video_url}")
+                            if ragie_video_url:
+                                base_url = self.valves.base_url.rstrip('/') if self.valves.base_url else ""
+                                proxy_video_url = f"{base_url}/proxy/ragie/stream?url={urllib.parse.quote(ragie_video_url, safe='')}"
+                                streaming_urls['video'] = proxy_video_url
+                                logger.info(f"[DEBUG] Generated proxy video URL: {proxy_video_url}")
                         
                         # Create a single citation with both audio and video options
                         if __event_emitter__:
