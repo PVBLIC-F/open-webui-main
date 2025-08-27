@@ -70,7 +70,7 @@ async def video_player(
         safe_stream_url = html.escape(stream_url, quote=True)
         log.info(f"Video player loading stream: {stream_url}")
         
-        # Simple, clean HTML5 video player
+        # Simple, clean HTML5 video player with blob streaming
         html_content = f"""
 <!DOCTYPE html>
 <html>
@@ -79,25 +79,71 @@ async def video_player(
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-        body {{ background: #000; display: flex; align-items: center; justify-content: center; min-height: 100vh; }}
-        video {{ width: 100%; height: auto; max-height: 100vh; }}
+        body {{ background: #000; display: flex; align-items: center; justify-content: center; min-height: 100vh; font-family: system-ui; }}
+        .container {{ text-align: center; color: white; }}
+        video {{ width: 100%; height: auto; max-height: 100vh; margin: 20px 0; }}
+        .loading {{ font-size: 18px; margin: 20px; }}
+        .error {{ color: #ff6b6b; margin: 20px; }}
     </style>
 </head>
 <body>
-    <video controls preload="metadata" playsinline>
-        <source src="{safe_stream_url}" type="video/mp4">
-        <p style="color: white; text-align: center;">
-            Your browser doesn't support video playback.
-            <br><a href="{safe_stream_url}" style="color: #4A9EFF;">Download video</a>
-        </p>
-    </video>
+    <div class="container">
+        <div id="loading" class="loading">Loading video...</div>
+        <video id="videoPlayer" controls preload="none" playsinline style="display: none;">
+            <p style="color: white; text-align: center;">
+                Your browser doesn't support video playback.
+            </p>
+        </video>
+        <div id="error" class="error" style="display: none;">
+            Failed to load video. <a href="{safe_stream_url}" style="color: #4A9EFF;">Try direct link</a>
+        </div>
+    </div>
+    
+    <script>
+        async function loadVideo() {{
+            const video = document.getElementById('videoPlayer');
+            const loading = document.getElementById('loading');
+            const error = document.getElementById('error');
+            
+            try {{
+                // Fetch the video stream with authentication
+                const response = await fetch('{safe_stream_url}');
+                
+                if (!response.ok) {{
+                    throw new Error(`HTTP ${{response.status}}`);
+                }}
+                
+                // Create blob URL from the response
+                const blob = await response.blob();
+                const videoUrl = URL.createObjectURL(blob);
+                
+                // Set video source and show player
+                video.src = videoUrl;
+                video.style.display = 'block';
+                loading.style.display = 'none';
+                
+                // Clean up blob URL when video is done
+                video.addEventListener('loadeddata', () => {{
+                    console.log('Video loaded successfully');
+                }});
+                
+            }} catch (err) {{
+                console.error('Video loading failed:', err);
+                loading.style.display = 'none';
+                error.style.display = 'block';
+            }}
+        }}
+        
+        // Start loading when page loads
+        document.addEventListener('DOMContentLoaded', loadVideo);
+    </script>
 </body>
 </html>
         """
         
         # Add security headers
         headers = {
-            "Content-Security-Policy": "default-src 'self'; media-src 'self' https:; style-src 'unsafe-inline'",
+            "Content-Security-Policy": "default-src 'self'; media-src 'self' https: blob:; style-src 'unsafe-inline'; script-src 'unsafe-inline'",
             "X-Content-Type-Options": "nosniff",
             "X-Frame-Options": "SAMEORIGIN"
         }
@@ -165,7 +211,7 @@ async def audio_player(
         
         # Add security headers
         headers = {
-            "Content-Security-Policy": "default-src 'self'; media-src 'self' https:; style-src 'unsafe-inline'",
+            "Content-Security-Policy": "default-src 'self'; media-src 'self' https: blob:; style-src 'unsafe-inline'; script-src 'unsafe-inline'",
             "X-Content-Type-Options": "nosniff",
             "X-Frame-Options": "SAMEORIGIN"
         }
