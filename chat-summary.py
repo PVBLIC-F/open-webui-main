@@ -1151,6 +1151,11 @@ class Filter:
                     document_id = chunk.get('document_id', '')
                     chunk_id = chunk.get('id', 'unknown')
                     
+                    # Debug the raw chunk structure
+                    logger.info(f"[DEBUG] Raw chunk keys: {list(chunk.keys())}")
+                    logger.info(f"[DEBUG] document_id extracted: '{document_id}'")
+                    logger.info(f"[DEBUG] chunk_id extracted: '{chunk_id}'")
+                    
                     # Get additional metadata
                     document_metadata = chunk.get('document_metadata', {})
                     file_path = document_metadata.get('file_path', '')
@@ -1161,6 +1166,11 @@ class Filter:
                     start_time = chunk_metadata.get('start_time')
                     end_time = chunk_metadata.get('end_time')
                     links = chunk.get('links', {})
+                    
+                    # Debug the links structure
+                    logger.info(f"[DEBUG] links extracted: {links}")
+                    logger.info(f"[DEBUG] links type: {type(links)}")
+                    logger.info(f"[DEBUG] links keys: {list(links.keys()) if isinstance(links, dict) else 'Not a dict'}")
                     
                     # Clean the text
                     text = self._clean_text(text)
