@@ -3,73 +3,13 @@ Video Player Router - Serves HTML video player pages for authenticated streaming
 """
 
 from fastapi import APIRouter, Request, HTTPException, Query
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse
 import urllib.parse
 import logging
-import httpx
 
 log = logging.getLogger(__name__)
 
 router = APIRouter()
-
-@router.get("/video/stream")
-async def video_stream_proxy(
-    request: Request,
-    url: str = Query(..., description="The video stream URL to proxy")
-):
-    """
-    Directly proxy the video stream with proper headers for browser playback.
-    """
-    try:
-        # Convert relative URLs to absolute URLs
-        if url.startswith('/'):
-            # Get the base URL from the request
-            base_url = f"{request.url.scheme}://{request.url.netloc}"
-            absolute_url = f"{base_url}{url}"
-        else:
-            absolute_url = url
-            
-        log.info(f"Video stream proxy - Original URL: {url}")
-        log.info(f"Video stream proxy - Absolute URL: {absolute_url}")
-        
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            # Prepare headers for the upstream request
-            upstream_headers = {
-                "User-Agent": "Mozilla/5.0 (compatible; OpenWebUI/1.0)",
-                "Accept": "video/mp4,video/*,*/*",
-            }
-            
-            # Forward Range header if present (for video seeking)
-            if "Range" in request.headers:
-                upstream_headers["Range"] = request.headers["Range"]
-            
-            # Make request to the actual stream URL
-            response = await client.get(absolute_url, headers=upstream_headers)
-            
-            # Prepare response headers
-            response_headers = {
-                "Content-Type": response.headers.get("Content-Type", "video/mp4"),
-                "Accept-Ranges": "bytes",
-                "Cache-Control": "no-cache, no-store, must-revalidate",
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
-                "Access-Control-Allow-Headers": "Range, Content-Type",
-            }
-            
-            # Forward important headers from upstream
-            for header in ["Content-Length", "Content-Range", "Last-Modified", "ETag"]:
-                if header in response.headers:
-                    response_headers[header] = response.headers[header]
-            
-            # Return streaming response
-            return StreamingResponse(
-                response.aiter_bytes(chunk_size=8192),
-                status_code=response.status_code,
-                headers=response_headers
-            )
-    except Exception as e:
-        log.error(f"Error proxying video stream: {e}")
-        raise HTTPException(status_code=500, detail="Failed to proxy video stream")
 
 
 @router.get("/video", response_class=HTMLResponse)
@@ -82,8 +22,8 @@ async def video_player(
     Serves an HTML page with a video player that uses our stream proxy.
     """
     try:
-        # Create a proxy URL for the stream
-        proxy_url = f"/api/player/video/stream?url={urllib.parse.quote(url, safe='')}"
+        # Use the URL directly - it should already be a working proxy URL
+        proxy_url = url
         
         # Create HTML page with Video.js player for better streaming support
         html_content = f"""
