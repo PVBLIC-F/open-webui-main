@@ -95,6 +95,11 @@ async def proxy_ragie_stream(url: str, request: Request) -> StreamingResponse:
     # Forward Range header if present (BaseChat does this successfully)
     if "range" in request.headers:
         headers["Range"] = request.headers["range"]
+    else:
+        # For video content, force a range request to get 206 response
+        # This ensures proper streaming behavior for HTML5 video players
+        if "video" in url:
+            headers["Range"] = "bytes=0-"
     
     log.info(f"Proxying: {url[:100]}...")
     
@@ -134,8 +139,10 @@ async def proxy_ragie_stream(url: str, request: Request) -> StreamingResponse:
                 content_length = response.headers.get('content-length', 'unknown')
                 accept_ranges = response.headers.get('accept-ranges', 'none')
                 
+                range_header = headers.get("Range", "none")
                 log.info(f"✅ SUCCESS: Streaming {content_type} ({content_length} bytes) - Status: {response.status_code}")
                 log.info(f"📊 Response Headers: content-type={content_type}, accept-ranges={accept_ranges}, content-length={content_length}")
+                log.info(f"🔄 Range Request: {range_header} -> Status: {response.status_code}")
                 log.info(f"🔗 All Headers: {dict(response.headers)}")
                 
                 # Create a safe streaming generator that handles disconnections
