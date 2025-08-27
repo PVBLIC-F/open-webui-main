@@ -138,10 +138,26 @@ async def proxy_ragie_stream(url: str, request: Request) -> StreamingResponse:
                 content_type = response.headers.get('content-type', 'unknown')
                 content_length = response.headers.get('content-length', 'unknown')
                 accept_ranges = response.headers.get('accept-ranges', 'none')
+                content_range = response.headers.get('content-range', 'none')
+                
+                # For 206 responses, extract size from content-range header
+                # Format: "bytes 0-7282363/7282364" -> total size is 7282364
+                size_info = content_length
+                if response.status_code == 206 and content_range != 'none':
+                    try:
+                        # Extract total size from "bytes start-end/total"
+                        total_size = content_range.split('/')[-1]
+                        size_info = f"{total_size} bytes (partial)"
+                    except:
+                        size_info = f"{content_length} bytes (206)"
+                elif content_length != 'unknown':
+                    size_info = f"{content_length} bytes"
+                else:
+                    size_info = "unknown bytes"
                 
                 range_header = headers.get("Range", "none")
-                log.info(f"✅ SUCCESS: Streaming {content_type} ({content_length} bytes) - Status: {response.status_code}")
-                log.info(f"📊 Response Headers: content-type={content_type}, accept-ranges={accept_ranges}, content-length={content_length}")
+                log.info(f"✅ SUCCESS: Streaming {content_type} ({size_info}) - Status: {response.status_code}")
+                log.info(f"📊 Response Headers: content-type={content_type}, accept-ranges={accept_ranges}, content-range={content_range}")
                 log.info(f"🔄 Range Request: {range_header} -> Status: {response.status_code}")
                 log.info(f"🔗 All Headers: {dict(response.headers)}")
                 
