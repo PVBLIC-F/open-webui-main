@@ -135,19 +135,16 @@ async def video_player(
 </head>
 <body>
     <div class="video-container">
-        <div id="loading" class="loading">Loading video stream...</div>
+        <div id="loading" class="loading">Click play to start streaming</div>
         <div id="error" class="error" style="display: none;"></div>
         
-        <video id="videoPlayer" controls preload="auto" playsinline crossorigin="anonymous">
-            <source src="{safe_stream_url}" type="video/mp4">
-            <source src="{safe_stream_url}" type="video/webm">
-            <source src="{safe_stream_url}" type="video/ogg">
+        <video id="videoPlayer" controls preload="none" playsinline crossorigin="anonymous">
             <p style="color: white; text-align: center;">
                 Your browser doesn't support video playback.
             </p>
         </video>
         
-        <div class="status" id="status">Ready to play</div>
+        <div class="status" id="status">Click play button to start streaming</div>
         
         <div>
             <a href="{safe_stream_url}" class="download-link" target="_blank">Download Video</a>
@@ -161,8 +158,8 @@ async def video_player(
         const error = document.getElementById('error');
         const status = document.getElementById('status');
         
-        let loadAttempts = 0;
-        const maxAttempts = 3;
+        let initialClipLoaded = false;
+        let fullStreamStarted = false;
         
         function showError(message) {{
             error.style.display = 'block';
@@ -179,22 +176,107 @@ async def video_player(
             loading.style.display = 'none';
         }}
         
+        // Load initial clip (15-second preview)
+        async function loadInitialClip() {{
+            if (initialClipLoaded) return;
+            
+            try {{
+                showStatus('Loading initial clip...');
+                
+                // Create a MediaSource for the initial clip
+                const mediaSource = new MediaSource();
+                const videoUrl = URL.createObjectURL(mediaSource);
+                video.src = videoUrl;
+                
+                mediaSource.addEventListener('sourceopen', async () => {{
+                    try {{
+                        // Fetch initial clip with range header for first 15 seconds
+                        const response = await fetch('{safe_stream_url}', {{
+                            headers: {{
+                                'Range': 'bytes=0-'
+                            }}
+                        }});
+                        
+                        if (!response.ok) {{
+                            throw new Error(`HTTP ${{response.status}}`);
+                        }}
+                        
+                        const sourceBuffer = mediaSource.addSourceBuffer('video/mp4; codecs="avc1.42E01E, mp4a.40.2"');
+                        
+                        sourceBuffer.addEventListener('updateend', () => {{
+                            if (!sourceBuffer.updating) {{
+                                mediaSource.endOfStream();
+                                initialClipLoaded = true;
+                                hideLoading();
+                                showStatus('Initial clip loaded. Click play to start full stream.');
+                            }}
+                        }});
+                        
+                        const data = await response.arrayBuffer();
+                        sourceBuffer.appendBuffer(data);
+                        
+                    }} catch (err) {{
+                        console.error('Failed to load initial clip:', err);
+                        showError('Failed to load initial clip. Try downloading instead.');
+                    }}
+                }});
+                
+            }} catch (err) {{
+                console.error('Initial clip loading failed:', err);
+                showError('Failed to load initial clip. Try downloading instead.');
+            }}
+        }}
+        
+        // Start full stream when user clicks play
+        async function startFullStream() {{
+            if (fullStreamStarted) return;
+            
+            try {{
+                fullStreamStarted = true;
+                showStatus('Starting full video stream...');
+                
+                // Set the full stream URL directly
+                video.src = '{safe_stream_url}';
+                video.load();
+                
+            }} catch (err) {{
+                console.error('Failed to start full stream:', err);
+                showError('Failed to start full stream. Try refreshing the page.');
+            }}
+        }}
+        
         // Video event handlers
         video.addEventListener('loadstart', () => {{
-            showStatus('Loading video...');
+            if (!fullStreamStarted) {{
+                showStatus('Loading initial clip...');
+            }} else {{
+                showStatus('Loading full video stream...');
+            }}
         }});
         
         video.addEventListener('loadedmetadata', () => {{
-            hideLoading();
-            showStatus(`Video loaded: ${{video.videoWidth}}x${{video.videoHeight}}, Duration: ${{Math.round(video.duration)}}s`);
+            if (!fullStreamStarted) {{
+                showStatus('Initial clip loaded. Click play to start full stream.');
+            }} else {{
+                showStatus(`Full video loaded: ${{video.videoWidth}}x${{video.videoHeight}}, Duration: ${{Math.round(video.duration)}}s`);
+            }}
         }});
         
         video.addEventListener('canplay', () => {{
-            showStatus('Video ready to play');
+            if (!fullStreamStarted) {{
+                showStatus('Initial clip ready. Click play to start full stream.');
+            }} else {{
+                showStatus('Full video ready to play');
+            }}
         }});
         
         video.addEventListener('playing', () => {{
-            showStatus('Video is playing');
+            if (!fullStreamStarted) {{
+                // User clicked play on initial clip, start full stream
+                startFullStream();
+            }} else {{
+                showStatus('Full video is playing');
+            }}
         }});
         
         video.addEventListener('pause', () => {{
@@ -202,7 +284,11 @@ async def video_player(
         }});
         
         video.addEventListener('ended', () => {{
-            showStatus('Video ended');
+            if (!fullStreamStarted) {{
+                showStatus('Initial clip ended. Click play to start full stream.');
+            }} else {{
+                showStatus('Full video ended');
+            }}
         }});
         
         video.addEventListener('error', (e) => {{
@@ -223,7 +309,7 @@ async def video_player(
                         errorMessage = 'Video decoding failed. The stream format may be unsupported.';
                         break;
                     case 4:
-                        errorMessage = 'Video not supported. Try downloading instead.';
+                        errorMessage = 'Audio not supported. Try downloading instead.';
                         break;
                 }}
             }}
@@ -231,34 +317,8 @@ async def video_player(
             showError(errorMessage + '<br><br>Try refreshing the page or use the download links below.');
         }});
         
-        video.addEventListener('stalled', () => {{
-            showStatus('Video stream stalled, attempting to recover...');
-        }});
-        
-        video.addEventListener('waiting', () => {{
-            showStatus('Buffering video...');
-        }});
-        
-        // Handle network issues
-        video.addEventListener('suspend', () => {{
-            showStatus('Video loading suspended');
-        }});
-        
-        // Auto-retry on failure
-        video.addEventListener('abort', () => {{
-            if (loadAttempts < maxAttempts) {{
-                loadAttempts++;
-                showStatus(`Retry attempt ${{loadAttempts}} of ${{maxAttempts}}...`);
-                setTimeout(() => {{
-                    video.load();
-                }}, 2000);
-            }} else {{
-                showError('Failed to load video after multiple attempts. Please check the stream URL or try downloading.');
-            }}
-        }});
-        
-        // Initialize video
-        video.load();
+        // Load initial clip when page loads
+        document.addEventListener('DOMContentLoaded', loadInitialClip);
         
         // Add keyboard shortcuts
         document.addEventListener('keydown', (e) => {{
@@ -423,18 +483,14 @@ async def audio_player(
     <div class="audio-container">
         <div class="audio-title">🎵 Audio Player</div>
         
-        <div id="loading" class="loading">Loading audio stream...</div>
+        <div id="loading" class="loading">Click play to start streaming</div>
         <div id="error" class="error" style="display: none;"></div>
         
-        <audio id="audioPlayer" controls preload="auto" crossorigin="anonymous">
-            <source src="{safe_stream_url}" type="audio/mpeg">
-            <source src="{safe_stream_url}" type="audio/mp4">
-            <source src="{safe_stream_url}" type="audio/ogg">
-            <source src="{safe_stream_url}" type="audio/wav">
+        <audio id="audioPlayer" controls preload="none" crossorigin="anonymous">
             <p>Your browser doesn't support audio playback.</p>
         </audio>
         
-        <div class="status" id="status">Ready to play</div>
+        <div class="status" id="status">Click play button to start streaming</div>
         
         <div class="controls">
             <button class="control-btn" onclick="document.getElementById('audioPlayer').play()">▶️ Play</button>
@@ -456,8 +512,8 @@ async def audio_player(
         const error = document.getElementById('error');
         const status = document.getElementById('status');
         
-        let loadAttempts = 0;
-        const maxAttempts = 3;
+        let initialClipLoaded = false;
+        let fullStreamStarted = false;
         
         function showError(message) {{
             error.style.display = 'block';
@@ -474,22 +530,107 @@ async def audio_player(
             loading.style.display = 'none';
         }}
         
+        // Load initial clip (15-second preview)
+        async function loadInitialClip() {{
+            if (initialClipLoaded) return;
+            
+            try {{
+                showStatus('Loading initial clip...');
+                
+                // Create a MediaSource for the initial clip
+                const mediaSource = new MediaSource();
+                const audioUrl = URL.createObjectURL(mediaSource);
+                audio.src = audioUrl;
+                
+                mediaSource.addEventListener('sourceopen', async () => {{
+                    try {{
+                        // Fetch initial clip with range header for first 15 seconds
+                        const response = await fetch('{safe_stream_url}', {{
+                            headers: {{
+                                'Range': 'bytes=0-'
+                            }}
+                        }});
+                        
+                        if (!response.ok) {{
+                            throw new Error(`HTTP ${{response.status}}`);
+                        }}
+                        
+                        const sourceBuffer = mediaSource.addSourceBuffer('audio/mpeg');
+                        
+                        sourceBuffer.addEventListener('updateend', () => {{
+                            if (!sourceBuffer.updating) {{
+                                mediaSource.endOfStream();
+                                initialClipLoaded = true;
+                                hideLoading();
+                                showStatus('Initial clip loaded. Click play to start full stream.');
+                            }}
+                        }});
+                        
+                        const data = await response.arrayBuffer();
+                        sourceBuffer.appendBuffer(data);
+                        
+                    }} catch (err) {{
+                        console.error('Failed to load initial clip:', err);
+                        showError('Failed to load initial clip. Try downloading instead.');
+                    }}
+                }});
+                
+            }} catch (err) {{
+                console.error('Initial clip loading failed:', err);
+                showError('Failed to load initial clip. Try downloading instead.');
+            }}
+        }}
+        
+        // Start full stream when user clicks play
+        async function startFullStream() {{
+            if (fullStreamStarted) return;
+            
+            try {{
+                fullStreamStarted = true;
+                showStatus('Starting full audio stream...');
+                
+                // Set the full stream URL directly
+                audio.src = '{safe_stream_url}';
+                audio.load();
+                
+            }} catch (err) {{
+                console.error('Failed to start full stream:', err);
+                showError('Failed to start full stream. Try refreshing the page.');
+            }}
+        }}
+        
         // Audio event handlers
         audio.addEventListener('loadstart', () => {{
-            showStatus('Loading audio...');
+            if (!fullStreamStarted) {{
+                showStatus('Loading initial clip...');
+            }} else {{
+                showStatus('Loading full audio stream...');
+            }}
         }});
         
         audio.addEventListener('loadedmetadata', () => {{
-            hideLoading();
-            showStatus(`Audio loaded: Duration: ${{Math.round(audio.duration)}}s`);
+            if (!fullStreamStarted) {{
+                showStatus('Initial clip loaded. Click play to start full stream.');
+            }} else {{
+                showStatus(`Full audio loaded: Duration: ${{Math.round(audio.duration)}}s`);
+            }}
         }});
         
         audio.addEventListener('canplay', () => {{
-            showStatus('Audio ready to play');
+            if (!fullStreamStarted) {{
+                showStatus('Initial clip ready. Click play to start full stream.');
+            }} else {{
+                showStatus('Full audio ready to play');
+            }}
         }});
         
         audio.addEventListener('playing', () => {{
-            showStatus('Audio is playing');
+            if (!fullStreamStarted) {{
+                // User clicked play on initial clip, start full stream
+                startFullStream();
+            }} else {{
+                showStatus('Full audio is playing');
+            }}
         }});
         
         audio.addEventListener('pause', () => {{
@@ -497,7 +638,11 @@ async def audio_player(
         }});
         
         audio.addEventListener('ended', () => {{
-            showStatus('Audio ended');
+            if (!fullStreamStarted) {{
+                showStatus('Initial clip ended. Click play to start full stream.');
+            }} else {{
+                showStatus('Full audio ended');
+            }}
         }});
         
         audio.addEventListener('error', (e) => {{
@@ -518,7 +663,7 @@ async def audio_player(
                         errorMessage = 'Audio decoding failed. The stream format may be unsupported.';
                         break;
                     case 4:
-                        errorMessage = 'Audio not supported. Try downloading instead.';
+                        errorMessage = 'Video not supported. Try downloading instead.';
                         break;
                 }}
             }}
@@ -526,34 +671,8 @@ async def audio_player(
             showError(errorMessage + '<br><br>Try refreshing the page or use the download links below.');
         }});
         
-        audio.addEventListener('stalled', () => {{
-            showStatus('Audio stream stalled, attempting to recover...');
-        }});
-        
-        audio.addEventListener('waiting', () => {{
-            showStatus('Buffering audio...');
-        }});
-        
-        // Handle network issues
-        audio.addEventListener('suspend', () => {{
-            showStatus('Audio loading suspended');
-        }});
-        
-        // Auto-retry on failure
-        audio.addEventListener('abort', () => {{
-            if (loadAttempts < maxAttempts) {{
-                loadAttempts++;
-                showStatus(`Retry attempt ${{loadAttempts}} of ${{maxAttempts}}...`);
-                setTimeout(() => {{
-                    audio.load();
-                }}, 2000);
-            }} else {{
-                showError('Failed to load audio after multiple attempts. Please check the stream URL or try downloading.');
-            }}
-        }});
-        
-        // Initialize audio
-        audio.load();
+        // Load initial clip when page loads
+        document.addEventListener('DOMContentLoaded', loadInitialClip);
         
         // Add keyboard shortcuts
         document.addEventListener('keydown', (e) => {{
