@@ -25,7 +25,7 @@ async def video_player(
         # Use the URL as-is since it should already be properly formatted
         decoded_url = url
         
-        # Create HTML page with video player
+        # Create a simple redirect page that opens the stream directly
         html_content = f"""
 <!DOCTYPE html>
 <html lang="en">
@@ -43,78 +43,148 @@ async def video_player(
             align-items: center;
             min-height: 100vh;
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            color: white;
         }}
         
-        .video-container {{
-            width: 100%;
-            height: 100vh;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
-        }}
-        
-        video {{
-            width: 100%;
-            height: auto;
-            max-height: 100vh;
-            background: #000;
-        }}
-        
-        .error-message {{
-            color: #fff;
+        .container {{
             text-align: center;
-            padding: 20px;
+            max-width: 500px;
+            padding: 40px;
         }}
         
-        .loading {{
+        .video-icon {{
+            font-size: 80px;
+            margin-bottom: 20px;
+            opacity: 0.8;
+        }}
+        
+        .title {{
+            font-size: 24px;
+            font-weight: 600;
+            margin-bottom: 15px;
             color: #fff;
-            text-align: center;
+        }}
+        
+        .subtitle {{
+            font-size: 16px;
+            color: #ccc;
+            margin-bottom: 30px;
+            line-height: 1.5;
+        }}
+        
+        .play-button {{
+            display: inline-block;
+            padding: 15px 30px;
+            background: #4A9EFF;
+            color: white;
+            text-decoration: none;
+            border-radius: 25px;
+            font-size: 18px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            margin: 10px;
+        }}
+        
+        .play-button:hover {{
+            background: #357ABD;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(74, 158, 255, 0.4);
+        }}
+        
+        .secondary-button {{
+            display: inline-block;
+            padding: 12px 25px;
+            background: transparent;
+            color: #ccc;
+            text-decoration: none;
+            border: 2px solid #555;
+            border-radius: 20px;
+            font-size: 16px;
+            transition: all 0.3s ease;
+            margin: 10px;
+        }}
+        
+        .secondary-button:hover {{
+            border-color: #777;
+            color: #fff;
+        }}
+        
+        .info {{
+            margin-top: 30px;
             padding: 20px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            font-size: 14px;
+            color: #bbb;
+        }}
+        
+        .auto-redirect {{
+            margin-top: 20px;
+            font-size: 14px;
+            color: #888;
+        }}
+        
+        .countdown {{
+            font-weight: bold;
+            color: #4A9EFF;
         }}
     </style>
 </head>
 <body>
-    <div class="video-container">
-        <div id="loading" class="loading">Loading video...</div>
-        <video 
-            id="videoPlayer"
-            controls 
-            preload="metadata"
-            style="display: none;"
-            onloadstart="hideLoading()"
-            oncanplay="showVideo()"
-            onerror="showError()"
-        >
-            <source src="{decoded_url}" type="video/mp4">
-            <p class="error-message">Your browser doesn't support HTML5 video.</p>
-        </video>
-        <div id="error" class="error-message" style="display: none;">
-            Failed to load video. The stream may have expired or be unavailable.
+    <div class="container">
+        <div class="video-icon">🎬</div>
+        <div class="title">{title}</div>
+        <div class="subtitle">
+            This video requires authenticated streaming.<br>
+            Click below to open the video stream directly.
+        </div>
+        
+        <a href="{decoded_url}" class="play-button" target="_blank">
+            ▶ Play Video Stream
+        </a>
+        
+        <br>
+        
+        <a href="{decoded_url}" class="secondary-button" target="_self">
+            🔗 Open in Same Tab
+        </a>
+        
+        <div class="info">
+            <strong>Why this approach?</strong><br>
+            Authenticated video streams work best when opened directly in the browser,
+            bypassing iframe security restrictions that prevent embedded playback.
+        </div>
+        
+        <div class="auto-redirect">
+            Auto-redirecting in <span class="countdown" id="countdown">5</span> seconds...
         </div>
     </div>
 
     <script>
-        function hideLoading() {{
-            document.getElementById('loading').style.display = 'none';
-        }}
+        // Auto-redirect after 5 seconds
+        let countdown = 5;
+        const countdownElement = document.getElementById('countdown');
         
-        function showVideo() {{
-            document.getElementById('videoPlayer').style.display = 'block';
-        }}
-        
-        function showError() {{
-            document.getElementById('loading').style.display = 'none';
-            document.getElementById('videoPlayer').style.display = 'none';
-            document.getElementById('error').style.display = 'block';
-        }}
-        
-        // Auto-hide loading after 10 seconds if video hasn't loaded
-        setTimeout(function() {{
-            if (document.getElementById('loading').style.display !== 'none') {{
-                showError();
+        const timer = setInterval(() => {{
+            countdown--;
+            countdownElement.textContent = countdown;
+            
+            if (countdown <= 0) {{
+                clearInterval(timer);
+                window.location.href = '{decoded_url}';
             }}
-        }}, 10000);
+        }}, 1000);
+        
+        // Allow user to cancel auto-redirect by interacting with the page
+        document.addEventListener('click', () => {{
+            clearInterval(timer);
+            document.querySelector('.auto-redirect').style.display = 'none';
+        }});
+        
+        document.addEventListener('keydown', () => {{
+            clearInterval(timer);
+            document.querySelector('.auto-redirect').style.display = 'none';
+        }});
     </script>
 </body>
 </html>
