@@ -4,21 +4,37 @@
 	import Collapsible from '$lib/components/common/Collapsible.svelte';
 	import ChevronDown from '$lib/components/icons/ChevronDown.svelte';
 	import ChevronUp from '$lib/components/icons/ChevronUp.svelte';
+	import { mobile } from '$lib/stores';
+
+	interface Source {
+		document?: string[];
+		metadata?: any[];
+		distances?: number[];
+		source?: any;
+	}
+
+	interface Citation {
+		id: string;
+		source: any;
+		document: string[];
+		metadata: any[];
+		distances?: number[];
+	}
 
 	const i18n = getContext('i18n');
 
 	export let id = '';
-	export let sources = [];
+	export let sources: Source[] = [];
 
-	let citations = [];
+	let citations: Citation[] = [];
 	let showPercentage = false;
 	let showRelevance = true;
 
 	let showCitationModal = false;
-	let selectedCitation: any = null;
+	let selectedCitation: Citation | null = null;
 	let isCollapsibleOpen = false;
 
-	export const showSourceModal = (sourceIdx) => {
+	export const showSourceModal = (sourceIdx: number) => {
 		if (citations[sourceIdx]) {
 			selectedCitation = citations[sourceIdx];
 			showCitationModal = true;
@@ -50,14 +66,14 @@
 	}
 
 	$: {
-		citations = sources.reduce((acc, source) => {
+		citations = sources.reduce((acc: Citation[], source: Source) => {
 			if (Object.keys(source).length === 0) {
 				return acc;
 			}
 
-			source.document.forEach((document, index) => {
-				const metadata = source.metadata?.[index];
-				const distance = source.distances?.[index];
+			source?.document?.forEach((document: string, index: number) => {
+				const metadata = source?.metadata?.[index];
+				const distance = source?.distances?.[index];
 
 				// Within the same citation there could be multiple documents
 				const id = metadata?.source ?? source?.source?.id ?? 'N/A';
@@ -71,12 +87,12 @@
 					_source = { ..._source, name: id, url: id };
 				}
 
-				const existingSource = acc.find((item) => item.id === id);
+				const existingSource = acc.find((item: Citation) => item.id === id);
 
 				if (existingSource) {
 					existingSource.document.push(document);
 					existingSource.metadata.push(metadata);
-					if (distance !== undefined) existingSource.distances.push(distance);
+					if (distance !== undefined) existingSource.distances?.push(distance);
 				} else {
 					acc.push({
 						id: id,
@@ -87,6 +103,7 @@
 					});
 				}
 			});
+
 			return acc;
 		}, []);
 		console.log('citations', citations);
@@ -155,7 +172,7 @@
 						>
 						<div class="flex items-center overflow-auto scrollbar-none w-full max-w-full flex-1">
 							<div class="flex text-xs font-medium items-center">
-								{#each citations.slice(0, 2) as citation, idx}
+								{#each citations.slice(0, $mobile ? 1 : 2) as citation, idx}
 									<button
 										class="no-toggle outline-hidden flex dark:text-gray-300 p-1 bg-gray-50 hover:bg-gray-100 dark:bg-gray-900 dark:hover:bg-gray-850 transition rounded-xl max-w-96"
 										on:click={() => {
@@ -180,7 +197,7 @@
 						</div>
 						<div class="flex items-center gap-1 whitespace-nowrap shrink-0">
 							<span class="hidden sm:inline">{$i18n.t('and')}</span>
-							{citations.length - 2}
+							{citations.length - ($mobile ? 1 : 2)}
 							<span>{$i18n.t('more')}</span>
 						</div>
 					</div>
@@ -194,7 +211,7 @@
 				</div>
 				<div slot="content">
 					<div class="flex text-xs font-medium flex-wrap">
-						{#each citations.slice(2) as citation, idx}
+						{#each citations.slice($mobile ? 1 : 2) as citation, idx}
 							<button
 								class="no-toggle outline-hidden flex dark:text-gray-300 p-1 bg-gray-50 hover:bg-gray-100 dark:bg-gray-900 dark:hover:bg-gray-850 transition rounded-xl max-w-96"
 								on:click={() => {
