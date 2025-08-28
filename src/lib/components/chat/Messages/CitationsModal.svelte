@@ -76,11 +76,32 @@
 	function formatCitationContent(content: string): { formatted: string; isStructured: boolean } {
 		if (!content) return { formatted: '', isStructured: false };
 
+		// First, try to clean up any obvious JSON wrapper artifacts in the raw content
+		let cleanContent = content.trim();
+		
+		// Handle case where content might be showing raw JSON structure
+		if (cleanContent.startsWith('{"video_description":') || cleanContent.includes('"video_description":')) {
+			try {
+				const parsed = JSON.parse(cleanContent);
+				if (parsed.video_description && typeof parsed.video_description === 'string') {
+					return { formatted: formatVideoDescription(parsed.video_description), isStructured: true };
+				}
+			} catch (e) {
+				// If JSON parsing fails, try to extract video_description manually
+				const match = cleanContent.match(/"video_description":\s*"([^"]+(?:\\.[^"]*)*)"/) || 
+							 cleanContent.match(/"video_description":\s*'([^']+(?:\\.[^']*)*)'/) ||
+							 cleanContent.match(/video_description['":\s]*([^}]+)/i);
+				if (match && match[1]) {
+					return { formatted: formatVideoDescription(match[1].replace(/\\"/g, '"')), isStructured: true };
+				}
+			}
+		}
+
 		try {
-			// Try to parse as JSON first
-			const parsed = JSON.parse(content);
+			// Try to parse as JSON
+			const parsed = JSON.parse(cleanContent);
 			
-			// Handle video_description object - this contains the full structured video analysis
+			// Handle video_description object
 			if (parsed.video_description && typeof parsed.video_description === 'string') {
 				return { formatted: formatVideoDescription(parsed.video_description), isStructured: true };
 			}
@@ -90,11 +111,15 @@
 				return { formatted: formatObjectContent(parsed), isStructured: true };
 			}
 		} catch (e) {
-			// Not JSON - format as plain text with better paragraph breaks
-			return { formatted: formatTextContent(content), isStructured: true };
+			// Not valid JSON - check if it looks like video content anyway
+			if (cleanContent.toLowerCase().includes('video') || cleanContent.includes('**') || cleanContent.includes('Visuals:')) {
+				return { formatted: formatVideoDescription(cleanContent), isStructured: true };
+			}
+			// Format as plain text with better paragraph breaks
+			return { formatted: formatTextContent(cleanContent), isStructured: true };
 		}
 
-		return { formatted: formatTextContent(content), isStructured: true };
+		return { formatted: formatTextContent(cleanContent), isStructured: true };
 	}
 
 	// Format video description content with proper structure and sections
@@ -102,9 +127,13 @@
 		if (!text) return '';
 		
 		return text
-			// Remove the wrapper lines for both video and audio
-			.replace(/^"?(?:Here is a description of the (?:video|audio) provided:|Sure! Here is a description of the (?:video|audio):)\s*/i, '')
-			.replace(/^"?(?:Here is a description of the video:|Sure! Here is a description of the video:)\s*/i, '')
+			// Remove comprehensive wrapper patterns - be more aggressive
+			.replace(/^"?(?:Here is a (?:detailed )?description of the (?:video|audio)(?: provided)?:?|Sure!? Here is a (?:detailed )?description of the (?:video|audio):?)\s*/i, '')
+			.replace(/^"?(?:Here is (?:a )?(?:detailed )?description of the (?:video|audio):?)\s*/i, '')
+			.replace(/^"?(?:Sure! Here is (?:a )?(?:detailed )?description of the (?:video|audio):?)\s*/i, '')
+			// Remove any remaining JSON artifacts
+			.replace(/^[{"]?video_description["}]?\s*:\s*["{]?\s*/i, '')
+			.replace(/^["{]?\s*/, '')
 			// Clean up excessive whitespace
 			.replace(/\s+/g, ' ')
 			// Format section headers (text followed by colons)
