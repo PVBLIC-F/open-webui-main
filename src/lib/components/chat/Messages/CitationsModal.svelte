@@ -7,14 +7,29 @@
 	import XMark from '$lib/components/icons/XMark.svelte';
 	import Textarea from '$lib/components/common/Textarea.svelte';
 
+	interface CitationDocument {
+		source: any;
+		document: string;
+		metadata?: any;
+		distance?: number;
+	}
+
+	interface Citation {
+		id: string;
+		source: any;
+		document: string[];
+		metadata: any[];
+		distances?: number[];
+	}
+
 	const i18n = getContext('i18n');
 
 	export let show = false;
-	export let citation;
+	export let citation: Citation | null = null;
 	export let showPercentage = false;
 	export let showRelevance = true;
 
-	let mergedDocuments = [];
+	let mergedDocuments: CitationDocument[] = [];
 
 	function calculatePercentage(distance: number) {
 		if (typeof distance !== 'number') return null;
@@ -34,17 +49,17 @@
 	}
 
 	$: if (citation) {
-		mergedDocuments = citation.document?.map((c, i) => {
+		mergedDocuments = citation.document?.map((c: string, i: number): CitationDocument => {
 			return {
 				source: citation.source,
 				document: c,
 				metadata: citation.metadata?.[i],
 				distance: citation.distances?.[i]
 			};
-		});
-		if (mergedDocuments.every((doc) => doc.distance !== undefined)) {
+		}) || [];
+		if (mergedDocuments.every((doc: CitationDocument) => doc.distance !== undefined)) {
 			mergedDocuments = mergedDocuments.sort(
-				(a, b) => (b.distance ?? Infinity) - (a.distance ?? Infinity)
+				(a: CitationDocument, b: CitationDocument) => (b.distance ?? Infinity) - (a.distance ?? Infinity)
 			);
 		}
 	}
@@ -56,6 +71,74 @@
 			return str;
 		}
 	};
+
+	// Function to parse and format citation content for better readability
+	function formatCitationContent(content: string): { formatted: string; isStructured: boolean } {
+		if (!content) return { formatted: '', isStructured: false };
+
+		try {
+			// Try to parse as JSON first
+			const parsed = JSON.parse(content);
+			
+			// Handle video_description object
+			if (parsed.video_description && typeof parsed.video_description === 'string') {
+				return { formatted: parsed.video_description, isStructured: true };
+			}
+			
+			// Handle other structured content
+			if (typeof parsed === 'object') {
+				return { formatted: formatObjectContent(parsed), isStructured: true };
+			}
+		} catch (e) {
+			// Not JSON, check if it looks like structured text
+			if (content.includes('**') || content.includes('*') || content.includes('\n')) {
+				return { formatted: content, isStructured: true };
+			}
+		}
+
+		return { formatted: content, isStructured: false };
+	}
+
+	// Format object content into readable text
+	function formatObjectContent(obj: any): string {
+		if (typeof obj !== 'object' || obj === null) return String(obj);
+		
+		let result = '';
+		
+		for (const [key, value] of Object.entries(obj)) {
+			// Format key as header
+			const formattedKey = key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+			result += `**${formattedKey}:**\n`;
+			
+			if (typeof value === 'string') {
+				result += `${value}\n\n`;
+			} else if (Array.isArray(value)) {
+				value.forEach(item => {
+					result += `• ${item}\n`;
+				});
+				result += '\n';
+			} else if (typeof value === 'object') {
+				result += `${JSON.stringify(value, null, 2)}\n\n`;
+			} else {
+				result += `${value}\n\n`;
+			}
+		}
+		
+		return result.trim();
+	}
+
+	// Function to render markdown-like text
+	function renderFormattedText(text: string): string {
+		return text
+			// Bold text
+			.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+			// Italic text  
+			.replace(/\*(.*?)\*/g, '<em>$1</em>')
+			// Line breaks
+			.replace(/\n/g, '<br>')
+			// Bullet points
+			.replace(/^• /gm, '&bull; ');
+	}
 </script>
 
 <Modal size="lg" bind:show>
@@ -178,9 +261,16 @@
 								title={$i18n.t('Content')}
 							></iframe>
 						{:else}
-							<pre class="text-sm dark:text-gray-400 whitespace-pre-line">
-                {document.document}
-              </pre>
+							{@const contentFormat = formatCitationContent(document.document)}
+							{#if contentFormat.isStructured}
+								<div class="text-sm dark:text-gray-400 bg-gray-50 dark:bg-gray-800 rounded-lg p-4 mt-2">
+									{@html renderFormattedText(contentFormat.formatted)}
+								</div>
+							{:else}
+								<pre class="text-sm dark:text-gray-400 whitespace-pre-line bg-gray-50 dark:bg-gray-800 rounded-lg p-4 mt-2">
+{contentFormat.formatted}
+								</pre>
+							{/if}
 						{/if}
 					</div>
 
