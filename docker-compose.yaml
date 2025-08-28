@@ -13,6 +13,7 @@ services:
       context: .
       args:
         OLLAMA_BASE_URL: '/ollama'
+        USE_SLIM: true
       dockerfile: Dockerfile
     image: ghcr.io/open-webui/open-webui:${WEBUI_DOCKER_TAG-main}
     container_name: open-webui
