@@ -102,6 +102,9 @@
 		if (!text) return '';
 		
 		return text
+			// Remove the wrapper lines for both video and audio
+			.replace(/^"?(?:Here is a description of the (?:video|audio) provided:|Sure! Here is a description of the (?:video|audio):)\s*/i, '')
+			.replace(/^"?(?:Here is a description of the video:|Sure! Here is a description of the video:)\s*/i, '')
 			// Clean up excessive whitespace
 			.replace(/\s+/g, ' ')
 			// Format section headers (text followed by colons)
