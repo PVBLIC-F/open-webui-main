@@ -80,9 +80,9 @@
 			// Try to parse as JSON first
 			const parsed = JSON.parse(content);
 			
-			// Handle video_description object
+			// Handle video_description object - this contains the full structured video analysis
 			if (parsed.video_description && typeof parsed.video_description === 'string') {
-				return { formatted: parsed.video_description, isStructured: true };
+				return { formatted: formatVideoDescription(parsed.video_description), isStructured: true };
 			}
 			
 			// Handle other structured content
@@ -90,13 +90,58 @@
 				return { formatted: formatObjectContent(parsed), isStructured: true };
 			}
 		} catch (e) {
-			// Not JSON, check if it looks like structured text
-			if (content.includes('**') || content.includes('*') || content.includes('\n')) {
-				return { formatted: content, isStructured: true };
-			}
+			// Not JSON - format as plain text with better paragraph breaks
+			return { formatted: formatTextContent(content), isStructured: true };
 		}
 
-		return { formatted: content, isStructured: false };
+		return { formatted: formatTextContent(content), isStructured: true };
+	}
+
+	// Format video description content with proper structure and sections
+	function formatVideoDescription(text: string): string {
+		if (!text) return '';
+		
+		return text
+			// Clean up excessive whitespace
+			.replace(/\s+/g, ' ')
+			// Format section headers (text followed by colons)
+			.replace(/\*\*([^*]+):\*\*/g, '\n\n**$1:**\n')
+			// Add breaks before bullet points and list items
+			.replace(/(\* \*\*[^*]+\*\*)/g, '\n$1')
+			// Add breaks after periods when followed by section markers
+			.replace(/\.\s+(\*\*[^*]+\*\*)/g, '.\n\n$1')
+			// Add breaks before "Content of the Discussion" and similar major sections
+			.replace(/(\*\*Content of the Discussion:\*\*)/g, '\n\n$1')
+			.replace(/(\*\*Visuals:\*\*)/g, '\n\n$1')
+			.replace(/(\*\*Audio:\*\*)/g, '\n\n$1')
+			.replace(/(\*\*Overall Impression:\*\*)/g, '\n\n$1')
+			.replace(/(\*\*Setting and People:\*\*)/g, '\n\n$1')
+			// Add proper spacing after bullet points
+			.replace(/(\* \*\*[^*]+\*\* [^*]+)/g, '$1\n')
+			// Clean up multiple line breaks
+			.replace(/\n{3,}/g, '\n\n')
+			.trim();
+	}
+
+	// Format plain text content with proper paragraph breaks
+	function formatTextContent(text: string): string {
+		if (!text) return '';
+		
+		// Clean up the text and add proper paragraph breaks
+		return text
+			// Remove excessive whitespace but preserve intentional breaks
+			.replace(/\s+/g, ' ')
+			// Split into sentences and add breaks after periods followed by capital letters
+			.replace(/\.\s+([A-Z])/g, '.\n\n$1')
+			// Add breaks after colons when followed by capital letters (likely new sections)
+			.replace(/:\s+([A-Z][^.]*?\.)/g, ':\n\n$1')
+			// Add breaks before common section starters
+			.replace(/\b(The [A-Z][A-Za-z\s]+(?:Zone|Media|SDG)[^.]*?\.)/g, '\n\n$1')
+			// Add breaks before sentences that start with "Our" or "The" and seem like new paragraphs
+			.replace(/\.\s+((?:Our|The)\s+[A-Z][^.]*?(?:includes?|provides?|aims?|makes?|hosts?)[^.]*?\.)/g, '.\n\n$1')
+			// Clean up multiple line breaks
+			.replace(/\n{3,}/g, '\n\n')
+			.trim();
 	}
 
 	// Format object content into readable text
@@ -134,8 +179,15 @@
 			.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
 			// Italic text  
 			.replace(/\*(.*?)\*/g, '<em>$1</em>')
-			// Line breaks
+			// Convert double line breaks to paragraph breaks
+			.replace(/\n\n/g, '</p><p class="mb-3">')
+			// Convert single line breaks to <br>
 			.replace(/\n/g, '<br>')
+			// Wrap in paragraph tags
+			.replace(/^/, '<p class="mb-3">')
+			.replace(/$/, '</p>')
+			// Clean up empty paragraphs
+			.replace(/<p class="mb-3"><\/p>/g, '')
 			// Bullet points
 			.replace(/^• /gm, '&bull; ');
 	}
@@ -263,11 +315,13 @@
 						{:else}
 							{@const contentFormat = formatCitationContent(document.document)}
 							{#if contentFormat.isStructured}
-								<div class="text-sm dark:text-gray-400 bg-gray-50 dark:bg-gray-800 rounded-lg p-4 mt-2">
-									{@html renderFormattedText(contentFormat.formatted)}
+								<div class="text-sm text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-800 rounded-lg p-4 mt-2 leading-relaxed">
+									<div class="whitespace-pre-line">
+										{@html renderFormattedText(contentFormat.formatted)}
+									</div>
 								</div>
 							{:else}
-								<pre class="text-sm dark:text-gray-400 whitespace-pre-line bg-gray-50 dark:bg-gray-800 rounded-lg p-4 mt-2">
+								<pre class="text-sm dark:text-gray-400 whitespace-pre-line bg-gray-50 dark:bg-gray-800 rounded-lg p-4 mt-2 leading-relaxed">
 {contentFormat.formatted}
 								</pre>
 							{/if}
