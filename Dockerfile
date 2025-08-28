@@ -121,6 +121,13 @@ RUN apt-get update && \
 
 # install python dependencies
 COPY --chown=$UID:$GID ./backend/requirements.txt ./requirements.txt
+COPY --chown=$UID:$GID ./backend/requirements-slim.txt ./requirements-slim.txt
+
+# Use slim requirements if USE_SLIM is true
+RUN if [ "$USE_SLIM" = "true" ]; then \
+      echo "Using slim requirements (no PyTorch)" && \
+      mv requirements-slim.txt requirements.txt; \
+    fi
 
 RUN pip3 install --no-cache-dir uv && \
     if [ "$USE_SLIM" != "true" ]; then \
