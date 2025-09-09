@@ -19,6 +19,7 @@ from typing import (
 )
 import aiohttp
 import certifi
+import ftfy
 import validators
 from langchain_community.document_loaders import PlaywrightURLLoader, WebBaseLoader
 from langchain_community.document_loaders.firecrawl import FireCrawlLoader
@@ -502,6 +503,24 @@ class SafeWebBaseLoader(WebBaseLoader):
         super().__init__(*args, **kwargs)
         self.trust_env = trust_env
 
+    def _clean_text(self, soup) -> str:
+        """Clean extracted text from BeautifulSoup.
+
+        Removes excessive whitespace, normalizes spaces, and fixes text encoding issues.
+
+        Args:
+            soup: BeautifulSoup object containing parsed HTML
+
+        Returns:
+            Cleaned text string
+        """
+        # Extract text with strip and consistent separator
+        text = soup.get_text(strip=True, separator=" ")
+        # Normalize all whitespace to single spaces
+        text = " ".join(text.split())
+        # Fix any text encoding issues
+        return ftfy.fix_text(text)
+
     async def _fetch(
         self, url: str, retries: int = 3, cooldown: int = 2, backoff: float = 1.5
     ) -> str:
@@ -518,7 +537,6 @@ class SafeWebBaseLoader(WebBaseLoader):
                     async with session.get(
                         url,
                         **(self.requests_kwargs | kwargs),
-                        allow_redirects=False,
                     ) as response:
                         if self.raise_for_status:
                             response.raise_for_status()
@@ -564,7 +582,7 @@ class SafeWebBaseLoader(WebBaseLoader):
         for path in self.web_paths:
             try:
                 soup = self._scrape(path, bs_kwargs=self.bs_kwargs)
-                text = soup.get_text(**self.bs_get_text_kwargs)
+                text = self._clean_text(soup)
 
                 # Build metadata
                 metadata = extract_metadata(soup, path)
@@ -578,7 +596,7 @@ class SafeWebBaseLoader(WebBaseLoader):
         """Async lazy load text from the url(s) in web_path."""
         results = await self.ascrape_all(self.web_paths)
         for path, soup in zip(self.web_paths, results):
-            text = soup.get_text(**self.bs_get_text_kwargs)
+            text = self._clean_text(soup)
             metadata = {"source": path}
             if title := soup.find("title"):
                 metadata["title"] = title.get_text()
