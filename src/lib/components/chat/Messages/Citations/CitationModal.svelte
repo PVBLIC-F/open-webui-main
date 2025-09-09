@@ -228,8 +228,34 @@
 <Modal size="lg" bind:show>
 	<div>
 		<div class=" flex justify-between dark:text-gray-300 px-5 pt-4 pb-2">
-			<div class=" text-lg font-medium self-center capitalize">
-				{$i18n.t('Citation')}
+			<div class=" text-lg font-medium self-center">
+				{#if citation?.source?.name}
+					{@const document = mergedDocuments?.[0]}
+					{#if document?.metadata?.file_id || document.source?.url?.includes('http')}
+						<Tooltip
+							className="w-fit"
+							content={$i18n.t('Open file')}
+							placement="top-start"
+							tippyOptions={{ duration: [500, 0] }}
+						>
+							<a
+								class="hover:text-gray-500 dark:hover:text-gray-100 underline grow"
+								href={document?.metadata?.file_id
+									? `${WEBUI_API_BASE_URL}/files/${document?.metadata?.file_id}/content${document?.metadata?.page !== undefined ? `#page=${document.metadata.page + 1}` : ''}`
+									: document.source?.url?.includes('http')
+										? document.source.url
+										: `#`}
+								target="_blank"
+							>
+								{decodeString(citation?.source?.name)}
+							</a>
+						</Tooltip>
+					{:else}
+						{decodeString(citation?.source?.name)}
+					{/if}
+				{:else}
+					{$i18n.t('Citation')}
+				{/if}
 			</div>
 			<button
 				class="self-center"
@@ -243,57 +269,31 @@
 
 		<div class="flex flex-col md:flex-row w-full px-6 pb-5 md:space-x-4">
 			<div
-				class="flex flex-col w-full dark:text-gray-200 overflow-y-scroll max-h-[22rem] scrollbar-hidden"
+				class="flex flex-col w-full dark:text-gray-200 overflow-y-scroll max-h-[22rem] scrollbar-hidden gap-1"
 			>
 				{#each mergedDocuments as document, documentIdx}
-					<div class="flex flex-col w-full">
-						<div class="text-sm font-medium dark:text-gray-300">
-							{$i18n.t('Source')}
-						</div>
-
-						{#if document.source?.name}
-							<Tooltip
-								className="w-fit"
-								content={$i18n.t('Open file')}
-								placement="top-start"
-								tippyOptions={{ duration: [500, 0] }}
-							>
-								<div class="text-sm dark:text-gray-400 flex items-center gap-2 w-fit">
-									<a
-										class="hover:text-gray-500 dark:hover:text-gray-100 underline grow"
-										href={document?.metadata?.file_id
-											? `${WEBUI_API_BASE_URL}/files/${document?.metadata?.file_id}/content${document?.metadata?.page !== undefined ? `#page=${document.metadata.page + 1}` : ''}`
-											: document.source?.url?.includes('http')
-												? document.source.url
-												: `#`}
-										target="_blank"
-									>
-										{decodeString(document?.metadata?.name ?? document.source.name)}
-									</a>
-									{#if Number.isInteger(document?.metadata?.page)}
-										<span class="text-xs text-gray-500 dark:text-gray-400">
-											({$i18n.t('page')}
-											{document.metadata.page + 1})
-										</span>
-									{/if}
-								</div>
-							</Tooltip>
-							{#if document.metadata?.parameters}
-								<div class="text-sm font-medium dark:text-gray-300 mt-2 mb-0.5">
+					<div class="flex flex-col w-full gap-2">
+						{#if document.metadata?.parameters}
+							<div>
+								<div class="text-sm font-medium dark:text-gray-300 mb-1">
 									{$i18n.t('Parameters')}
 								</div>
 
 								<Textarea readonly value={JSON.stringify(document.metadata.parameters, null, 2)}
 								></Textarea>
-							{/if}
-							{#if showRelevance}
-								<div class="text-sm font-medium dark:text-gray-300 mt-2">
-									{$i18n.t('Relevance')}
-								</div>
-								{#if document.distance !== undefined}
+							</div>
+						{/if}
+
+						<div>
+							<div
+								class=" text-sm font-medium dark:text-gray-300 flex items-center gap-2 w-fit mb-1"
+							>
+								{$i18n.t('Content')}
+
+								{#if showRelevance && document.distance !== undefined}
 									<Tooltip
 										className="w-fit"
-										content={$i18n.t('Semantic distance to query')}
+										content={$i18n.t('Relevance')}
 										placement="top-start"
 										tippyOptions={{ duration: [500, 0] }}
 									>
@@ -308,12 +308,6 @@
 														{percentage.toFixed(2)}%
 													</span>
 												{/if}
-
-												{#if typeof document?.distance === 'number'}
-													<span class="text-gray-500 dark:text-gray-500">
-														({(document?.distance ?? 0).toFixed(4)})
-													</span>
-												{/if}
 											{:else if typeof document?.distance === 'number'}
 												<span class="text-gray-500 dark:text-gray-500">
 													({(document?.distance ?? 0).toFixed(4)})
@@ -321,48 +315,39 @@
 											{/if}
 										</div>
 									</Tooltip>
-								{:else}
-									<div class="text-sm dark:text-gray-400">
-										{$i18n.t('No distance available')}
+								{/if}
+
+								{#if Number.isInteger(document?.metadata?.page)}
+									<span class="text-sm text-gray-500 dark:text-gray-400">
+										({$i18n.t('page')}
+										{document.metadata.page + 1})
+									</span>
+								{/if}
+							</div>
+
+							{#if document.metadata?.html}
+								<iframe
+									class="w-full border-0 h-auto rounded-none"
+									sandbox="allow-scripts allow-forms allow-same-origin"
+									srcdoc={document.document}
+									title={$i18n.t('Content')}
+								></iframe>
+							{:else}
+								{@const contentFormat = formatCitationContent(document.document)}
+								{#if contentFormat.isStructured}
+									<div class="text-sm text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-800 rounded-lg p-4 mt-2 leading-relaxed">
+										<div class="whitespace-pre-line">
+											{@html renderFormattedText(contentFormat.formatted)}
+										</div>
 									</div>
+								{:else}
+									<pre class="text-sm dark:text-gray-400 whitespace-pre-line bg-gray-50 dark:bg-gray-800 rounded-lg p-4 mt-2 leading-relaxed">
+{contentFormat.formatted}
+									</pre>
 								{/if}
 							{/if}
-						{:else}
-							<div class="text-sm dark:text-gray-400">
-								{$i18n.t('No source available')}
-							</div>
-						{/if}
-					</div>
-					<div class="flex flex-col w-full">
-						<div class=" text-sm font-medium dark:text-gray-300 mt-2">
-							{$i18n.t('Content')}
 						</div>
-						{#if document.metadata?.html}
-							<iframe
-								class="w-full border-0 h-auto rounded-none"
-								sandbox="allow-scripts allow-forms allow-same-origin"
-								srcdoc={document.document}
-								title={$i18n.t('Content')}
-							></iframe>
-						{:else}
-							{@const contentFormat = formatCitationContent(document.document)}
-							{#if contentFormat.isStructured}
-								<div class="text-sm text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-800 rounded-lg p-4 mt-2 leading-relaxed">
-									<div class="whitespace-pre-line">
-										{@html renderFormattedText(contentFormat.formatted)}
-									</div>
-								</div>
-							{:else}
-								<pre class="text-sm dark:text-gray-400 whitespace-pre-line bg-gray-50 dark:bg-gray-800 rounded-lg p-4 mt-2 leading-relaxed">
-{contentFormat.formatted}
-								</pre>
-							{/if}
-						{/if}
 					</div>
-
-					{#if documentIdx !== mergedDocuments.length - 1}
-						<hr class="border-gray-100 dark:border-gray-850 my-3" />
-					{/if}
 				{/each}
 			</div>
 		</div>
