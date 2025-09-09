@@ -111,6 +111,8 @@ for source in log_sources:
 log.setLevel(SRC_LOG_LEVELS["CONFIG"])
 
 WEBUI_NAME = os.environ.get("WEBUI_NAME", "Open WebUI")
+if WEBUI_NAME != "Open WebUI":
+    WEBUI_NAME += " (Open WebUI)"
 
 WEBUI_FAVICON_URL = "https://openwebui.com/favicon.png"
 
@@ -461,6 +463,19 @@ if WEBUI_AUTH and WEBUI_SECRET_KEY == "":
 
 ENABLE_COMPRESSION_MIDDLEWARE = (
     os.environ.get("ENABLE_COMPRESSION_MIDDLEWARE", "True").lower() == "true"
+)
+
+####################################
+# OAUTH Configuration
+####################################
+
+
+ENABLE_OAUTH_ID_TOKEN_COOKIE = (
+    os.environ.get("ENABLE_OAUTH_ID_TOKEN_COOKIE", "True").lower() == "true"
+)
+
+OAUTH_SESSION_TOKEN_ENCRYPTION_KEY = os.environ.get(
+    "OAUTH_SESSION_TOKEN_ENCRYPTION_KEY", WEBUI_SECRET_KEY
 )
 
 
