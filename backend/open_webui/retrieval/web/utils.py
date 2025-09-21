@@ -55,6 +55,12 @@ def validate_url(url: Union[str, Sequence[str]]):
             parsed_url = urllib.parse.urlparse(url)
             # Get IPv4 and IPv6 addresses
             ipv4_addresses, ipv6_addresses = resolve_hostname(parsed_url.hostname)
+            
+            # If hostname resolution failed (empty lists), treat URL as invalid
+            if not ipv4_addresses and not ipv6_addresses:
+                log.debug(f"URL validation failed: unable to resolve hostname for {url}")
+                raise ValueError(f"Unable to resolve hostname: {parsed_url.hostname}")
+            
             # Check if any of the resolved addresses are private
             # This is technically still vulnerable to DNS rebinding attacks, as we don't control WebBaseLoader
             for ip in ipv4_addresses:
@@ -83,14 +89,20 @@ def safe_validate_urls(url: Sequence[str]) -> Sequence[str]:
 
 
 def resolve_hostname(hostname):
-    # Get address information
-    addr_info = socket.getaddrinfo(hostname, None)
-
-    # Extract IP addresses from address information
-    ipv4_addresses = [info[4][0] for info in addr_info if info[0] == socket.AF_INET]
-    ipv6_addresses = [info[4][0] for info in addr_info if info[0] == socket.AF_INET6]
-
-    return ipv4_addresses, ipv6_addresses
+    try:
+        # Get address information
+        addr_info = socket.getaddrinfo(hostname, None)
+        
+        # Extract IP addresses from address information
+        ipv4_addresses = [info[4][0] for info in addr_info if info[0] == socket.AF_INET]
+        ipv6_addresses = [info[4][0] for info in addr_info if info[0] == socket.AF_INET6]
+        
+        return ipv4_addresses, ipv6_addresses
+    except socket.gaierror as e:
+        # Handle DNS resolution failures (e.g., non-existent domains)
+        log.debug(f"Failed to resolve hostname '{hostname}': {e}")
+        # Return empty lists to indicate resolution failure
+        return [], []
 
 
 def extract_metadata(soup, url):
