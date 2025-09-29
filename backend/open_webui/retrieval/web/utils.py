@@ -19,6 +19,7 @@ from typing import (
 )
 import aiohttp
 import certifi
+import ftfy
 import validators
 from langchain_community.document_loaders import PlaywrightURLLoader, WebBaseLoader
 from langchain_community.document_loaders.firecrawl import FireCrawlLoader
@@ -54,6 +55,12 @@ def validate_url(url: Union[str, Sequence[str]]):
             parsed_url = urllib.parse.urlparse(url)
             # Get IPv4 and IPv6 addresses
             ipv4_addresses, ipv6_addresses = resolve_hostname(parsed_url.hostname)
+            
+            # If hostname resolution failed (empty lists), treat URL as invalid
+            if not ipv4_addresses and not ipv6_addresses:
+                log.debug(f"URL validation failed: unable to resolve hostname for {url}")
+                raise ValueError(f"Unable to resolve hostname: {parsed_url.hostname}")
+            
             # Check if any of the resolved addresses are private
             # This is technically still vulnerable to DNS rebinding attacks, as we don't control WebBaseLoader
             for ip in ipv4_addresses:
@@ -81,14 +88,20 @@ def safe_validate_urls(url: Sequence[str]) -> Sequence[str]:
 
 
 def resolve_hostname(hostname):
-    # Get address information
-    addr_info = socket.getaddrinfo(hostname, None)
-
-    # Extract IP addresses from address information
-    ipv4_addresses = [info[4][0] for info in addr_info if info[0] == socket.AF_INET]
-    ipv6_addresses = [info[4][0] for info in addr_info if info[0] == socket.AF_INET6]
-
-    return ipv4_addresses, ipv6_addresses
+    try:
+        # Get address information
+        addr_info = socket.getaddrinfo(hostname, None)
+        
+        # Extract IP addresses from address information
+        ipv4_addresses = [info[4][0] for info in addr_info if info[0] == socket.AF_INET]
+        ipv6_addresses = [info[4][0] for info in addr_info if info[0] == socket.AF_INET6]
+        
+        return ipv4_addresses, ipv6_addresses
+    except socket.gaierror as e:
+        # Handle DNS resolution failures (e.g., non-existent domains)
+        log.debug(f"Failed to resolve hostname '{hostname}': {e}")
+        # Return empty lists to indicate resolution failure
+        return [], []
 
 
 def extract_metadata(soup, url):
@@ -501,6 +514,24 @@ class SafeWebBaseLoader(WebBaseLoader):
         super().__init__(*args, **kwargs)
         self.trust_env = trust_env
 
+    def _clean_text(self, soup) -> str:
+        """Clean extracted text from BeautifulSoup.
+
+        Removes excessive whitespace, normalizes spaces, and fixes text encoding issues.
+
+        Args:
+            soup: BeautifulSoup object containing parsed HTML
+
+        Returns:
+            Cleaned text string
+        """
+        # Extract text with strip and consistent separator
+        text = soup.get_text(strip=True, separator=" ")
+        # Normalize all whitespace to single spaces
+        text = " ".join(text.split())
+        # Fix any text encoding issues
+        return ftfy.fix_text(text)
+
     async def _fetch(
         self, url: str, retries: int = 3, cooldown: int = 2, backoff: float = 1.5
     ) -> str:
@@ -517,7 +548,6 @@ class SafeWebBaseLoader(WebBaseLoader):
                     async with session.get(
                         url,
                         **(self.requests_kwargs | kwargs),
-                        allow_redirects=False,
                     ) as response:
                         if self.raise_for_status:
                             response.raise_for_status()
@@ -563,7 +593,7 @@ class SafeWebBaseLoader(WebBaseLoader):
         for path in self.web_paths:
             try:
                 soup = self._scrape(path, bs_kwargs=self.bs_kwargs)
-                text = soup.get_text(**self.bs_get_text_kwargs)
+                text = self._clean_text(soup)
 
                 # Build metadata
                 metadata = extract_metadata(soup, path)
@@ -577,7 +607,7 @@ class SafeWebBaseLoader(WebBaseLoader):
         """Async lazy load text from the url(s) in web_path."""
         results = await self.ascrape_all(self.web_paths)
         for path, soup in zip(self.web_paths, results):
-            text = soup.get_text(**self.bs_get_text_kwargs)
+            text = self._clean_text(soup)
             metadata = {"source": path}
             if title := soup.find("title"):
                 metadata["title"] = title.get_text()
