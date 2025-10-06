@@ -4,6 +4,10 @@ import mimetypes
 import os
 import shutil
 import asyncio
+import re
+import unicodedata
+from html import unescape
+from urllib.parse import unquote
 
 import re
 import uuid
@@ -117,6 +121,82 @@ log.setLevel(SRC_LOG_LEVELS["RAG"])
 # Utility functions
 #
 ##########################################
+
+
+class TextCleaner:
+    """Centralized text cleaning utilities for improving vector database quality"""
+
+    @staticmethod
+    def clean_text(text) -> str:
+        """Clean text by properly handling escape sequences and special characters"""
+        if not text:
+            return ""
+
+        # Convert to string if needed
+        if isinstance(text, (list, tuple)):
+            text = "\n".join(str(item) for item in text)
+
+        # Handle quoted JSON strings
+        if isinstance(text, str) and text.startswith('"') and text.endswith('"'):
+            try:
+                parsed_text = json.loads(f"{text}")
+                if isinstance(parsed_text, str):
+                    text = parsed_text
+            except:
+                text = text[1:-1]
+
+        if isinstance(text, str):
+            try:
+                # Handle HTML entities and URL encoding
+                text = unescape(text)
+                text = unquote(text)
+                text = unicodedata.normalize("NFKC", text)
+
+                # Remove control characters but keep newlines and tabs
+                control_chars = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]")
+                text = control_chars.sub("", text)
+            except:
+                pass
+
+            # Handle escape sequences
+            text = text.replace("\\n\\n", "\n\n")
+            text = text.replace("\\n", "\n")
+            text = text.replace("\\t", "\t")
+            text = text.replace("\\r", "")
+            text = text.replace('\\"', '"')
+            text = text.replace("\\'", "'")
+            text = text.replace("\\\\", "\\")
+
+            # Normalize whitespace
+            try:
+                text = re.sub(r" {2,}", " ", text)
+                text = re.sub(r"\n{3,}", "\n\n", text)
+                lines = text.split("\n")
+                lines = [line.strip() for line in lines]
+                text = "\n".join(lines)
+            except:
+                pass
+
+        return text.strip() if isinstance(text, str) else ""
+
+    @staticmethod
+    def clean_for_vector_db(text) -> str:
+        """Extra cleaning for vector database storage - removes problematic characters"""
+        if not text:
+            return ""
+
+        text = TextCleaner.clean_text(text)
+        # Remove zero-width characters and other problematic Unicode
+        text = re.sub(r"[\x00-\x1F\x7F-\x9F\u200B-\u200D\uFEFF]", "", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        text = text.encode("utf-8", "ignore").decode("utf-8")
+
+        # Prevent excessively long chunks
+        max_length = 10000
+        if len(text) > max_length:
+            text = text[:max_length] + "..."
+
+        return text
 
 
 def get_ef(
@@ -1276,9 +1356,15 @@ def save_docs_to_vector_db(
                 log.info(f"Document with hash {metadata['hash']} already exists")
                 raise ValueError(ERROR_MESSAGES.DUPLICATE_CONTENT)
 
+    # Clean text content before processing
+    log.debug("Cleaning document text content")
+    for doc in docs:
+        doc.page_content = TextCleaner.clean_text(doc.page_content)
+
     if split:
         if request.app.state.config.TEXT_SPLITTER in ["", "character"]:
             text_splitter = RecursiveCharacterTextSplitter(
+                separators=["\n\n", "\n", ".", "!", "?", ",", " ", ""],
                 chunk_size=request.app.state.config.CHUNK_SIZE,
                 chunk_overlap=request.app.state.config.CHUNK_OVERLAP,
                 add_start_index=True,
@@ -1319,6 +1405,7 @@ def save_docs_to_vector_db(
             for doc in docs:
                 md_header_splits = markdown_splitter.split_text(doc.page_content)
                 text_splitter = RecursiveCharacterTextSplitter(
+                    separators=["\n\n", "\n", ".", "!", "?", ",", " ", ""],
                     chunk_size=request.app.state.config.CHUNK_SIZE,
                     chunk_overlap=request.app.state.config.CHUNK_OVERLAP,
                     add_start_index=True,
@@ -1345,6 +1432,11 @@ def save_docs_to_vector_db(
             docs = md_split_docs
         else:
             raise ValueError(ERROR_MESSAGES.DEFAULT("Invalid text splitter"))
+
+    # Clean documents for vector database storage
+    log.debug("Cleaning documents for vector database storage")
+    for doc in docs:
+        doc.page_content = TextCleaner.clean_for_vector_db(doc.page_content)
 
     if len(docs) == 0:
         raise ValueError(ERROR_MESSAGES.EMPTY_CONTENT)
