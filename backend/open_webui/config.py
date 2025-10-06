@@ -2622,6 +2622,37 @@ CHUNK_OVERLAP = PersistentConfig(
     int(os.environ.get("CHUNK_OVERLAP", "150")),
 )
 
+# Hierarchical chunking configuration
+ENABLE_HIERARCHICAL_CHUNKING = PersistentConfig(
+    "ENABLE_HIERARCHICAL_CHUNKING",
+    "rag.enable_hierarchical_chunking",
+    os.environ.get("ENABLE_HIERARCHICAL_CHUNKING", "True").lower() == "true",
+)
+
+PARENT_CHUNK_SIZE = PersistentConfig(
+    "PARENT_CHUNK_SIZE",
+    "rag.parent_chunk_size",
+    int(os.environ.get("PARENT_CHUNK_SIZE", "3000")),
+)
+
+PARENT_CHUNK_OVERLAP = PersistentConfig(
+    "PARENT_CHUNK_OVERLAP",
+    "rag.parent_chunk_overlap",
+    int(os.environ.get("PARENT_CHUNK_OVERLAP", "300")),
+)
+
+CHILD_CHUNK_SIZE = PersistentConfig(
+    "CHILD_CHUNK_SIZE",
+    "rag.child_chunk_size",
+    int(os.environ.get("CHILD_CHUNK_SIZE", "600")),
+)
+
+CHILD_CHUNK_OVERLAP = PersistentConfig(
+    "CHILD_CHUNK_OVERLAP",
+    "rag.child_chunk_overlap",
+    int(os.environ.get("CHILD_CHUNK_OVERLAP", "100")),
+)
+
 DEFAULT_RAG_TEMPLATE = """### Task:
 Respond to the user query using the provided context, incorporating inline citations in the format [id] **only when the <source> tag includes an explicit id attribute** (e.g., <source id="1">).
 

@@ -199,6 +199,58 @@ class TextCleaner:
         return text
 
 
+class HierarchicalChunker:
+    """
+    Creates hierarchical parent-child chunks for better retrieval.
+    Child chunks are small and precise for retrieval.
+    Parent chunks are large and provide full context for generation.
+    """
+
+    @staticmethod
+    def create_hierarchical_chunks(
+        docs: list[Document],
+        parent_splitter,
+        child_splitter,
+    ) -> list[Document]:
+        """
+        Split documents into parent chunks, then split each parent into child chunks.
+        Each child maintains a reference to its parent content.
+        """
+        hierarchical_docs = []
+
+        for doc in docs:
+            # Step 1: Create parent chunks (large, for context)
+            parent_chunks = parent_splitter.split_documents([doc])
+
+            # Step 2: For each parent, create child chunks (small, for retrieval)
+            for parent_idx, parent_chunk in enumerate(parent_chunks):
+                parent_id = f"{doc.metadata.get('file_id', 'unknown')}_{parent_idx}"
+                parent_content = parent_chunk.page_content
+
+                # Split parent into children
+                child_chunks = child_splitter.split_text(parent_content)
+
+                # Create child documents with parent reference
+                for child_idx, child_content in enumerate(child_chunks):
+                    child_doc = Document(
+                        page_content=child_content,
+                        metadata={
+                            **doc.metadata,
+                            **parent_chunk.metadata,
+                            "parent_id": parent_id,
+                            "parent_content": parent_content,  # Store full parent for context
+                            "child_index": child_idx,
+                            "is_hierarchical": True,
+                        },
+                    )
+                    hierarchical_docs.append(child_doc)
+
+        log.info(
+            f"Created {len(hierarchical_docs)} child chunks from {len(docs)} documents"
+        )
+        return hierarchical_docs
+
+
 def get_ef(
     engine: str,
     embedding_model: str,
@@ -1362,7 +1414,30 @@ def save_docs_to_vector_db(
         doc.page_content = TextCleaner.clean_text(doc.page_content)
 
     if split:
-        if request.app.state.config.TEXT_SPLITTER in ["", "character"]:
+        # Check if hierarchical chunking is enabled
+        if request.app.state.config.ENABLE_HIERARCHICAL_CHUNKING:
+            log.info("Using hierarchical chunking (parent-child chunks)")
+
+            # Create parent splitter (large chunks for context)
+            parent_splitter = RecursiveCharacterTextSplitter(
+                separators=["\n\n", "\n", ".", "!", "?", ",", " ", ""],
+                chunk_size=request.app.state.config.PARENT_CHUNK_SIZE,
+                chunk_overlap=request.app.state.config.PARENT_CHUNK_OVERLAP,
+                add_start_index=True,
+            )
+
+            # Create child splitter (small chunks for retrieval)
+            child_splitter = RecursiveCharacterTextSplitter(
+                separators=["\n\n", "\n", ".", "!", "?", ",", " ", ""],
+                chunk_size=request.app.state.config.CHILD_CHUNK_SIZE,
+                chunk_overlap=request.app.state.config.CHILD_CHUNK_OVERLAP,
+            )
+
+            # Create hierarchical chunks
+            docs = HierarchicalChunker.create_hierarchical_chunks(
+                docs, parent_splitter, child_splitter
+            )
+        elif request.app.state.config.TEXT_SPLITTER in ["", "character"]:
             text_splitter = RecursiveCharacterTextSplitter(
                 separators=["\n\n", "\n", ".", "!", "?", ",", " ", ""],
                 chunk_size=request.app.state.config.CHUNK_SIZE,
