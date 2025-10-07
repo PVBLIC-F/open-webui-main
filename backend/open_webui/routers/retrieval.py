@@ -217,12 +217,39 @@ class TextCleaner:
         return text.strip() if isinstance(text, str) else ""
 
     @staticmethod
+    def clean_markdown_artifacts(text: str) -> str:
+        """Clean markdown formatting artifacts while preserving content"""
+        if not text:
+            return ""
+        
+        # Convert HTML tags to proper formatting
+        text = text.replace("<br>", "\n")
+        text = text.replace("<br/>", "\n")
+        text = text.replace("<br />", "\n")
+        
+        # Remove markdown image syntax but keep alt text
+        text = re.sub(r'!\[([^\]]*)\]\([^\)]+\)', r'\1', text)
+        
+        # Clean markdown table separators
+        text = re.sub(r'\|[\s\-:]+\|', '', text)  # Remove |--:|:--|:--:|
+        text = re.sub(r'^\|+$', '', text, flags=re.MULTILINE)  # Remove standalone ||
+        
+        # Clean up resulting extra whitespace
+        text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)  # Max 2 consecutive newlines
+        
+        return text
+
+    @staticmethod
     def clean_for_vector_db(text) -> str:
         """Extra cleaning for vector database storage - removes problematic characters"""
         if not text:
             return ""
 
         text = TextCleaner.clean_text(text)
+        
+        # Clean markdown artifacts
+        text = TextCleaner.clean_markdown_artifacts(text)
+        
         # Remove zero-width characters and other problematic Unicode
         text = re.sub(r"[\x00-\x1F\x7F-\x9F\u200B-\u200D\uFEFF]", "", text)
         text = re.sub(r"\s+", " ", text).strip()
