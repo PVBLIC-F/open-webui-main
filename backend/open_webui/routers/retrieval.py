@@ -128,6 +128,37 @@ class TextCleaner:
     """Centralized text cleaning utilities for improving vector database quality"""
 
     @staticmethod
+    def _extract_latex(text: str) -> tuple[str, dict]:
+        """Extract LaTeX expressions to protect them during cleaning"""
+        latex_map = {}
+        counter = 0
+        
+        # Patterns for LaTeX: $...$ or $$...$$ or \[...\] or \(...\)
+        patterns = [
+            (r'\$\$(.+?)\$\$', '$$LATEX_{}$$'),  # Display math
+            (r'\$(.+?)\$', '$LATEX_{}$'),         # Inline math
+            (r'\\\[(.+?)\\\]', '\\[LATEX_{}\\]'), # Display math
+            (r'\\\((.+?)\\\)', '\\(LATEX_{}\\)'), # Inline math
+        ]
+        
+        for pattern, placeholder_template in patterns:
+            matches = re.finditer(pattern, text, re.DOTALL)
+            for match in matches:
+                placeholder = placeholder_template.format(counter)
+                latex_map[placeholder] = match.group(0)
+                text = text.replace(match.group(0), placeholder, 1)
+                counter += 1
+        
+        return text, latex_map
+
+    @staticmethod
+    def _restore_latex(text: str, latex_map: dict) -> str:
+        """Restore LaTeX expressions after cleaning"""
+        for placeholder, original in latex_map.items():
+            text = text.replace(placeholder, original)
+        return text
+
+    @staticmethod
     def clean_text(text) -> str:
         """Clean text by properly handling escape sequences and special characters"""
         if not text:
@@ -147,6 +178,9 @@ class TextCleaner:
                 text = text[1:-1]
 
         if isinstance(text, str):
+            # Protect LaTeX expressions before cleaning
+            text, latex_map = TextCleaner._extract_latex(text)
+            
             try:
                 # Handle HTML entities and URL encoding
                 text = unescape(text)
@@ -159,14 +193,16 @@ class TextCleaner:
             except:
                 pass
 
-            # Handle escape sequences
+            # Handle escape sequences (but not in LaTeX)
             text = text.replace("\\n\\n", "\n\n")
             text = text.replace("\\n", "\n")
             text = text.replace("\\t", "\t")
             text = text.replace("\\r", "")
             text = text.replace('\\"', '"')
             text = text.replace("\\'", "'")
-            text = text.replace("\\\\", "\\")
+            
+            # Restore LaTeX before normalizing double backslashes
+            text = TextCleaner._restore_latex(text, latex_map)
 
             # Normalize whitespace
             try:
