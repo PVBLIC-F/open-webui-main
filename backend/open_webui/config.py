@@ -2626,7 +2626,7 @@ CHUNK_OVERLAP = PersistentConfig(
 ENABLE_HIERARCHICAL_CHUNKING = PersistentConfig(
     "ENABLE_HIERARCHICAL_CHUNKING",
     "rag.enable_hierarchical_chunking",
-    os.environ.get("ENABLE_HIERARCHICAL_CHUNKING", "True").lower() == "true",
+    os.environ.get("ENABLE_HIERARCHICAL_CHUNKING", "true").lower() == "true",
 )
 
 PARENT_CHUNK_SIZE = PersistentConfig(
