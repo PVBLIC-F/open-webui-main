@@ -218,44 +218,70 @@ class TextCleaner:
 
     @staticmethod
     def clean_markdown_artifacts(text: str) -> str:
-        """Clean markdown formatting artifacts while preserving content"""
+        """
+        Aggressively clean markdown formatting artifacts while preserving content.
+        Handles output from OCR engines that produce markdown.
+        """
         if not text:
             return ""
         
-        # Convert HTML tags to proper formatting
+        # 1. Convert HTML tags to proper formatting
         text = text.replace("<br>", "\n")
         text = text.replace("<br/>", "\n")
         text = text.replace("<br />", "\n")
         
-        # Remove markdown image syntax but keep alt text
-        text = re.sub(r'!\[([^\]]*)\]\([^\)]+\)', r'\1', text)
+        # 2. Remove ALL markdown image references (they're not useful in vector DB)
+        # Pattern: ![anything](anything) or ![anything]
+        text = re.sub(r'!\[[^\]]*\]\([^\)]*\)', '', text)  # ![alt](url)
+        text = re.sub(r'!\[[^\]]*\]', '', text)  # ![alt]
         
-        # Clean markdown table separators
-        text = re.sub(r'\|[\s\-:]+\|', '', text)  # Remove |--:|:--|:--:|
-        text = re.sub(r'^\|+$', '', text, flags=re.MULTILINE)  # Remove standalone ||
+        # 3. Remove standalone image filenames (common from OCR)
+        # Pattern: word.jpg, word.jpeg, word.png at start or with hyphens
+        text = re.sub(r'\b[\w\-]+\.(jpe?g|png|gif|webp|tiff?|bmp)\b\s*-?\s*', '', text, flags=re.IGNORECASE)
         
-        # Clean up resulting extra whitespace
-        text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)  # Max 2 consecutive newlines
+        # 4. Aggressively clean ALL table-related markdown
+        # Remove table alignment rows: |:--|:--:|--:|
+        text = re.sub(r'\|[\s\-:]+\|+', '', text)
+        # Remove standalone pipes at line start/end
+        text = re.sub(r'^\s*\|+\s*$', '', text, flags=re.MULTILINE)
+        # Remove orphaned pipes with just # or other symbols
+        text = re.sub(r'\|\s*[#\-:]+\s*\|?', '', text)
+        # Clean leftover single pipes
+        text = re.sub(r'(?:^|\s)\|(?:\s|$)', ' ', text)
         
-        return text
+        # 5. Clean markdown headers that are just symbols
+        text = re.sub(r'^#+\s*$', '', text, flags=re.MULTILINE)
+        
+        # 6. Remove empty markdown list items
+        text = re.sub(r'^\s*[-*+]\s*$', '', text, flags=re.MULTILINE)
+        
+        # 7. Clean up excessive whitespace and normalize
+        text = re.sub(r' {2,}', ' ', text)  # Multiple spaces to single
+        text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)  # Max 2 newlines
+        text = re.sub(r'^\s+|\s+$', '', text, flags=re.MULTILINE)  # Trim lines
+        
+        return text.strip()
 
     @staticmethod
     def clean_for_vector_db(text) -> str:
-        """Extra cleaning for vector database storage - removes problematic characters"""
+        """
+        Final cleaning for vector database storage.
+        Note: This is called AFTER chunking for final polishing only.
+        Main cleaning happens before chunking.
+        """
         if not text:
             return ""
-
-        text = TextCleaner.clean_text(text)
-        
-        # Clean markdown artifacts
-        text = TextCleaner.clean_markdown_artifacts(text)
         
         # Remove zero-width characters and other problematic Unicode
         text = re.sub(r"[\x00-\x1F\x7F-\x9F\u200B-\u200D\uFEFF]", "", text)
+        
+        # Final whitespace normalization (aggressive single-space)
         text = re.sub(r"\s+", " ", text).strip()
+        
+        # Ensure valid UTF-8
         text = text.encode("utf-8", "ignore").decode("utf-8")
 
-        # Prevent excessively long chunks
+        # Prevent excessively long chunks (safety check)
         max_length = 10000
         if len(text) > max_length:
             text = text[:max_length] + "..."
@@ -1606,6 +1632,8 @@ def save_docs_to_vector_db(
     log.debug("Cleaning document text content")
     for doc in docs:
         doc.page_content = TextCleaner.clean_text(doc.page_content)
+        # Clean markdown artifacts early (before chunking)
+        doc.page_content = TextCleaner.clean_markdown_artifacts(doc.page_content)
 
     # Apply semantic chunking first if enabled (creates semantically coherent chunks)
     if split and request.app.state.config.ENABLE_SEMANTIC_CHUNKING:
