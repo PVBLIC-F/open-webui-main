@@ -2653,6 +2653,31 @@ CHILD_CHUNK_OVERLAP = PersistentConfig(
     int(os.environ.get("CHILD_CHUNK_OVERLAP", "100")),
 )
 
+# Semantic chunking configuration
+ENABLE_SEMANTIC_CHUNKING = PersistentConfig(
+    "ENABLE_SEMANTIC_CHUNKING",
+    "rag.enable_semantic_chunking",
+    os.environ.get("ENABLE_SEMANTIC_CHUNKING", "False").lower() == "true",
+)
+
+SEMANTIC_SIMILARITY_THRESHOLD = PersistentConfig(
+    "SEMANTIC_SIMILARITY_THRESHOLD",
+    "rag.semantic_similarity_threshold",
+    float(os.environ.get("SEMANTIC_SIMILARITY_THRESHOLD", "0.75")),
+)
+
+SEMANTIC_MIN_CHUNK_SIZE = PersistentConfig(
+    "SEMANTIC_MIN_CHUNK_SIZE",
+    "rag.semantic_min_chunk_size",
+    int(os.environ.get("SEMANTIC_MIN_CHUNK_SIZE", "300")),
+)
+
+SEMANTIC_MAX_CHUNK_SIZE = PersistentConfig(
+    "SEMANTIC_MAX_CHUNK_SIZE",
+    "rag.semantic_max_chunk_size",
+    int(os.environ.get("SEMANTIC_MAX_CHUNK_SIZE", "2000")),
+)
+
 DEFAULT_RAG_TEMPLATE = """### Task:
 Respond to the user query using the provided context, incorporating inline citations in the format [id] **only when the <source> tag includes an explicit id attribute** (e.g., <source id="1">).
 

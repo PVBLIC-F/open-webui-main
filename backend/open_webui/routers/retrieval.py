@@ -8,6 +8,7 @@ import re
 import unicodedata
 from html import unescape
 from urllib.parse import unquote
+import numpy as np
 
 import re
 import uuid
@@ -249,6 +250,136 @@ class HierarchicalChunker:
             f"Created {len(hierarchical_docs)} child chunks from {len(docs)} documents"
         )
         return hierarchical_docs
+
+
+class SemanticTextSplitter:
+    """
+    Split text based on semantic similarity using embeddings.
+    Detects topic boundaries by measuring similarity between text segments.
+    """
+
+    @staticmethod
+    def split_into_sentences(text: str) -> list[str]:
+        """Split text into sentences using regex for better boundary detection"""
+        # Pattern for sentence boundaries (periods, exclamation, question marks)
+        # Handles common abbreviations and edge cases
+        sentence_pattern = r"(?<!\w\.\w.)(?<![A-Z][a-z]\.)(?<=\.|\?|!)\s"
+        sentences = re.split(sentence_pattern, text)
+        # Clean and filter empty sentences
+        sentences = [s.strip() for s in sentences if s.strip()]
+        return sentences
+
+    @staticmethod
+    def cosine_similarity(vec1: np.ndarray, vec2: np.ndarray) -> float:
+        """Calculate cosine similarity between two vectors"""
+        if len(vec1) == 0 or len(vec2) == 0:
+            return 0.0
+        dot_product = np.dot(vec1, vec2)
+        norm_a = np.linalg.norm(vec1)
+        norm_b = np.linalg.norm(vec2)
+        if norm_a == 0 or norm_b == 0:
+            return 0.0
+        return float(dot_product / (norm_a * norm_b))
+
+    @staticmethod
+    def split_text_semantically(
+        text: str,
+        embedding_function,
+        similarity_threshold: float = 0.75,
+        min_chunk_size: int = 300,
+        max_chunk_size: int = 2000,
+    ) -> list[str]:
+        """
+        Split text by semantic similarity.
+
+        Args:
+            text: Text to split
+            embedding_function: Function that generates embeddings for text
+            similarity_threshold: Similarity below this triggers a new chunk (0-1)
+            min_chunk_size: Minimum characters per chunk
+            max_chunk_size: Maximum characters per chunk
+
+        Returns:
+            List of semantically coherent text chunks
+        """
+        sentences = SemanticTextSplitter.split_into_sentences(text)
+
+        if len(sentences) <= 1:
+            return [text]
+
+        try:
+            # Generate embeddings for each sentence
+            embeddings = []
+            for sentence in sentences:
+                if len(sentence.strip()) > 10:  # Skip very short sentences
+                    try:
+                        emb = embedding_function(sentence)
+                        if isinstance(emb, list):
+                            emb = np.array(emb)
+                        embeddings.append(emb)
+                    except Exception as e:
+                        log.debug(f"Error generating embedding for sentence: {e}")
+                        embeddings.append(None)
+                else:
+                    embeddings.append(None)
+
+            # Build chunks based on semantic similarity
+            chunks = []
+            current_chunk = [sentences[0]]
+            current_length = len(sentences[0])
+
+            for i in range(1, len(sentences)):
+                if embeddings[i - 1] is None or embeddings[i] is None:
+                    # No embedding, use size-based chunking
+                    if current_length + len(sentences[i]) <= max_chunk_size:
+                        current_chunk.append(sentences[i])
+                        current_length += len(sentences[i])
+                    else:
+                        if current_length >= min_chunk_size:
+                            chunks.append(" ".join(current_chunk))
+                            current_chunk = [sentences[i]]
+                            current_length = len(sentences[i])
+                        else:
+                            current_chunk.append(sentences[i])
+                            current_length += len(sentences[i])
+                    continue
+
+                # Calculate semantic similarity
+                similarity = SemanticTextSplitter.cosine_similarity(
+                    embeddings[i - 1], embeddings[i]
+                )
+
+                # Check if we should start a new chunk
+                topic_boundary = similarity < similarity_threshold
+                size_exceeded = current_length + len(sentences[i]) > max_chunk_size
+                meets_min_size = current_length >= min_chunk_size
+
+                if (topic_boundary and meets_min_size) or size_exceeded:
+                    # Start new chunk
+                    chunks.append(" ".join(current_chunk))
+                    current_chunk = [sentences[i]]
+                    current_length = len(sentences[i])
+                else:
+                    # Continue current chunk
+                    current_chunk.append(sentences[i])
+                    current_length += len(sentences[i])
+
+            # Add the last chunk
+            if current_chunk:
+                chunks.append(" ".join(current_chunk))
+
+            log.debug(
+                f"Semantic splitting: {len(sentences)} sentences → {len(chunks)} chunks"
+            )
+            return chunks
+
+        except Exception as e:
+            log.error(f"Error in semantic splitting: {e}")
+            # Fallback to simple character-based splitting
+            return [
+                text[i : i + max_chunk_size]
+                for i in range(0, len(text), max_chunk_size)
+            ]
 
 
 def get_ef(
@@ -1413,8 +1544,70 @@ def save_docs_to_vector_db(
     for doc in docs:
         doc.page_content = TextCleaner.clean_text(doc.page_content)
 
+    # Apply semantic chunking first if enabled (creates semantically coherent chunks)
+    if split and request.app.state.config.ENABLE_SEMANTIC_CHUNKING:
+        log.info("Applying semantic chunking to detect topic boundaries")
+
+        # Get embedding function for semantic similarity
+        embedding_function = get_embedding_function(
+            request.app.state.config.RAG_EMBEDDING_ENGINE,
+            request.app.state.config.RAG_EMBEDDING_MODEL,
+            request.app.state.ef,
+            (
+                request.app.state.config.RAG_OPENAI_API_BASE_URL
+                if request.app.state.config.RAG_EMBEDDING_ENGINE == "openai"
+                else (
+                    request.app.state.config.RAG_OLLAMA_BASE_URL
+                    if request.app.state.config.RAG_EMBEDDING_ENGINE == "ollama"
+                    else request.app.state.config.RAG_AZURE_OPENAI_BASE_URL
+                )
+            ),
+            (
+                request.app.state.config.RAG_OPENAI_API_KEY
+                if request.app.state.config.RAG_EMBEDDING_ENGINE == "openai"
+                else (
+                    request.app.state.config.RAG_OLLAMA_API_KEY
+                    if request.app.state.config.RAG_EMBEDDING_ENGINE == "ollama"
+                    else request.app.state.config.RAG_AZURE_OPENAI_API_KEY
+                )
+            ),
+            request.app.state.config.RAG_EMBEDDING_BATCH_SIZE,
+        )
+
+        # Apply semantic splitting to each document
+        semantic_docs = []
+        for doc in docs:
+            try:
+                semantic_chunks = SemanticTextSplitter.split_text_semantically(
+                    doc.page_content,
+                    embedding_function,
+                    similarity_threshold=request.app.state.config.SEMANTIC_SIMILARITY_THRESHOLD,
+                    min_chunk_size=request.app.state.config.SEMANTIC_MIN_CHUNK_SIZE,
+                    max_chunk_size=request.app.state.config.SEMANTIC_MAX_CHUNK_SIZE,
+                )
+
+                # Create Document objects for each semantic chunk
+                for idx, chunk_text in enumerate(semantic_chunks):
+                    semantic_doc = Document(
+                        page_content=chunk_text,
+                        metadata={
+                            **doc.metadata,
+                            "semantic_chunk_index": idx,
+                            "is_semantic": True,
+                        },
+                    )
+                    semantic_docs.append(semantic_doc)
+
+            except Exception as e:
+                log.error(f"Error in semantic chunking: {e}")
+                # Fallback to original document
+                semantic_docs.append(doc)
+
+        docs = semantic_docs
+        log.info(f"Semantic chunking created {len(docs)} semantically coherent chunks")
+
+    # Apply secondary chunking based on configuration
     if split:
-        # Check if hierarchical chunking is enabled
         if request.app.state.config.ENABLE_HIERARCHICAL_CHUNKING:
             log.info("Using hierarchical chunking (parent-child chunks)")
 
