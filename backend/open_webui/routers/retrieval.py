@@ -220,35 +220,39 @@ class TextCleaner:
 
     @staticmethod
     def clean_malformed_latex(text: str) -> str:
-        """Clean or remove malformed LaTeX expressions from OCR output"""
+        """
+        Remove or clean LaTeX expressions from OCR output.
+        For vector search, plain text is more useful than LaTeX math notation.
+        """
         if not text:
             return ""
 
         def process_latex(match):
+            full_match = match.group(0)
             latex_content = match.group(1)
 
-            # Check if LaTeX is malformed (excessive backslashes, weird spacing)
-            is_malformed = (
-                latex_content.count("\\\\") > 2  # Too many backslashes
-                or re.search(r"\\\$\s+\d+\s+\d+", latex_content)  # \$ 8 0 0
-                or re.search(r"\\\w+\{\\\$", latex_content)  # \mathbf{\$
-                or latex_content.count("\\")
-                > len(latex_content) / 3  # > 33% backslashes
-            )
+            # Check if LaTeX contains backslashed commands or special chars
+            has_commands = bool(re.search(r"\\[a-zA-Z]+", latex_content))
+            has_escaped_chars = bool(re.search(r"\\\$|\\\{|\\\}", latex_content))
 
-            if is_malformed:
-                # Extract just alphanumeric and convert to plain text
-                cleaned = re.sub(
-                    r"\\+[a-zA-Z]+\{", "", latex_content
-                )  # Remove \mathbf{
-                cleaned = re.sub(r"\}+", "", cleaned)  # Remove closing braces
-                cleaned = re.sub(r"\\+\$", "$", cleaned)  # \$ → $
-                cleaned = re.sub(r"\\+", "", cleaned)  # Remove remaining backslashes
-                cleaned = re.sub(r"\s+", " ", cleaned).strip()  # Normalize spaces
+            # If it has LaTeX commands or escaped chars, extract plain text
+            if has_commands or has_escaped_chars:
+                # Remove LaTeX commands: \mathbf{, \text{, etc.
+                cleaned = re.sub(r"\\[a-zA-Z]+\*?\{?", "", latex_content)
+                # Remove braces
+                cleaned = re.sub(r"[{}]", "", cleaned)
+                # Convert \$ to $
+                cleaned = re.sub(r"\\\$", "$", cleaned)
+                # Remove remaining backslashes
+                cleaned = re.sub(r"\\+", "", cleaned)
+                # Normalize spaces
+                cleaned = re.sub(r"\s+", " ", cleaned).strip()
+
+                # Return cleaned text without $ wrappers
                 return cleaned if cleaned else ""
 
-            # Keep well-formed LaTeX
-            return match.group(0)
+            # Simple math expression without commands - keep it
+            return full_match
 
         # Clean inline math $...$
         text = re.sub(r"\$([^\$]+?)\$", process_latex, text)
