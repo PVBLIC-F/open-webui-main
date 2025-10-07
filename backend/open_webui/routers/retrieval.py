@@ -1960,6 +1960,25 @@ def save_docs_to_vector_db(
         )
         log.info(f"embeddings generated {len(embeddings)} for {len(texts)} items")
 
+        # Handle case where embedding generation partially failed
+        if len(embeddings) != len(texts):
+            log.error(
+                f"Embedding count mismatch: {len(embeddings)} embeddings for {len(texts)} texts"
+            )
+            if len(embeddings) < len(texts):
+                # Only process texts that have embeddings
+                log.warning(
+                    f"Dropping {len(texts) - len(embeddings)} texts without embeddings"
+                )
+                texts = texts[: len(embeddings)]
+                metadatas = metadatas[: len(embeddings)]
+            elif len(embeddings) > len(texts):
+                # Truncate embeddings to match texts (shouldn't happen, but be safe)
+                log.warning(
+                    f"Truncating {len(embeddings) - len(texts)} extra embeddings"
+                )
+                embeddings = embeddings[: len(texts)]
+
         items = [
             {
                 "id": str(uuid.uuid4()),
