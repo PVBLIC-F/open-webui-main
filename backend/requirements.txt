@@ -28,6 +28,7 @@ peewee-migrate==1.12.2
 
 pycrdt==0.12.25
 redis
+rq
 
 APScheduler==3.10.4
 RestrictedPython==8.0
