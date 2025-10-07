@@ -721,7 +721,12 @@ async def delete_file_by_id(id: str, user=Depends(get_verified_user)):
         if result:
             try:
                 Storage.delete_file(file.path)
-                VECTOR_DB_CLIENT.delete(collection_name=f"file-{id}")
+                
+                # Delete the file's vector collection if it exists
+                file_collection = f"file-{id}"
+                if VECTOR_DB_CLIENT.has_collection(collection_name=file_collection):
+                    VECTOR_DB_CLIENT.delete_collection(collection_name=file_collection)
+                    log.info(f"Deleted vector collection: {file_collection}")
             except Exception as e:
                 log.exception(e)
                 log.error("Error deleting files")
