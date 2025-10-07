@@ -219,6 +219,46 @@ class TextCleaner:
         return text.strip() if isinstance(text, str) else ""
 
     @staticmethod
+    def clean_malformed_latex(text: str) -> str:
+        """Clean or remove malformed LaTeX expressions from OCR output"""
+        if not text:
+            return ""
+
+        def process_latex(match):
+            latex_content = match.group(1)
+
+            # Check if LaTeX is malformed (excessive backslashes, weird spacing)
+            is_malformed = (
+                latex_content.count("\\\\") > 2  # Too many backslashes
+                or re.search(r"\\\$\s+\d+\s+\d+", latex_content)  # \$ 8 0 0
+                or re.search(r"\\\w+\{\\\$", latex_content)  # \mathbf{\$
+                or latex_content.count("\\")
+                > len(latex_content) / 3  # > 33% backslashes
+            )
+
+            if is_malformed:
+                # Extract just alphanumeric and convert to plain text
+                cleaned = re.sub(
+                    r"\\+[a-zA-Z]+\{", "", latex_content
+                )  # Remove \mathbf{
+                cleaned = re.sub(r"\}+", "", cleaned)  # Remove closing braces
+                cleaned = re.sub(r"\\+\$", "$", cleaned)  # \$ → $
+                cleaned = re.sub(r"\\+", "", cleaned)  # Remove remaining backslashes
+                cleaned = re.sub(r"\s+", " ", cleaned).strip()  # Normalize spaces
+                return cleaned if cleaned else ""
+
+            # Keep well-formed LaTeX
+            return match.group(0)
+
+        # Clean inline math $...$
+        text = re.sub(r"\$([^\$]+?)\$", process_latex, text)
+
+        # Remove display math $$...$$  entirely (usually malformed from OCR)
+        text = re.sub(r"\$\$[^\$]+?\$\$", "", text)
+
+        return text
+
+    @staticmethod
     def markdown_to_plain_text(md_text: str) -> str:
         """
         Convert markdown to clean plain text using proper markdown parser.
@@ -270,6 +310,9 @@ class TextCleaner:
             stripper = HTMLStripper()
             stripper.feed(html)
             text = stripper.get_text()
+
+            # Clean malformed LaTeX that survived markdown conversion
+            text = TextCleaner.clean_malformed_latex(text)
 
             # Final cleanup
             text = re.sub(r"\n\s*\n\s*\n+", "\n\n", text)  # Max 2 newlines
