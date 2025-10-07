@@ -1128,7 +1128,16 @@
 																: 'outline-hidden focus:outline-hidden group-hover:visible invisible transition'}"
 															type="button"
 															aria-label={$i18n.t('Remove file')}
-															on:click={() => {
+															on:click={async () => {
+																// Delete file and vectors from server
+																if (file.id && !$temporaryChatEnabled) {
+																	try {
+																		await deleteFileById(localStorage.token, file.id);
+																	} catch (e) {
+																		console.error('Error deleting file:', e);
+																	}
+																}
+																// Remove from UI
 																files.splice(fileIdx, 1);
 																files = files;
 															}}
@@ -1159,6 +1168,14 @@
 													small={true}
 													modal={['file', 'collection'].includes(file?.type)}
 													on:dismiss={async () => {
+														// Delete file and vectors from server
+														if (file.id && !$temporaryChatEnabled) {
+															try {
+																await deleteFileById(localStorage.token, file.id);
+															} catch (e) {
+																console.error('Error deleting file:', e);
+															}
+														}
 														// Remove from UI state
 														files.splice(fileIdx, 1);
 														files = files;
