@@ -6,9 +6,11 @@ import shutil
 import asyncio
 import re
 import unicodedata
-from html import unescape
+from html import unescape, parser
 from urllib.parse import unquote
 import numpy as np
+from markdown import Markdown
+from io import StringIO
 
 import re
 import uuid
@@ -132,15 +134,15 @@ class TextCleaner:
         """Extract LaTeX expressions to protect them during cleaning"""
         latex_map = {}
         counter = 0
-        
+
         # Patterns for LaTeX: $...$ or $$...$$ or \[...\] or \(...\)
         patterns = [
-            (r'\$\$(.+?)\$\$', '$$LATEX_{}$$'),  # Display math
-            (r'\$(.+?)\$', '$LATEX_{}$'),         # Inline math
-            (r'\\\[(.+?)\\\]', '\\[LATEX_{}\\]'), # Display math
-            (r'\\\((.+?)\\\)', '\\(LATEX_{}\\)'), # Inline math
+            (r"\$\$(.+?)\$\$", "$$LATEX_{}$$"),  # Display math
+            (r"\$(.+?)\$", "$LATEX_{}$"),  # Inline math
+            (r"\\\[(.+?)\\\]", "\\[LATEX_{}\\]"),  # Display math
+            (r"\\\((.+?)\\\)", "\\(LATEX_{}\\)"),  # Inline math
         ]
-        
+
         for pattern, placeholder_template in patterns:
             matches = re.finditer(pattern, text, re.DOTALL)
             for match in matches:
@@ -148,7 +150,7 @@ class TextCleaner:
                 latex_map[placeholder] = match.group(0)
                 text = text.replace(match.group(0), placeholder, 1)
                 counter += 1
-        
+
         return text, latex_map
 
     @staticmethod
@@ -180,7 +182,7 @@ class TextCleaner:
         if isinstance(text, str):
             # Protect LaTeX expressions before cleaning
             text, latex_map = TextCleaner._extract_latex(text)
-            
+
             try:
                 # Handle HTML entities and URL encoding
                 text = unescape(text)
@@ -200,7 +202,7 @@ class TextCleaner:
             text = text.replace("\\r", "")
             text = text.replace('\\"', '"')
             text = text.replace("\\'", "'")
-            
+
             # Restore LaTeX before normalizing double backslashes
             text = TextCleaner._restore_latex(text, latex_map)
 
@@ -217,50 +219,95 @@ class TextCleaner:
         return text.strip() if isinstance(text, str) else ""
 
     @staticmethod
+    def markdown_to_plain_text(md_text: str) -> str:
+        """
+        Convert markdown to clean plain text using proper markdown parser.
+        This is the robust solution for handling OCR markdown output.
+        """
+        if not md_text:
+            return ""
+
+        try:
+            # Create HTML stripper
+            class HTMLStripper(parser.HTMLParser):
+                def __init__(self):
+                    super().__init__()
+                    self.reset()
+                    self.strict = False
+                    self.convert_charrefs = True
+                    self.text = StringIO()
+
+                def handle_data(self, d):
+                    self.text.write(d)
+
+                def handle_starttag(self, tag, attrs):
+                    if tag in [
+                        "br",
+                        "p",
+                        "div",
+                        "h1",
+                        "h2",
+                        "h3",
+                        "h4",
+                        "h5",
+                        "h6",
+                        "li",
+                    ]:
+                        self.text.write("\n")
+
+                def handle_endtag(self, tag):
+                    if tag in ["p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "li"]:
+                        self.text.write("\n")
+
+                def get_text(self):
+                    return self.text.getvalue()
+
+            # Convert markdown to HTML
+            md = Markdown(extensions=["extra", "nl2br"])
+            html = md.convert(md_text)
+
+            # Strip HTML tags to get plain text
+            stripper = HTMLStripper()
+            stripper.feed(html)
+            text = stripper.get_text()
+
+            # Final cleanup
+            text = re.sub(r"\n\s*\n\s*\n+", "\n\n", text)  # Max 2 newlines
+            text = re.sub(r" {2,}", " ", text)  # Multiple spaces
+            text = text.strip()
+
+            return text
+
+        except Exception as e:
+            log.error(f"Error converting markdown to plain text: {e}")
+            # Fallback to basic cleaning
+            return TextCleaner._basic_markdown_clean(md_text)
+
+    @staticmethod
+    def _basic_markdown_clean(text: str) -> str:
+        """Fallback: Basic markdown cleaning if parser fails"""
+        # Remove images
+        text = re.sub(r"!\[[^\]]*\]\([^\)]*\)", "", text)
+        # Remove image filenames
+        text = re.sub(
+            r"\b[\w\-]+\.(jpe?g|png|gif|webp)\b\s*-?\s*", "", text, flags=re.IGNORECASE
+        )
+        # Remove table markers
+        text = re.sub(r"\|[\s\-:]+\|+", "", text)
+        text = re.sub(r"^\s*\|+\s*$", "", text, flags=re.MULTILINE)
+        # Remove headers
+        text = re.sub(r"^#+\s+", "", text, flags=re.MULTILINE)
+        # Clean whitespace
+        text = re.sub(r"\n\s*\n\s*\n+", "\n\n", text)
+        return text.strip()
+
+    @staticmethod
     def clean_markdown_artifacts(text: str) -> str:
         """
-        Aggressively clean markdown formatting artifacts while preserving content.
-        Handles output from OCR engines that produce markdown.
+        Clean markdown using proper parser for robust handling.
+        Converts markdown to plain text, preserving content but removing formatting.
         """
-        if not text:
-            return ""
-        
-        # 1. Convert HTML tags to proper formatting
-        text = text.replace("<br>", "\n")
-        text = text.replace("<br/>", "\n")
-        text = text.replace("<br />", "\n")
-        
-        # 2. Remove ALL markdown image references (they're not useful in vector DB)
-        # Pattern: ![anything](anything) or ![anything]
-        text = re.sub(r'!\[[^\]]*\]\([^\)]*\)', '', text)  # ![alt](url)
-        text = re.sub(r'!\[[^\]]*\]', '', text)  # ![alt]
-        
-        # 3. Remove standalone image filenames (common from OCR)
-        # Pattern: word.jpg, word.jpeg, word.png at start or with hyphens
-        text = re.sub(r'\b[\w\-]+\.(jpe?g|png|gif|webp|tiff?|bmp)\b\s*-?\s*', '', text, flags=re.IGNORECASE)
-        
-        # 4. Aggressively clean ALL table-related markdown
-        # Remove table alignment rows: |:--|:--:|--:|
-        text = re.sub(r'\|[\s\-:]+\|+', '', text)
-        # Remove standalone pipes at line start/end
-        text = re.sub(r'^\s*\|+\s*$', '', text, flags=re.MULTILINE)
-        # Remove orphaned pipes with just # or other symbols
-        text = re.sub(r'\|\s*[#\-:]+\s*\|?', '', text)
-        # Clean leftover single pipes
-        text = re.sub(r'(?:^|\s)\|(?:\s|$)', ' ', text)
-        
-        # 5. Clean markdown headers that are just symbols
-        text = re.sub(r'^#+\s*$', '', text, flags=re.MULTILINE)
-        
-        # 6. Remove empty markdown list items
-        text = re.sub(r'^\s*[-*+]\s*$', '', text, flags=re.MULTILINE)
-        
-        # 7. Clean up excessive whitespace and normalize
-        text = re.sub(r' {2,}', ' ', text)  # Multiple spaces to single
-        text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)  # Max 2 newlines
-        text = re.sub(r'^\s+|\s+$', '', text, flags=re.MULTILINE)  # Trim lines
-        
-        return text.strip()
+        return TextCleaner.markdown_to_plain_text(text)
 
     @staticmethod
     def clean_for_vector_db(text) -> str:
@@ -271,13 +318,13 @@ class TextCleaner:
         """
         if not text:
             return ""
-        
+
         # Remove zero-width characters and other problematic Unicode
         text = re.sub(r"[\x00-\x1F\x7F-\x9F\u200B-\u200D\uFEFF]", "", text)
-        
+
         # Final whitespace normalization (aggressive single-space)
         text = re.sub(r"\s+", " ", text).strip()
-        
+
         # Ensure valid UTF-8
         text = text.encode("utf-8", "ignore").decode("utf-8")
 
