@@ -260,6 +260,19 @@ class TextCleaner:
         # Remove display math $$...$$  entirely (usually malformed from OCR)
         text = re.sub(r"\$\$[^\$]+?\$\$", "", text)
 
+        # Clean up leftover LaTeX fragments
+        text = re.sub(r"\}+\$", "", text)  # Remove }$
+        text = re.sub(r"\$\{+", "", text)  # Remove ${
+        text = re.sub(r"^\$|\$$", "", text)  # Remove standalone $ at start/end
+
+        # Clean double backslash sequences (common in OCR output)
+        text = re.sub(r"\\\\\$", "$", text)  # \\$ → $
+        text = re.sub(r"\\\\%", "%", text)  # \\% → %
+        text = re.sub(r"\\\\", "", text)  # Remove remaining \\
+
+        # Clean subscript notation from OCR (CO2_2 → CO2)
+        text = re.sub(r"([A-Z]+\d)_\d+", r"\1", text)  # CO2_2 → CO2
+
         return text
 
     @staticmethod
