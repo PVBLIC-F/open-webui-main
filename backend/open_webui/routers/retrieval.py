@@ -1606,8 +1606,8 @@ def save_docs_to_vector_db(
         docs = semantic_docs
         log.info(f"Semantic chunking created {len(docs)} semantically coherent chunks")
 
-    # Apply secondary chunking based on configuration
-    if split:
+    # Apply secondary chunking based on configuration (only if semantic chunking is not enabled)
+    if split and not request.app.state.config.ENABLE_SEMANTIC_CHUNKING:
         if request.app.state.config.ENABLE_HIERARCHICAL_CHUNKING:
             log.info("Using hierarchical chunking (parent-child chunks)")
 
