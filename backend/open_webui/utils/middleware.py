@@ -1387,10 +1387,17 @@ async def process_chat_payload(request, form_data, user, metadata, model):
                     if source_id not in citation_idx_map:
                         citation_idx_map[source_id] = len(citation_idx_map) + 1
 
+                    # Use parent_content if hierarchical chunking is enabled
+                    # This gives the LLM full context while retrieval uses small precise chunks
+                    if document_metadata.get("is_hierarchical") and document_metadata.get("parent_content"):
+                        context_text = document_metadata["parent_content"]
+                    else:
+                        context_text = document_text
+
                     context_string += (
                         f'<source id="{citation_idx_map[source_id]}"'
                         + (f' name="{source_name}"' if source_name else "")
-                        + f">{document_text}</source>\n"
+                        + f">{context_text}</source>\n"
                     )
 
         context_string = context_string.strip()
