@@ -1513,6 +1513,12 @@ def save_docs_to_vector_db(
     for doc in docs:
         doc.page_content = TextCleaner.clean_for_vector_db(doc.page_content)
 
+        # Also clean parent_content if hierarchical chunking is enabled
+        if doc.metadata.get("is_hierarchical") and "parent_content" in doc.metadata:
+            doc.metadata["parent_content"] = TextCleaner.clean_for_vector_db(
+                doc.metadata["parent_content"]
+            )
+
     if len(docs) == 0:
         raise ValueError(ERROR_MESSAGES.EMPTY_CONTENT)
 
