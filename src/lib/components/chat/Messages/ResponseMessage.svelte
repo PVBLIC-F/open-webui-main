@@ -37,6 +37,16 @@
 		removeAllDetails
 	} from '$lib/utils';
 	import { WEBUI_BASE_URL } from '$lib/constants';
+	
+	// Detect if running as iOS PWA (standalone mode)
+	const isIOSPWA = () => {
+		const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !(window as any).MSStream;
+		const isStandalone = (window.navigator as any).standalone === true || 
+		                     window.matchMedia('(display-mode: standalone)').matches;
+		return isIOS && isStandalone;
+	};
+	
+	let showModelName = isIOSPWA();
 
 	import Name from './Name.svelte';
 	import ProfileImage from './ProfileImage.svelte';
@@ -588,14 +598,36 @@
 		</div>
 
 		<div class="flex-auto w-0 pl-1 relative">
-			<Name>
-				<Tooltip content={model?.name ?? message.model} placement="top-start">
-					<span id="response-message-model-name" class="line-clamp-1 text-black dark:text-white">
-						{model?.name ?? message.model}
-					</span>
-				</Tooltip>
+			{#if showModelName}
+				<!-- iOS PWA: Split model name at colon - Provider on top, Model underneath -->
+				{@const modelNameFull = model?.name ?? message.model}
+				{@const [provider, modelName] = modelNameFull.includes(':') 
+					? modelNameFull.split(':').map(s => s.trim()) 
+					: [modelNameFull, '']}
+				<div class="flex flex-col items-start mb-1">
+					<Tooltip content={modelNameFull} placement="top-start">
+						<div class="text-sm font-semibold text-black dark:text-white">
+							{provider}
+						</div>
+						{#if modelName}
+							<div class="text-xs text-gray-600 dark:text-gray-400">
+								{modelName}
+							</div>
+						{/if}
+					</Tooltip>
+				</div>
+			{:else}
+				<!-- Non-iOS: Original behavior with model name -->
+				<Name>
+					<Tooltip content={model?.name ?? message.model} placement="top-start">
+						<span id="response-message-model-name" class="line-clamp-1 text-black dark:text-white">
+							{model?.name ?? message.model}
+						</span>
+					</Tooltip>
+				</Name>
+			{/if}
 
-				{#if message.timestamp}
+					{#if message.timestamp}
 					<div
 						class="self-center text-xs font-medium first-letter:capitalize ml-0.5 translate-y-[1px] {($settings?.highContrastMode ??
 						false)
@@ -611,8 +643,9 @@
 							>
 						</Tooltip>
 					</div>
-				{/if}
-			</Name>
+					{/if}
+				</Name>
+			{/if}
 
 			<div>
 				<div class="chat-{message.role} w-full min-w-full markdown-prose">
