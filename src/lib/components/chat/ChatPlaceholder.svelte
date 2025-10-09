@@ -2,7 +2,7 @@
 	import { WEBUI_BASE_URL } from '$lib/constants';
 	import { marked } from 'marked';
 
-	import { config, user, models as _models, temporaryChatEnabled } from '$lib/stores';
+	import { config, user, models as _models, temporaryChatEnabled, mobile } from '$lib/stores';
 	import { onMount, getContext } from 'svelte';
 
 	import { blur, fade } from 'svelte/transition';
@@ -84,13 +84,32 @@
 			class=" mt-2 mb-4 text-3xl text-gray-800 dark:text-gray-100 text-left flex items-center gap-4 font-primary"
 		>
 			<div>
-				<div class=" capitalize line-clamp-1" in:fade={{ duration: 200 }}>
-					{#if models[selectedModelIdx]?.name}
-						{models[selectedModelIdx]?.name}
-					{:else}
-						{$i18n.t('Hello, {{name}}', { name: $user?.name })}
-					{/if}
-				</div>
+				{#if $mobile && models[selectedModelIdx]?.name}
+					<!-- Mobile: Split model name at colon -->
+					{@const modelNameFull = models[selectedModelIdx]?.name}
+					{@const modelParts = modelNameFull.includes(':') ? modelNameFull.split(':', 2) : [modelNameFull]}
+					{@const provider = modelParts[0]?.trim() || modelNameFull}
+					{@const modelName = modelParts[1]?.trim() || ''}
+					<div class="flex flex-col items-start" in:fade={{ duration: 200 }}>
+						<div class="text-2xl font-semibold text-gray-800 dark:text-gray-100">
+							{provider}
+						</div>
+						{#if modelName}
+							<div class="text-base text-gray-600 dark:text-gray-400">
+								{modelName}
+							</div>
+						{/if}
+					</div>
+				{:else}
+					<!-- Desktop: Original single-line display -->
+					<div class=" capitalize line-clamp-1" in:fade={{ duration: 200 }}>
+						{#if models[selectedModelIdx]?.name}
+							{models[selectedModelIdx]?.name}
+						{:else}
+							{$i18n.t('Hello, {{name}}', { name: $user?.name })}
+						{/if}
+					</div>
+				{/if}
 
 				<div in:fade={{ duration: 200, delay: 200 }}>
 					{#if models[selectedModelIdx]?.info?.meta?.description ?? null}
