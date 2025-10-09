@@ -17,7 +17,8 @@
 		temporaryChatEnabled,
 		selectedFolder,
 		chats,
-		currentChatPage
+		currentChatPage,
+		mobile
 	} from '$lib/stores';
 	import { sanitizeResponseContent, extractCurlyBraceWords } from '$lib/utils';
 	import { WEBUI_BASE_URL } from '$lib/constants';
@@ -140,7 +141,26 @@
 						class=" text-3xl @sm:text-3xl line-clamp-1 flex items-center"
 						in:fade={{ duration: 100 }}
 					>
-						{#if models[selectedModelIdx]?.name}
+						{#if $mobile && models[selectedModelIdx]?.name}
+							<!-- Mobile: Split model name at colon -->
+							{@const modelNameFull = models[selectedModelIdx]?.name}
+							{@const modelParts = modelNameFull.includes(':') ? modelNameFull.split(':', 2) : [modelNameFull]}
+							{@const provider = modelParts[0]?.trim() || modelNameFull}
+							{@const modelName = modelParts[1]?.trim() || ''}
+							<div class="flex flex-col items-start">
+								<Tooltip content={modelNameFull} placement="top">
+									<div class="text-2xl font-semibold text-gray-800 dark:text-gray-100">
+										{provider}
+									</div>
+									{#if modelName}
+										<div class="text-base text-gray-600 dark:text-gray-400">
+											{modelName}
+										</div>
+									{/if}
+								</Tooltip>
+							</div>
+						{:else if models[selectedModelIdx]?.name}
+							<!-- Desktop: Original single-line display -->
 							<Tooltip
 								content={models[selectedModelIdx]?.name}
 								placement="top"
