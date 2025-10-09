@@ -90,7 +90,7 @@
 					{@const modelParts = modelNameFull.includes(':') ? modelNameFull.split(':', 2) : [modelNameFull]}
 					{@const provider = modelParts[0]?.trim() || modelNameFull}
 					{@const modelName = modelParts[1]?.trim() || ''}
-					<div class="flex flex-col items-start" in:fade={{ duration: 200 }}>
+					<div class="flex flex-col items-start gap-0" in:fade={{ duration: 200 }}>
 						<div class="text-2xl font-semibold text-gray-800 dark:text-gray-100">
 							{provider}
 						</div>
