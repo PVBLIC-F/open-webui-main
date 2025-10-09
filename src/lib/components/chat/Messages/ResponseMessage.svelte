@@ -618,24 +618,17 @@
 		</div>
 
 		<div class="flex-auto w-0 pl-1 relative">
-			{#if true}
-				<!-- Mobile: Split model name at colon - Provider on top, Model underneath -->
-				{@const modelNameFull = model?.name ?? message.model}
-				{@const [provider, modelName] = modelNameFull.includes(':') 
-					? modelNameFull.split(':').map(s => s.trim()) 
-					: [modelNameFull, '']}
-				<div class="flex flex-col items-start mb-1">
-					<Tooltip content={modelNameFull} placement="top-start">
-						<div class="text-sm font-semibold text-black dark:text-white">
-							{provider}
-						</div>
-						{#if modelName}
-							<div class="text-xs text-gray-600 dark:text-gray-400">
-								{modelName}
-							</div>
-						{/if}
-					</Tooltip>
+			<!-- TEST: Showing new layout for everyone -->
+			<div class="flex flex-col items-start mb-1" style="background: yellow;">
+				<div class="text-sm font-semibold text-black dark:text-white">
+					TEST - NEW LAYOUT
 				</div>
+				<div class="text-xs text-gray-600 dark:text-gray-400">
+					{model?.name ?? message.model}
+				</div>
+			</div>
+			
+			{#if false}
 			{:else}
 				<!-- Desktop: Original behavior with model name -->
 				<Name>
