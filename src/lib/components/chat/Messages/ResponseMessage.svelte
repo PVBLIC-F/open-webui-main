@@ -618,7 +618,7 @@
 		</div>
 
 		<div class="flex-auto w-0 pl-1 relative">
-			{#if $mobile}
+			{#if true}
 				<!-- Mobile: Split model name at colon - Provider on top, Model underneath -->
 				{@const modelNameFull = model?.name ?? message.model}
 				{@const [provider, modelName] = modelNameFull.includes(':') 
