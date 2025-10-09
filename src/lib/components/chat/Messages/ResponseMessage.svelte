@@ -38,15 +38,14 @@
 	} from '$lib/utils';
 	import { WEBUI_BASE_URL } from '$lib/constants';
 	
-	// Detect if running as iOS PWA (standalone mode)
-	const isIOSPWA = () => {
-		const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !(window as any).MSStream;
-		const isStandalone = (window.navigator as any).standalone === true || 
-		                     window.matchMedia('(display-mode: standalone)').matches;
-		return isIOS && isStandalone;
-	};
+	// Detect if running on mobile device
+	let showModelName = false;
 	
-	let showModelName = isIOSPWA();
+	onMount(() => {
+		const userAgent = navigator.userAgent || navigator.vendor || (window as any).opera;
+		const isMobile = /android|iphone|ipad|ipod|windows phone/i.test(userAgent);
+		showModelName = isMobile;
+	});
 
 	import Name from './Name.svelte';
 	import ProfileImage from './ProfileImage.svelte';
