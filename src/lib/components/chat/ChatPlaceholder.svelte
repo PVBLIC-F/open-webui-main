@@ -81,7 +81,7 @@
 		{/if}
 
 		<div
-			class=" mt-2 mb-4 text-3xl text-gray-800 dark:text-gray-100 text-left flex items-center gap-4 font-primary"
+			class=" mt-2 mb-4 text-3xl text-gray-800 dark:text-gray-100 text-left flex {$mobile ? 'items-start' : 'items-center'} gap-4 font-primary"
 		>
 			<div>
 				{#if $mobile && models[selectedModelIdx]?.name}
