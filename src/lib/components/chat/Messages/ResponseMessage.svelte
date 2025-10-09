@@ -589,13 +589,13 @@
 		</div>
 
 		<div class="flex-auto w-0 pl-1 relative">
-			{#if true}
+			{#if $mobile}
 				<!-- Mobile: Split model name at colon - Provider on top, Model underneath -->
 				{@const modelNameFull = model?.name ?? message.model}
-				{@const [provider, modelName] = modelNameFull.includes(':') 
-					? modelNameFull.split(':').map(s => s.trim()) 
-					: [modelNameFull, '']}
-				<div class="flex flex-col items-start mb-1">
+				{@const modelParts = modelNameFull.includes(':') ? modelNameFull.split(':', 2) : [modelNameFull]}
+				{@const provider = modelParts[0]?.trim() || modelNameFull}
+				{@const modelName = modelParts[1]?.trim() || ''}
+				<div class="flex flex-col items-start">
 					<Tooltip content={modelNameFull} placement="top-start">
 						<div class="text-sm font-semibold text-black dark:text-white">
 							{provider}
