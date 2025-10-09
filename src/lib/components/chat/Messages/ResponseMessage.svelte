@@ -624,17 +624,15 @@
 				{@const modelParts = modelNameFull.includes(':') ? modelNameFull.split(':', 2) : [modelNameFull]}
 				{@const provider = modelParts[0]?.trim() || modelNameFull}
 				{@const modelName = modelParts[1]?.trim() || ''}
-				<div class="flex flex-col items-start">
-					<Tooltip content={modelNameFull} placement="top-start">
-						<div class="text-sm font-semibold text-black dark:text-white">
-							{provider}
+				<div class="flex flex-col items-start gap-0">
+					<div class="text-sm font-semibold text-black dark:text-white">
+						{provider}
+					</div>
+					{#if modelName}
+						<div class="text-xs text-gray-600 dark:text-gray-400">
+							{modelName}
 						</div>
-						{#if modelName}
-							<div class="text-xs text-gray-600 dark:text-gray-400">
-								{modelName}
-							</div>
-						{/if}
-					</Tooltip>
+					{/if}
 				</div>
 			{:else}
 				<!-- Desktop: Original behavior with model name -->
