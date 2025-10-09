@@ -70,11 +70,11 @@
 	$: models = selectedModels.map((id) => $_models.find((m) => m.id === id));
 </script>
 
-<div class="m-auto w-full max-w-6xl px-2 @2xl:px-20 translate-y-6 py-24 text-center">
+<div class="m-auto w-full max-w-6xl px-2 @2xl:px-20 translate-y-6 py-24 {$mobile ? 'text-left' : 'text-center'}">
 	{#if $temporaryChatEnabled}
 		<Tooltip
 			content={$i18n.t("This chat won't appear in history and your messages will not be saved.")}
-			className="w-full flex justify-center mb-0.5"
+			className="w-full flex {$mobile ? 'justify-start' : 'justify-center'} mb-0.5"
 			placement="top"
 		>
 			<div class="flex items-center gap-2 text-gray-500 text-base my-2 w-fit">
@@ -84,9 +84,9 @@
 	{/if}
 
 	<div
-		class="w-full text-3xl text-gray-800 dark:text-gray-100 text-center flex items-center gap-4 font-primary"
+		class="w-full text-3xl text-gray-800 dark:text-gray-100 {$mobile ? 'text-left' : 'text-center'} flex items-center gap-4 font-primary"
 	>
-		<div class="w-full flex flex-col justify-center items-center">
+		<div class="w-full flex flex-col {$mobile ? 'justify-start items-start' : 'justify-center items-center'}">
 			{#if $selectedFolder}
 				<FolderTitle
 					folder={$selectedFolder}
