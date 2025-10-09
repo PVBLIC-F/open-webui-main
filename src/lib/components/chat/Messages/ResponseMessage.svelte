@@ -618,17 +618,24 @@
 		</div>
 
 		<div class="flex-auto w-0 pl-1 relative">
-			<!-- TEST: Showing new layout for everyone -->
-			<div class="flex flex-col items-start mb-1" style="background: yellow;">
-				<div class="text-sm font-semibold text-black dark:text-white">
-					TEST - NEW LAYOUT
+			{#if $mobile}
+				<!-- Mobile: Split model name at colon - Provider on top, Model underneath -->
+				{@const modelNameFull = model?.name ?? message.model}
+				{@const modelParts = modelNameFull.includes(':') ? modelNameFull.split(':', 2) : [modelNameFull]}
+				{@const provider = modelParts[0]?.trim() || modelNameFull}
+				{@const modelName = modelParts[1]?.trim() || ''}
+				<div class="flex flex-col items-start">
+					<Tooltip content={modelNameFull} placement="top-start">
+						<div class="text-sm font-semibold text-black dark:text-white">
+							{provider}
+						</div>
+						{#if modelName}
+							<div class="text-xs text-gray-600 dark:text-gray-400">
+								{modelName}
+							</div>
+						{/if}
+					</Tooltip>
 				</div>
-				<div class="text-xs text-gray-600 dark:text-gray-400">
-					{model?.name ?? message.model}
-				</div>
-			</div>
-			
-			{#if false}
 			{:else}
 				<!-- Desktop: Original behavior with model name -->
 				<Name>
