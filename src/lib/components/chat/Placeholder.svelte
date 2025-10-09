@@ -138,7 +138,7 @@
 					</div>
 
 					<div
-						class=" text-3xl @sm:text-3xl line-clamp-1 flex items-center"
+						class=" text-3xl @sm:text-3xl line-clamp-1 flex {$mobile ? 'items-start' : 'items-center'}"
 						in:fade={{ duration: 100 }}
 					>
 						{#if $mobile && models[selectedModelIdx]?.name}
