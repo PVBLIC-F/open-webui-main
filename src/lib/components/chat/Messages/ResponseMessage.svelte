@@ -22,7 +22,8 @@
 		settings,
 		temporaryChatEnabled,
 		TTSWorker,
-		user
+		user,
+		mobile
 	} from '$lib/stores';
 	import { synthesizeOpenAISpeech } from '$lib/apis/audio';
 	import { imageGenerations } from '$lib/apis/images';
@@ -37,15 +38,6 @@
 		removeAllDetails
 	} from '$lib/utils';
 	import { WEBUI_BASE_URL } from '$lib/constants';
-	
-	// Detect if running on mobile device
-	let showModelName = false;
-	
-	onMount(() => {
-		const userAgent = navigator.userAgent || navigator.vendor || (window as any).opera;
-		const isMobile = /android|iphone|ipad|ipod|windows phone/i.test(userAgent);
-		showModelName = isMobile;
-	});
 
 	import Name from './Name.svelte';
 	import ProfileImage from './ProfileImage.svelte';
@@ -597,8 +589,8 @@
 		</div>
 
 		<div class="flex-auto w-0 pl-1 relative">
-			{#if showModelName}
-				<!-- iOS PWA: Split model name at colon - Provider on top, Model underneath -->
+			{#if $mobile}
+				<!-- Mobile: Split model name at colon - Provider on top, Model underneath -->
 				{@const modelNameFull = model?.name ?? message.model}
 				{@const [provider, modelName] = modelNameFull.includes(':') 
 					? modelNameFull.split(':').map(s => s.trim()) 
@@ -616,7 +608,7 @@
 					</Tooltip>
 				</div>
 			{:else}
-				<!-- Non-iOS: Original behavior with model name -->
+				<!-- Desktop: Original behavior with model name -->
 				<Name>
 					<Tooltip content={model?.name ?? message.model} placement="top-start">
 						<span id="response-message-model-name" class="line-clamp-1 text-black dark:text-white">
