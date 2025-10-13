@@ -16,7 +16,9 @@ from email.utils import parsedate_to_datetime
 from typing import Dict, List, Optional, Tuple
 from html import unescape
 
+# Set up logger with INFO level for visibility
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 
 class GmailProcessor:

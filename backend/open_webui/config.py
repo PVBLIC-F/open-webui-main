@@ -402,6 +402,8 @@ GMAIL_API_RATE_LIMIT_DELAY = PersistentConfig(
 )
 
 # Skip emails in spam and trash folders
+# When True: processes ALL emails (INBOX, SENT, labels, archived) except SPAM/TRASH
+# When False: processes ENTIRE mailbox including SPAM and TRASH
 GMAIL_SKIP_SPAM_AND_TRASH = PersistentConfig(
     "GMAIL_SKIP_SPAM_AND_TRASH",
     "gmail.sync.skip_spam_trash",
