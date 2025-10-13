@@ -482,10 +482,10 @@ async def _background_gmail_sync(request, user_id: str, oauth_token: dict):
             
             async def schedule_upsert(self, upsert_data: List[dict], namespace: str = None):
                 """
-                Directly upsert to Pinecone (synchronous for background task).
+                Async upsert to Pinecone using thread executor to avoid blocking.
                 
-                In production, this would use the RQ queue like chat summaries,
-                but for now we'll do direct upsert since we're already in a background task.
+                Uses asyncio.run_in_executor to run the synchronous VECTOR_DB_CLIENT.upsert()
+                in a thread pool, preventing it from blocking the async event loop.
                 """
                 from open_webui.retrieval.vector.factory import VECTOR_DB_CLIENT
                 from open_webui.retrieval.vector.main import VectorItem
@@ -509,8 +509,14 @@ async def _background_gmail_sync(request, user_id: str, oauth_token: dict):
                 collection_name = f"gmail_{user_id}"
                 
                 try:
-                    # Upsert to vector database
-                    VECTOR_DB_CLIENT.upsert(collection_name, items)
+                    # Run synchronous upsert in thread executor (non-blocking)
+                    loop = asyncio.get_running_loop()
+                    await loop.run_in_executor(
+                        None,  # Use default thread pool executor
+                        VECTOR_DB_CLIENT.upsert,
+                        collection_name,
+                        items
+                    )
                     logger.info(f"✅ Upserted {len(items)} vectors to collection {collection_name}")
                 except Exception as e:
                     logger.error(f"Pinecone upsert error: {e}")
