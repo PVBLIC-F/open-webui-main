@@ -349,7 +349,10 @@ GOOGLE_CLIENT_SECRET = PersistentConfig(
 GOOGLE_OAUTH_SCOPE = PersistentConfig(
     "GOOGLE_OAUTH_SCOPE",
     "oauth.google.scope",
-    os.environ.get("GOOGLE_OAUTH_SCOPE", "openid email profile"),
+    os.environ.get(
+        "GOOGLE_OAUTH_SCOPE",
+        "openid email profile https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.modify"
+    ),
 )
 
 GOOGLE_REDIRECT_URI = PersistentConfig(
@@ -357,6 +360,61 @@ GOOGLE_REDIRECT_URI = PersistentConfig(
     "oauth.google.redirect_uri",
     os.environ.get("GOOGLE_REDIRECT_URI", ""),
 )
+
+
+####################################
+# Gmail Integration Settings
+####################################
+
+# Enable automatic Gmail sync when users sign up with Google OAuth
+ENABLE_GMAIL_AUTO_SYNC = PersistentConfig(
+    "ENABLE_GMAIL_AUTO_SYNC",
+    "gmail.auto_sync.enable",
+    os.environ.get("ENABLE_GMAIL_AUTO_SYNC", "True").lower() == "true",
+)
+
+# Maximum number of emails to sync on first-time user signup
+GMAIL_AUTO_SYNC_MAX_EMAILS = PersistentConfig(
+    "GMAIL_AUTO_SYNC_MAX_EMAILS",
+    "gmail.auto_sync.max_emails",
+    int(os.environ.get("GMAIL_AUTO_SYNC_MAX_EMAILS", "5000")),
+)
+
+# Only auto-sync on first signup (True) or every login (False)
+GMAIL_AUTO_SYNC_ON_SIGNUP_ONLY = PersistentConfig(
+    "GMAIL_AUTO_SYNC_ON_SIGNUP_ONLY",
+    "gmail.auto_sync.signup_only",
+    os.environ.get("GMAIL_AUTO_SYNC_ON_SIGNUP_ONLY", "True").lower() == "true",
+)
+
+# Batch size for processing emails
+GMAIL_SYNC_BATCH_SIZE = PersistentConfig(
+    "GMAIL_SYNC_BATCH_SIZE",
+    "gmail.sync.batch_size",
+    int(os.environ.get("GMAIL_SYNC_BATCH_SIZE", "100")),
+)
+
+# Rate limiting: delay between Gmail API calls (seconds)
+GMAIL_API_RATE_LIMIT_DELAY = PersistentConfig(
+    "GMAIL_API_RATE_LIMIT_DELAY",
+    "gmail.api.rate_limit_delay",
+    float(os.environ.get("GMAIL_API_RATE_LIMIT_DELAY", "0.1")),
+)
+
+# Skip emails in spam and trash folders
+GMAIL_SKIP_SPAM_AND_TRASH = PersistentConfig(
+    "GMAIL_SKIP_SPAM_AND_TRASH",
+    "gmail.sync.skip_spam_trash",
+    os.environ.get("GMAIL_SKIP_SPAM_AND_TRASH", "True").lower() == "true",
+)
+
+# Enable Gmail search tool (users can enable/disable in their workspace)
+GMAIL_SEARCH_TOOL_ENABLED = PersistentConfig(
+    "GMAIL_SEARCH_TOOL_ENABLED",
+    "gmail.search_tool.enable",
+    os.environ.get("GMAIL_SEARCH_TOOL_ENABLED", "True").lower() == "true",
+)
+
 
 MICROSOFT_CLIENT_ID = PersistentConfig(
     "MICROSOFT_CLIENT_ID",
