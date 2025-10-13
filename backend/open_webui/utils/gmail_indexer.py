@@ -21,7 +21,9 @@ from typing import Dict, List, Optional
 
 from open_webui.utils.gmail_processor import GmailProcessor
 
+# Set up logger with INFO level for visibility
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 
 class GmailIndexer:

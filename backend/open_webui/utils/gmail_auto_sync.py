@@ -29,7 +29,9 @@ from open_webui.utils.gmail_indexer import GmailIndexer
 from open_webui.models.users import Users
 from open_webui.models.oauth_sessions import OAuthSessions
 
+# Set up logger with INFO level for visibility
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 
 class GmailAutoSync:
@@ -92,7 +94,12 @@ class GmailAutoSync:
             Dict with sync statistics
         """
         
-        logger.info(f"🚀 Starting Gmail sync for user {user_id}")
+        logger.info("="*70)
+        logger.info(f"🚀 GMAIL SYNC STARTED - User: {user_id}")
+        logger.info(f"   Max emails: {max_emails}")
+        logger.info(f"   Skip spam/trash: {skip_spam_trash}")
+        logger.info(f"   Namespace: {self.gmail_namespace}")
+        logger.info("="*70)
         
         # Initialize sync status
         self.active_syncs[user_id] = {
@@ -138,19 +145,36 @@ class GmailAutoSync:
             
             self.active_syncs[user_id]["total_emails"] = len(emails)
             
-            logger.info(
-                f"✅ Fetched {len(emails)} emails "
-                f"(API calls: {fetch_stats['api_calls']}, "
-                f"errors: {fetch_stats['errors']})"
-            )
+            # Analyze email types
+            label_counts = {}
+            for email in emails:
+                labels = email.get("labelIds", [])
+                for label in labels:
+                    label_counts[label] = label_counts.get(label, 0) + 1
+            
+            logger.info("="*70)
+            logger.info(f"✅ FETCH COMPLETE")
+            logger.info(f"   Total emails: {len(emails)}")
+            logger.info(f"   API calls: {fetch_stats['api_calls']}")
+            logger.info(f"   Fetch time: {fetch_stats.get('total_time', 0):.1f}s")
+            logger.info(f"   Errors: {fetch_stats['errors']}")
+            logger.info(f"\n   📊 Email Breakdown by Label:")
+            for label, count in sorted(label_counts.items(), key=lambda x: x[1], reverse=True)[:10]:
+                logger.info(f"      - {label}: {count} emails")
+            if len(label_counts) > 10:
+                logger.info(f"      - ... and {len(label_counts)-10} more labels")
+            logger.info("="*70)
             
             if not emails:
-                logger.info(f"No emails found for user {user_id}")
+                logger.info(f"📭 No emails found for user {user_id}")
                 self.active_syncs[user_id]["status"] = "completed"
                 return self._build_sync_result(user_id)
             
             # Step 2: Process and index emails to Pinecone
-            logger.info(f"⚙️ Step 2: Processing and indexing {len(emails)} emails...")
+            logger.info("")
+            logger.info("="*70)
+            logger.info(f"⚙️ PROCESSING & INDEXING - {len(emails)} emails")
+            logger.info("="*70)
             
             indexed_count = await self._process_and_index_batch(
                 emails=emails,
@@ -163,10 +187,16 @@ class GmailAutoSync:
             
             result = self._build_sync_result(user_id)
             
-            logger.info(
-                f"🎉 Gmail sync complete for user {user_id}: "
-                f"{indexed_count} emails indexed in {result['total_time']:.1f}s"
-            )
+            logger.info("")
+            logger.info("="*70)
+            logger.info(f"🎉 GMAIL SYNC COMPLETED - User: {user_id}")
+            logger.info(f"   Total emails found: {result['total_emails']}")
+            logger.info(f"   Successfully indexed: {result['indexed']}")
+            logger.info(f"   Errors: {result['errors']}")
+            logger.info(f"   Total time: {result['total_time']:.1f}s")
+            logger.info(f"   Emails/second: {result['indexed']/result['total_time']:.1f}" if result['total_time'] > 0 else "   Emails/second: N/A")
+            logger.info(f"   Status: ✅ SUCCESS")
+            logger.info("="*70)
             
             return result
             
@@ -195,16 +225,18 @@ class GmailAutoSync:
         """
         
         total_indexed = 0
+        total_vectors = 0
         
         for i in range(0, len(emails), batch_size):
             batch = emails[i:i + batch_size]
             batch_num = i // batch_size + 1
             total_batches = (len(emails) + batch_size - 1) // batch_size
+            progress_pct = int((i / len(emails)) * 100)
             
-            logger.info(
-                f"Processing batch {batch_num}/{total_batches} "
-                f"({len(batch)} emails)"
-            )
+            logger.info("")
+            logger.info(f"📦 Batch {batch_num}/{total_batches} ({progress_pct}% complete)")
+            logger.info(f"   Processing emails {i+1}-{min(i+batch_size, len(emails))} of {len(emails)}")
+            logger.info(f"   Batch size: {len(batch)} emails")
             
             # Process batch with GmailIndexer
             try:
@@ -223,11 +255,13 @@ class GmailAutoSync:
                     )
                     
                     total_indexed += result["processed"]
+                    total_vectors += result["total_vectors"]
                     
-                    logger.info(
-                        f"✅ Batch {batch_num}: {result['processed']} emails processed, "
-                        f"{result['total_vectors']} vectors queued for Pinecone"
-                    )
+                    logger.info(f"   ✅ Processed: {result['processed']} emails")
+                    logger.info(f"   ✅ Vectors created: {result['total_vectors']}")
+                    logger.info(f"   ✅ Errors: {result['errors']}")
+                    logger.info(f"   ✅ Processing time: {result['processing_time']:.2f}s")
+                    logger.info(f"   📊 Running total: {total_indexed} emails, {total_vectors} vectors")
                 
                 self.active_syncs[user_id]["processed"] = i + len(batch)
                 
@@ -295,30 +329,41 @@ async def trigger_gmail_sync_if_needed(
     - If GMAIL_AUTO_SYNC_ON_SIGNUP_ONLY, only trigger for new users
     """
     
+    logger.info(f"\n🔍 Gmail Sync Trigger Check - User: {user_id}, Provider: {provider}")
+    
     # Check if Gmail auto-sync is enabled
     if not request.app.state.config.ENABLE_GMAIL_AUTO_SYNC:
-        logger.info("Gmail auto-sync is disabled in config")
+        logger.info("   ⏭️  SKIP: Gmail auto-sync is disabled in config")
         return
     
     # Only trigger for Google OAuth
     if provider != "google":
-        logger.debug(f"Skipping Gmail sync for non-Google provider: {provider}")
+        logger.info(f"   ⏭️  SKIP: Not Google OAuth (provider: {provider})")
         return
     
     # Check for Gmail scopes
     token_scope = token.get("scope", "")
-    if "gmail" not in token_scope:
-        logger.info(f"User {user_id} OAuth token doesn't include Gmail scopes")
+    has_gmail = "gmail" in token_scope
+    logger.info(f"   📧 Gmail scope present: {has_gmail}")
+    
+    if not has_gmail:
+        logger.info(f"   ⏭️  SKIP: OAuth token doesn't include Gmail scopes")
         return
     
     # Check if we should only sync on signup
-    if request.app.state.config.GMAIL_AUTO_SYNC_ON_SIGNUP_ONLY and not is_new_user:
-        logger.info(f"Gmail auto-sync only on signup, user {user_id} is not new")
+    sync_on_signup_only = request.app.state.config.GMAIL_AUTO_SYNC_ON_SIGNUP_ONLY
+    logger.info(f"   👤 New user: {is_new_user}, Sync on signup only: {sync_on_signup_only}")
+    
+    if sync_on_signup_only and not is_new_user:
+        logger.info(f"   ⏭️  SKIP: Gmail auto-sync only on signup, user is not new")
         return
     
+    logger.info(f"   ✅ ALL CONDITIONS MET - Triggering Gmail sync!")
     logger.info(
-        f"🚀 Triggering automatic Gmail sync for user {user_id} "
-        f"(new_user: {is_new_user})"
+        f"\n🚀 TRIGGERING AUTOMATIC GMAIL SYNC"
+        f"\n   User: {user_id}"
+        f"\n   New user: {is_new_user}"
+        f"\n   Gmail scopes: ✓"
     )
     
     # Launch background task
@@ -343,6 +388,7 @@ async def _background_gmail_sync(request, user_id: str, oauth_token: dict):
     Background task that performs the actual Gmail sync.
     
     This runs asynchronously and doesn't block the OAuth callback.
+    Integrates with existing Open WebUI RAG infrastructure.
     
     Args:
         request: FastAPI request object
@@ -350,38 +396,165 @@ async def _background_gmail_sync(request, user_id: str, oauth_token: dict):
         oauth_token: OAuth token dict with access_token
     """
     
-    logger.info(f"📧 Starting background Gmail sync for user {user_id}")
+    logger.info("\n" + "🔥"*35)
+    logger.info("📧 BACKGROUND GMAIL SYNC TASK STARTED")
+    logger.info(f"   User ID: {user_id}")
+    logger.info(f"   Task ID: gmail_sync_{user_id}")
+    logger.info(f"   Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info("🔥"*35 + "\n")
     
     try:
+        # Validate user
         user = Users.get_user_by_id(user_id)
         if not user:
             logger.error(f"User {user_id} not found")
             return
         
-        # Get max emails from config
+        # Get configuration
         max_emails = request.app.state.config.GMAIL_AUTO_SYNC_MAX_EMAILS
-        
-        logger.info(f"Config: max_emails={max_emails}")
-        
-        # TODO: Get services from chat filter
-        # For now, this is a placeholder structure
-        # In Phase 5.4, we'll integrate with the actual chat filter services
+        skip_spam_trash = request.app.state.config.GMAIL_SKIP_SPAM_AND_TRASH
+        batch_size = request.app.state.config.GMAIL_SYNC_BATCH_SIZE
+        gmail_namespace = request.app.state.config.PINECONE_NAMESPACE_GMAIL
         
         logger.info(
-            f"Gmail sync task placeholder executed for user {user_id}. "
-            f"Full implementation in Phase 5.4"
+            f"Gmail sync config: max_emails={max_emails}, "
+            f"skip_spam_trash={skip_spam_trash}, batch_size={batch_size}, "
+            f"namespace={gmail_namespace}"
         )
         
-        # The actual implementation will be:
-        # 1. Get embedding_service from request.app.state or chat filter
-        # 2. Get content_aware_splitter from chat filter
-        # 3. Get document_processor from chat filter
-        # 4. Get pinecone_manager from chat filter
-        # 5. Initialize GmailAutoSync
-        # 6. Run sync_user_gmail()
+        # Create simple wrapper services for the background task
+        # We'll use Open WebUI's existing embedding and Pinecone infrastructure
+        
+        class SimpleEmbeddingService:
+            """Wrapper for Open WebUI's embedding function"""
+            def __init__(self, app_state):
+                self.app_state = app_state
+            
+            async def embed_batch(self, texts: List[str]) -> List[List[float]]:
+                """Generate embeddings using Open WebUI's embedding function"""
+                embeddings = []
+                
+                # Use existing embedding function from app state
+                for text in texts:
+                    try:
+                        vector = self.app_state.EMBEDDING_FUNCTION(text, prefix="", user=None)
+                        embeddings.append(vector)
+                    except Exception as e:
+                        logger.error(f"Embedding error: {e}")
+                        # Fallback to zero vector
+                        dim = self.app_state.config.PINECONE_DIMENSION
+                        embeddings.append([0.0] * dim)
+                
+                return embeddings
+        
+        class SimpleTextSplitter:
+            """Simple text splitter (fallback if ContentAwareTextSplitter not available)"""
+            def split_text(self, text: str) -> List[str]:
+                """Split text into chunks by paragraphs"""
+                # Simple split by double newlines
+                chunks = text.split("\n\n")
+                chunks = [c.strip() for c in chunks if c.strip() and len(c.strip()) > 50]
+                
+                # If no chunks or single large chunk, return as-is
+                if not chunks:
+                    return [text] if text else []
+                
+                return chunks
+        
+        class SimpleDocProcessor:
+            """Simple document processor with quality scoring"""
+            @staticmethod
+            def quick_quality_score(text: str) -> int:
+                """Simple 0-5 quality score"""
+                score = 0
+                if len(text) > 200:
+                    score += 2
+                if text.count(".") >= 2:
+                    score += 2
+                if "\n\n" in text:
+                    score += 1
+                return min(score, 5)
+        
+        class SimplePineconeManager:
+            """Wrapper for Pinecone upsert operations"""
+            def __init__(self, namespace):
+                self.namespace = namespace
+            
+            async def schedule_upsert(self, upsert_data: List[dict], namespace: str = None):
+                """
+                Directly upsert to Pinecone (synchronous for background task).
+                
+                In production, this would use the RQ queue like chat summaries,
+                but for now we'll do direct upsert since we're already in a background task.
+                """
+                from open_webui.retrieval.vector.factory import VECTOR_DB_CLIENT
+                from open_webui.retrieval.vector.main import VectorItem
+                
+                # Convert to VectorItem format
+                items = [
+                    VectorItem(
+                        id=item["id"],
+                        vector=item["values"],
+                        text=item["metadata"].get("chunk_text", ""),
+                        metadata=item["metadata"]
+                    )
+                    for item in upsert_data
+                ]
+                
+                # Use namespace parameter if provided, otherwise use instance namespace
+                ns = namespace if namespace is not None else self.namespace
+                
+                # Note: VECTOR_DB_CLIENT uses collection_name, not namespace
+                # For Pinecone, we'll use collection_name pattern
+                collection_name = f"gmail_{user_id}"
+                
+                try:
+                    # Upsert to vector database
+                    VECTOR_DB_CLIENT.upsert(collection_name, items)
+                    logger.info(f"✅ Upserted {len(items)} vectors to collection {collection_name}")
+                except Exception as e:
+                    logger.error(f"Pinecone upsert error: {e}")
+                    raise
+        
+        # Initialize services
+        embedding_service = SimpleEmbeddingService(request.app.state)
+        text_splitter = SimpleTextSplitter()
+        doc_processor = SimpleDocProcessor()
+        pinecone_manager = SimplePineconeManager(gmail_namespace)
+        
+        # Initialize GmailAutoSync orchestrator
+        gmail_sync = GmailAutoSync(
+            embedding_service=embedding_service,
+            content_aware_splitter=text_splitter,
+            document_processor=doc_processor,
+            pinecone_manager=pinecone_manager,
+            gmail_namespace=gmail_namespace,
+        )
+        
+        # Execute the sync
+        logger.info(f"🚀 Starting Gmail sync for user {user_id}...")
+        
+        result = await gmail_sync.sync_user_gmail(
+            user_id=user_id,
+            oauth_token=oauth_token,
+            max_emails=max_emails,
+            skip_spam_trash=skip_spam_trash,
+        )
+        
+        logger.info("\n" + "🎉"*35)
+        logger.info("✅ BACKGROUND GMAIL SYNC TASK COMPLETED")
+        logger.info(f"   User ID: {user_id}")
+        logger.info(f"   Emails indexed: {result['indexed']}")
+        logger.info(f"   Total time: {result['total_time']:.1f}s")
+        logger.info(f"   Status: SUCCESS")
+        logger.info("🎉"*35 + "\n")
         
     except Exception as e:
-        logger.error(f"❌ Background Gmail sync failed for user {user_id}: {e}", exc_info=True)
+        logger.error("\n" + "❌"*35)
+        logger.error(f"❌ BACKGROUND GMAIL SYNC TASK FAILED - User: {user_id}")
+        logger.error(f"   Error: {str(e)}")
+        logger.error("❌"*35 + "\n")
+        logger.error(f"Full traceback:", exc_info=True)
 
 
 # ============================================================================

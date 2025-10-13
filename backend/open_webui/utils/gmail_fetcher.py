@@ -20,7 +20,9 @@ import time
 from typing import Dict, List, Optional, Tuple
 import aiohttp
 
+# Set up logger with INFO level for visibility
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 
 class GmailFetcher:
@@ -102,34 +104,52 @@ class GmailFetcher:
         """
         Fetch all message IDs from Gmail with pagination.
         
+        This fetches ALL emails from the entire mailbox including:
+        - INBOX emails
+        - SENT emails (emails you sent)
+        - All custom labels/folders
+        - Archived emails
+        - Drafts
+        - Everything except SPAM and TRASH (if skip_spam_trash=True)
+        
         Args:
             max_results: Maximum number of message IDs to fetch (0 = unlimited)
             skip_spam_trash: Skip emails in SPAM and TRASH (default: True)
             query: Optional Gmail query filter (e.g., "newer_than:7d")
             
         Returns:
-            List of Gmail message IDs
+            List of Gmail message IDs from entire mailbox
             
         Example:
             >>> fetcher = GmailFetcher(oauth_token)
             >>> message_ids = await fetcher.fetch_all_message_ids(max_results=1000)
-            >>> print(f"Found {len(message_ids)} emails")
+            >>> print(f"Found {len(message_ids)} emails across all folders")
         """
         
-        logger.info("Starting to fetch message IDs from Gmail...")
+        logger.info("📥 Fetching message IDs from Gmail...")
         
         all_message_ids = []
         next_page_token = None
         page_count = 0
         
-        # Build query
+        # Build query - fetches ALL emails (inbox, sent, labels, etc.)
         query_parts = []
         if skip_spam_trash:
+            # Exclude spam and trash, but include EVERYTHING else
             query_parts.append("-in:spam -in:trash")
+            logger.info("   📋 Scope: ALL emails (INBOX + SENT + all labels)")
+            logger.info("   🚫 Excluding: SPAM and TRASH only")
+        else:
+            logger.info("   📋 Scope: ENTIRE mailbox (including spam/trash)")
+        
         if query:
             query_parts.append(query)
+            logger.info(f"   🔍 Additional filter: {query}")
         
         full_query = " ".join(query_parts) if query_parts else None
+        
+        if full_query:
+            logger.info(f"   📝 Gmail query: {full_query}")
         
         # Fetch pages
         async with aiohttp.ClientSession() as session:
