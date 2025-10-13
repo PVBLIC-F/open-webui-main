@@ -2186,6 +2186,10 @@ PINECONE_DIMENSION = int(os.getenv("PINECONE_DIMENSION", 1536))  # or 3072, 1024
 PINECONE_METRIC = os.getenv("PINECONE_METRIC", "cosine")
 PINECONE_CLOUD = os.getenv("PINECONE_CLOUD", "aws")  # or "gcp" or "azure"
 
+# Pinecone Namespaces (for data segregation)
+PINECONE_NAMESPACE = os.environ.get("PINECONE_NAMESPACE", "chat-summary-knowledge")  # Chat summaries & knowledge
+PINECONE_NAMESPACE_GMAIL = os.environ.get("PINECONE_NAMESPACE_GMAIL", "gmail-inbox")  # Gmail emails
+
 # ORACLE23AI (Oracle23ai Vector Search)
 
 ORACLE_DB_USE_WALLET = os.environ.get("ORACLE_DB_USE_WALLET", "false").lower() == "true"
