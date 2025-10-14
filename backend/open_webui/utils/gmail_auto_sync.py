@@ -452,12 +452,30 @@ async def _background_gmail_sync(request, user_id: str, oauth_token: dict):
                 # Use existing embedding function from app state
                 for text in texts:
                     try:
-                        vector = self.app_state.EMBEDDING_FUNCTION(text, prefix="", user=None)
+                        # Clean text before embedding (critical!)
+                        from open_webui.utils.text_cleaner import TextCleaner
+                        clean_text = TextCleaner.clean_text(text)
+                        
+                        # Truncate if too long (8191 tokens ~ 32k chars for safety)
+                        if len(clean_text) > 30000:
+                            clean_text = clean_text[:30000]
+                            logger.warning(f"Truncated text from {len(text)} to 30000 chars for embedding")
+                        
+                        vector = self.app_state.EMBEDDING_FUNCTION(clean_text, prefix="", user=None)
+                        
+                        if vector is None:
+                            raise ValueError("Embedding function returned None")
+                        
                         embeddings.append(vector)
                     except Exception as e:
-                        logger.error(f"Embedding error: {e}")
+                        logger.error(f"Embedding error for text (len={len(text)}): {e}")
+                        logger.error(f"Text preview: {text[:200]}...")
                         # Fallback to zero vector
-                        dim = self.app_state.config.PINECONE_DIMENSION
+                        dim = 1536  # Default dimension
+                        try:
+                            dim = int(self.app_state.config.PINECONE_DIMENSION)
+                        except:
+                            pass
                         embeddings.append([0.0] * dim)
                 
                 return embeddings
