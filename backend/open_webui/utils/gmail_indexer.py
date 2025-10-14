@@ -20,6 +20,7 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 from open_webui.utils.gmail_processor import GmailProcessor
+from open_webui.utils.text_cleaner import TextCleaner
 
 # Set up logger with INFO level for visibility
 logger = logging.getLogger(__name__)
@@ -172,7 +173,7 @@ class GmailIndexer:
                 "user_id": user_id,
                 
                 # Content (SAME structure as chat)
-                "chunk_text": self._clean_for_pinecone(chunk_text),
+                "chunk_text": TextCleaner.clean_for_pinecone(chunk_text),
                 "chunk_index": i,
                 "total_chunks": len(chunks),
                 
