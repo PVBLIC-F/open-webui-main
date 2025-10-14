@@ -572,9 +572,6 @@ class OAuthClientManager:
         return await client.authorize_redirect(request, str(redirect_uri))
 
     async def handle_callback(self, request, client_id: str, user_id: str, response):
-        # 🔥🔥🔥 DEPLOYMENT TEST - If you see this, code is updated! 🔥🔥🔥
-        log.info("🔥🔥🔥 OAUTH CALLBACK - CODE VERSION: 2025-10-14-GMAIL-SYNC-ENABLED 🔥🔥🔥")
-        
         client = self.get_client(client_id)
         if client is None:
             raise HTTPException(404)
@@ -605,11 +602,8 @@ class OAuthClientManager:
 
                     # Clean up any existing sessions for this user/client_id first
                     sessions = OAuthSessions.get_sessions_by_user_id(user_id)
-                    is_new_oauth_session = True  # Track if this is first-time OAuth for this provider
-                    
                     for session in sessions:
                         if session.provider == client_id:
-                            is_new_oauth_session = False  # User had OAuth session before
                             OAuthSessions.delete_session_by_id(session.id)
 
                     session = OAuthSessions.create_session(
@@ -620,27 +614,6 @@ class OAuthClientManager:
                     log.info(
                         f"Stored OAuth session server-side for user {user_id}, client_id {client_id}"
                     )
-                    
-                    # ✨ Trigger automatic Gmail sync if applicable
-                    log.info(f"Gmail sync check: is_new_oauth_session={is_new_oauth_session}, provider={client_id}")
-                    
-                    if is_new_oauth_session:
-                        log.info(f"Triggering Gmail sync for NEW user {user_id}")
-                        try:
-                            from open_webui.utils.gmail_auto_sync import trigger_gmail_sync_if_needed
-                            
-                            await trigger_gmail_sync_if_needed(
-                                request=request,
-                                user_id=user_id,
-                                provider=client_id,
-                                token=token,
-                                is_new_user=is_new_oauth_session,
-                            )
-                        except Exception as e:
-                            log.error(f"Gmail auto-sync trigger failed for user {user_id}: {e}")
-                            # Don't fail OAuth callback if Gmail sync fails
-                    else:
-                        log.info(f"Skipping Gmail sync for EXISTING user {user_id} (already had OAuth session)")
                 except Exception as e:
                     error_message = "Failed to store OAuth session server-side"
                     log.error(f"Failed to store OAuth session server-side: {e}")
