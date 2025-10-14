@@ -361,7 +361,8 @@ async def trigger_gmail_sync_if_needed(
     # Check if user has enabled Gmail sync in their settings
     user = Users.get_user_by_id(user_id)
     if user and user.settings:
-        gmail_settings = user.settings.get("gmail", {})
+        settings_dict = user.settings.model_dump() if hasattr(user.settings, 'model_dump') else user.settings
+        gmail_settings = settings_dict.get("gmail", {}) if isinstance(settings_dict, dict) else {}
         sync_enabled = gmail_settings.get("sync_enabled", False)
         logger.info(f"   ⚙️  User Gmail sync setting: sync_enabled={sync_enabled}")
         
