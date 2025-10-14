@@ -154,7 +154,7 @@ async def trigger_gmail_sync(
             detail="Gmail sync is not enabled for this user"
         )
     
-    # Get OAuth session
+    # Get OAuth session and token (with automatic refresh if expired)
     oauth_session = OAuthSessions.get_session_by_provider_and_user_id("google", user_id)
     if not oauth_session:
         raise HTTPException(
@@ -162,8 +162,28 @@ async def trigger_gmail_sync(
             detail="No Google OAuth session found. User must log in with Google first."
         )
     
+    # Get refreshed OAuth token using oauth_manager (handles token refresh automatically)
+    try:
+        oauth_token = await request.app.state.oauth_manager.get_oauth_token(
+            user_id=user_id,
+            session_id=oauth_session.id,
+            force_refresh=False  # Will auto-refresh if expired
+        )
+        
+        if not oauth_token:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="OAuth token expired and refresh failed. Please log in with Google again."
+            )
+            
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Failed to get OAuth token: {str(e)}"
+        )
+    
     # Validate Gmail scopes
-    token_scope = oauth_session.token.get("scope", "")
+    token_scope = oauth_token.get("scope", "")
     if "gmail" not in token_scope:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -178,13 +198,13 @@ async def trigger_gmail_sync(
     }
     Users.update_user_by_id(user_id, {"settings": user_settings})
     
-    # Trigger background sync task
+    # Trigger background sync task with refreshed token
     try:
         from open_webui.utils.gmail_auto_sync import _background_gmail_sync
         
         task_id, task = await create_task(
             request.app.state.redis,
-            _background_gmail_sync(request, user_id, oauth_session.token),
+            _background_gmail_sync(request, user_id, oauth_token),
             id=f"gmail_sync_{user_id}"
         )
         
