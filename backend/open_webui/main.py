@@ -431,6 +431,8 @@ from open_webui.config import (
     GMAIL_SKIP_SPAM_AND_TRASH,
     GMAIL_SEARCH_TOOL_ENABLED,
     PINECONE_NAMESPACE_GMAIL,
+    # Pinecone (needed for Gmail)
+    PINECONE_DIMENSION,
     AppConfig,
     reset_config,
 )
