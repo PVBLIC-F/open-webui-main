@@ -358,6 +358,20 @@ async def trigger_gmail_sync_if_needed(
         logger.info(f"   ⏭️  SKIP: Gmail auto-sync only on signup, user is not new")
         return
     
+    # Check if user has enabled Gmail sync in their settings
+    user = Users.get_user_by_id(user_id)
+    if user and user.settings:
+        gmail_settings = user.settings.get("gmail", {})
+        sync_enabled = gmail_settings.get("sync_enabled", False)
+        logger.info(f"   ⚙️  User Gmail sync setting: sync_enabled={sync_enabled}")
+        
+        if not sync_enabled:
+            logger.info(f"   ⏭️  SKIP: User hasn't enabled Gmail sync in settings")
+            logger.info(f"      Admin can enable in User Edit panel")
+            return
+    else:
+        logger.info(f"   ⚙️  No user settings found - will sync (first time)")
+    
     logger.info(f"   ✅ ALL CONDITIONS MET - Triggering Gmail sync!")
     logger.info(
         f"\n🚀 TRIGGERING AUTOMATIC GMAIL SYNC"
