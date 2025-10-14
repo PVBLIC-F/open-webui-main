@@ -2190,7 +2190,12 @@ PINECONE_CLOUD = os.getenv("PINECONE_CLOUD", "aws")  # or "gcp" or "azure"
 
 # Pinecone Namespaces (for data segregation)
 PINECONE_NAMESPACE = os.environ.get("PINECONE_NAMESPACE", "chat-summary-knowledge")  # Chat summaries & knowledge
-PINECONE_NAMESPACE_GMAIL = os.environ.get("PINECONE_NAMESPACE_GMAIL", "gmail-inbox")  # Gmail emails
+
+PINECONE_NAMESPACE_GMAIL = PersistentConfig(
+    "PINECONE_NAMESPACE_GMAIL",
+    "pinecone.namespace.gmail",
+    os.environ.get("PINECONE_NAMESPACE_GMAIL", "gmail-inbox"),
+)
 
 # ORACLE23AI (Oracle23ai Vector Search)
 
