@@ -572,6 +572,9 @@ class OAuthClientManager:
         return await client.authorize_redirect(request, str(redirect_uri))
 
     async def handle_callback(self, request, client_id: str, user_id: str, response):
+        # 🔥🔥🔥 DEPLOYMENT TEST - If you see this, code is updated! 🔥🔥🔥
+        log.info("🔥🔥🔥 OAUTH CALLBACK - CODE VERSION: 2025-10-14-GMAIL-SYNC-ENABLED 🔥🔥🔥")
+        
         client = self.get_client(client_id)
         if client is None:
             raise HTTPException(404)
