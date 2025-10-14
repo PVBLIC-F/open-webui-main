@@ -42,7 +42,8 @@ async def get_gmail_status(
     # Get Gmail settings from user settings
     gmail_settings = {}
     if user.settings:
-        gmail_settings = user.settings.get("gmail", {})
+        settings_dict = user.settings.model_dump() if hasattr(user.settings, 'model_dump') else user.settings
+        gmail_settings = settings_dict.get("gmail", {}) if isinstance(settings_dict, dict) else {}
     
     # Check if user has Google OAuth session
     oauth_session = OAuthSessions.get_session_by_provider_and_user_id("google", user_id)
@@ -101,13 +102,15 @@ async def enable_gmail_sync(
         )
     
     # Update user settings
-    user_settings = user.settings if user.settings else {}
+    user_settings = user.settings.model_dump() if user.settings and hasattr(user.settings, 'model_dump') else (user.settings if isinstance(user.settings, dict) else {})
+    existing_gmail = user_settings.get("gmail", {}) if isinstance(user_settings, dict) else {}
+    
     user_settings["gmail"] = {
         "sync_enabled": True,
         "sync_status": "ready",
-        "last_synced_at": user_settings.get("gmail", {}).get("last_synced_at"),
-        "total_emails_indexed": user_settings.get("gmail", {}).get("total_emails_indexed", 0),
-        "total_vectors": user_settings.get("gmail", {}).get("total_vectors", 0),
+        "last_synced_at": existing_gmail.get("last_synced_at"),
+        "total_emails_indexed": existing_gmail.get("total_emails_indexed", 0),
+        "total_vectors": existing_gmail.get("total_vectors", 0),
     }
     
     Users.update_user_by_id(user_id, {"settings": user_settings})
@@ -143,7 +146,8 @@ async def trigger_gmail_sync(
         )
     
     # Check if Gmail sync is enabled
-    gmail_settings = user.settings.get("gmail", {}) if user.settings else {}
+    settings_dict = user.settings.model_dump() if user.settings and hasattr(user.settings, 'model_dump') else (user.settings if isinstance(user.settings, dict) else {})
+    gmail_settings = settings_dict.get("gmail", {}) if isinstance(settings_dict, dict) else {}
     if not gmail_settings.get("sync_enabled", False):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -167,7 +171,7 @@ async def trigger_gmail_sync(
         )
     
     # Update status to syncing
-    user_settings = user.settings if user.settings else {}
+    user_settings = user.settings.model_dump() if user.settings and hasattr(user.settings, 'model_dump') else (user.settings if isinstance(user.settings, dict) else {})
     user_settings["gmail"] = {
         **gmail_settings,
         "sync_status": "syncing",
@@ -225,8 +229,8 @@ async def disable_gmail_sync(
         )
     
     # Update user settings
-    user_settings = user.settings if user.settings else {}
-    gmail_settings = user_settings.get("gmail", {})
+    user_settings = user.settings.model_dump() if user.settings and hasattr(user.settings, 'model_dump') else (user.settings if isinstance(user.settings, dict) else {})
+    gmail_settings = user_settings.get("gmail", {}) if isinstance(user_settings, dict) else {}
     
     user_settings["gmail"] = {
         **gmail_settings,
@@ -275,7 +279,7 @@ async def delete_gmail_data(
         logger.info(f"🗑️ Deleted all Gmail data for user {user_id} from collection {collection_name}")
         
         # Update user settings
-        user_settings = user.settings if user.settings else {}
+        user_settings = user.settings.model_dump() if user.settings and hasattr(user.settings, 'model_dump') else (user.settings if isinstance(user.settings, dict) else {})
         user_settings["gmail"] = {
             "sync_enabled": False,
             "sync_status": "not_connected",
