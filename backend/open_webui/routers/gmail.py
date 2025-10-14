@@ -11,7 +11,6 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from open_webui.models.users import Users
 from open_webui.models.oauth_sessions import OAuthSessions
 from open_webui.utils.auth import get_admin_user
-from open_webui.utils.gmail_auto_sync import GmailAutoSync
 from open_webui.retrieval.vector.factory import VECTOR_DB_CLIENT
 from open_webui.tasks import create_task
 
