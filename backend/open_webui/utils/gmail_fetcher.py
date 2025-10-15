@@ -37,7 +37,7 @@ class GmailFetcher:
     
     # Rate limiting configuration
     DEFAULT_MAX_REQUESTS_PER_SECOND = 40  # Conservative limit
-    DEFAULT_BATCH_SIZE = 100  # Process 100 emails at a time
+    DEFAULT_BATCH_SIZE = 20  # Concurrent requests (Gmail limit: ~25 concurrent)
     
     def __init__(
         self,
@@ -298,7 +298,7 @@ class GmailFetcher:
         
         Args:
             message_ids: List of Gmail message IDs to fetch
-            batch_size: Number of concurrent requests (default: 100)
+            batch_size: Number of concurrent requests (default: 20, Gmail limit ~25)
             
         Returns:
             List of Gmail API message responses
@@ -316,12 +316,18 @@ class GmailFetcher:
                 f"({i+1}-{min(i+batch_size, len(message_ids))} of {len(message_ids)})"
             )
             
-            # Fetch batch concurrently (with rate limiting per request)
+            # Fetch batch concurrently with limited concurrency (prevents 429)
             tasks = [self.fetch_email(msg_id) for msg_id in batch]
-            batch_results = await asyncio.gather(*tasks)
+            batch_results = await asyncio.gather(*tasks, return_exceptions=True)
             
-            # Filter out None results (errors)
-            batch_emails = [email for email in batch_results if email is not None]
+            # Handle exceptions in results
+            batch_emails = []
+            for result in batch_results:
+                if isinstance(result, Exception):
+                    logger.error(f"Batch fetch error: {result}")
+                elif result is not None:
+                    batch_emails.append(result)
+            
             all_emails.extend(batch_emails)
             
             logger.info(
