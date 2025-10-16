@@ -3,6 +3,8 @@ yarn.lock
 .DS_Store
 *_LOCAL_TEST.py
 *_LOCAL_TEST.md
+*_PRODUCTION.py
+gmail_search_tool*.py
 node_modules
 /build
 /.svelte-kit
