@@ -578,20 +578,36 @@ async def _background_gmail_sync(request, user_id: str, oauth_token: dict):
                 from open_webui.retrieval.vector.factory import VECTOR_DB_CLIENT
                 
                 # VECTOR_DB_CLIENT.upsert expects List[dict] with keys: id, text, vector, metadata
-                items = [
-                    {
-                        "id": item["id"],
-                        "text": item["metadata"].get("chunk_text", ""),
-                        "vector": item["values"],
-                        "metadata": item["metadata"]
-                    }
-                    for item in upsert_data
-                ]
+                # Filter out zero vectors (Pinecone rejects them)
+                valid_items = []
+                zero_vector_count = 0
+                
+                for item in upsert_data:
+                    vector = item["values"]
+                    # Check if vector has at least one non-zero value
+                    if any(v != 0.0 for v in vector):
+                        valid_items.append({
+                            "id": item["id"],
+                            "text": item["metadata"].get("chunk_text", ""),
+                            "vector": vector,
+                            "metadata": item["metadata"]
+                        })
+                    else:
+                        zero_vector_count += 1
+                        email_id = item["metadata"].get("email_id", "unknown")
+                        logger.warning(f"⚠️  Skipping zero vector for email {email_id} (embedding failed)")
+                
+                if zero_vector_count > 0:
+                    logger.warning(f"⚠️  Skipped {zero_vector_count} vectors with all zeros")
+                
+                if not valid_items:
+                    logger.warning("⚠️  No valid vectors in batch (all embeddings failed), skipping upsert")
+                    return
                 
                 # Collection-based isolation: each user has their own collection
                 collection_name = f"gmail_{user_id}"
                 
-                logger.info(f"📤 Upserting {len(items)} vectors to collection: {collection_name}")
+                logger.info(f"📤 Upserting {len(valid_items)} valid vectors to collection: {collection_name}")
                 
                 try:
                     # Use existing VECTOR_DB_CLIENT.upsert (handles batching, errors, retries)
