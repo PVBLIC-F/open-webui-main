@@ -182,14 +182,18 @@ class GmailIndexer:
                 "timestamp": datetime.utcnow().isoformat() + "Z",
                 "date_timestamp": base_metadata["date_timestamp"],
                 
-                # Email-specific fields (NEW)
-                "subject": base_metadata["subject"],  # ← Like "topic" in chat
-                "from": base_metadata["from"],
-                "to": base_metadata["to"],
+                # Email-specific fields (structured for better filtering)
+                "subject": base_metadata["subject"],
+                "from_name": base_metadata.get("from_name", ""),
+                "from_email": base_metadata.get("from_email", ""),
+                "to_name": base_metadata.get("to_name", ""),
+                "to_email": base_metadata.get("to_email", ""),
                 "cc": base_metadata.get("cc", ""),
                 "date": base_metadata["date"],
-                "labels": base_metadata["labels"],
+                "labels": base_metadata["labels"],  # Array format
                 "has_attachments": base_metadata["has_attachments"],
+                "is_reply": base_metadata.get("is_reply", False),
+                "word_count": base_metadata.get("word_count", 0),
                 
                 # Quality & metadata (SAME as chat)
                 "quality_score": quality_score,
