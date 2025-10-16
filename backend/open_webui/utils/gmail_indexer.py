@@ -17,6 +17,7 @@ This is the bridge between Gmail parsing and your existing RAG system.
 import logging
 import time
 import asyncio
+import re
 from datetime import datetime
 from typing import Dict, List, Optional
 
@@ -219,6 +220,12 @@ class GmailIndexer:
         # Get first 2 sentences
         sentences = body.split('. ')[:2]
         summary = '. '.join(sentences)
+        
+        # Clean for metadata storage (remove newlines, normalize spaces)
+        summary = summary.replace('\n', ' ')
+        summary = summary.replace('\r', ' ')
+        summary = re.sub(r'\s+', ' ', summary)  # Normalize multiple spaces
+        summary = summary.strip()
         
         # Limit length
         if len(summary) > 200:
