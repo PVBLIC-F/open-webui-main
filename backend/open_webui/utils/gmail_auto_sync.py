@@ -252,10 +252,10 @@ class GmailAutoSync:
                 upsert_data = result["upsert_data"]
                 
                 if upsert_data:
-                    # Schedule background upsert to Pinecone
+                    # Upsert to vector DB (collection-based isolation, not namespace)
                     await self.pinecone.schedule_upsert(
                         upsert_data,
-                        namespace=self.gmail_namespace
+                        namespace=None  # Not used by Open WebUI's vector DB abstraction
                     )
                     
                     total_indexed += result["processed"]
@@ -275,6 +275,9 @@ class GmailAutoSync:
                 
                 # Clear processed batch to free memory
                 batch.clear()
+                
+                # Yield to event loop after each batch to keep interface responsive
+                await asyncio.sleep(0.1)  # Small delay to let other tasks run
                 
             except Exception as e:
                 logger.error(f"Error processing batch {batch_num}: {e}")
@@ -457,46 +460,58 @@ async def _background_gmail_sync(request, user_id: str, oauth_token: dict):
                 self.app_state = app_state
             
             async def embed_batch(self, texts: List[str]) -> List[List[float]]:
-                """Generate embeddings using Open WebUI's embedding function"""
-                from open_webui.utils.text_cleaner import TextCleaner  # Import once, not in loop
+                """Generate embeddings using Open WebUI's embedding function (non-blocking)"""
+                from open_webui.utils.text_cleaner import TextCleaner
                 
-                embeddings = []
-                
-                # Use existing embedding function from app state
-                for text in texts:
+                async def embed_single(text: str) -> List[float]:
+                    """Embed single text in executor to avoid blocking event loop"""
                     try:
-                        # Clean text before embedding (critical!)
-                        clean_text = TextCleaner.clean_text(text)
+                        # Run CPU-intensive cleaning and embedding in thread executor
+                        loop = asyncio.get_running_loop()
                         
-                        # Truncate to safe limit: 8191 tokens ≈ 8000 chars (very conservative)
-                        max_chars = 8000
-                        if len(clean_text) > max_chars:
-                            clean_text = clean_text[:max_chars]
-                            logger.warning(f"Truncated text from {len(text)} to {max_chars} chars for embedding")
+                        # Clean and truncate in thread pool (CPU-intensive)
+                        def clean_and_embed():
+                            clean_text = TextCleaner.clean_text(text)
+                            
+                            # Truncate to safe limit
+                            max_chars = 8000
+                            if len(clean_text) > max_chars:
+                                clean_text = clean_text[:max_chars]
+                            
+                            # Ensure not empty
+                            if not clean_text or not clean_text.strip():
+                                clean_text = "Email content not available"
+                            
+                            # Call embedding function (may be network I/O)
+                            return self.app_state.EMBEDDING_FUNCTION(clean_text, prefix="", user=None)
                         
-                        # Ensure text is not empty after cleaning
-                        if not clean_text or not clean_text.strip():
-                            logger.warning("Text is empty after cleaning, using placeholder")
-                            clean_text = "Email content not available"
-                        
-                        logger.debug(f"Embedding text: len={len(clean_text)}, preview={clean_text[:100]}...")
-                        
-                        vector = self.app_state.EMBEDDING_FUNCTION(clean_text, prefix="", user=None)
+                        vector = await loop.run_in_executor(None, clean_and_embed)
                         
                         if vector is None:
                             raise ValueError("Embedding function returned None")
                         
-                        embeddings.append(vector)
+                        return vector
+                        
                     except Exception as e:
-                        logger.error(f"Embedding error for text (len={len(text)}): {e}")
-                        logger.error(f"Text preview: {text[:200]}...")
+                        logger.error(f"Embedding error: {e}")
                         # Fallback to zero vector
-                        dim = 1536  # Default dimension
                         try:
                             dim = int(self.app_state.config.PINECONE_DIMENSION)
                         except:
-                            pass
-                        embeddings.append([0.0] * dim)
+                            dim = 1536
+                        return [0.0] * dim
+                
+                # Process embeddings concurrently but with small batches to avoid overwhelming
+                embeddings = []
+                batch_size = 5  # Small batch to keep event loop responsive
+                
+                for i in range(0, len(texts), batch_size):
+                    batch = texts[i:i + batch_size]
+                    batch_embeddings = await asyncio.gather(*[embed_single(t) for t in batch])
+                    embeddings.extend(batch_embeddings)
+                    
+                    # Yield control to event loop between batches
+                    await asyncio.sleep(0)
                 
                 return embeddings
         
@@ -529,22 +544,31 @@ async def _background_gmail_sync(request, user_id: str, oauth_token: dict):
                 return min(score, 5)
         
         class SimplePineconeManager:
-            """Thin wrapper around VECTOR_DB_CLIENT for Gmail email storage"""
+            """
+            Thin wrapper around VECTOR_DB_CLIENT for Gmail email storage.
+            
+            Uses collection-based isolation (not namespaces):
+            - Each user has their own collection: gmail_{user_id}
+            - User isolation via collection name + metadata user_id
+            - Compatible with Open WebUI's vector DB abstraction
+            """
             def __init__(self, namespace):
-                self.namespace = namespace
+                self.namespace = namespace  # Not used (Open WebUI doesn't support namespaces in abstraction)
             
             async def schedule_upsert(self, upsert_data: List[dict], namespace: str = None):
                 """
                 Upsert vectors using existing VECTOR_DB_CLIENT (from pinecone.py).
                 
+                User Isolation Strategy:
+                - Collection name: gmail_{user_id} (primary isolation)
+                - Metadata user_id: {user_id} (secondary filter)
+                - Type metadata: "email" (document type filter)
+                
                 Runs in thread executor to avoid blocking the async event loop.
-                Reuses all the proven logic from Open WebUI's vector DB system.
                 """
                 from open_webui.retrieval.vector.factory import VECTOR_DB_CLIENT
                 
                 # VECTOR_DB_CLIENT.upsert expects List[dict] with keys: id, text, vector, metadata
-                # Our upsert_data has: id, values, metadata
-                # Convert "values" → "vector" and extract "text" from metadata
                 items = [
                     {
                         "id": item["id"],
@@ -555,10 +579,13 @@ async def _background_gmail_sync(request, user_id: str, oauth_token: dict):
                     for item in upsert_data
                 ]
                 
+                # Collection-based isolation: each user has their own collection
                 collection_name = f"gmail_{user_id}"
                 
+                logger.info(f"📤 Upserting {len(items)} vectors to collection: {collection_name}")
+                
                 try:
-                    # Use existing VECTOR_DB_CLIENT.upsert (handles batching, namespaces, etc.)
+                    # Use existing VECTOR_DB_CLIENT.upsert (handles batching, errors, retries)
                     # Run in thread executor to avoid blocking async event loop
                     loop = asyncio.get_running_loop()
                     await loop.run_in_executor(
@@ -567,7 +594,7 @@ async def _background_gmail_sync(request, user_id: str, oauth_token: dict):
                         collection_name,
                         items
                     )
-                    logger.info(f"✅ Upserted {len(items)} vectors to {collection_name} via VECTOR_DB_CLIENT")
+                    logger.info(f"✅ Upserted {len(items)} vectors to collection {collection_name}")
                 except Exception as e:
                     logger.error(f"❌ Vector DB upsert error: {e}")
                     raise
