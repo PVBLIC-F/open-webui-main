@@ -16,6 +16,7 @@ This is the bridge between Gmail parsing and your existing RAG system.
 
 import logging
 import time
+import asyncio
 from datetime import datetime
 from typing import Dict, List, Optional
 
