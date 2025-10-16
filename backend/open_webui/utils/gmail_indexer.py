@@ -273,6 +273,10 @@ class GmailIndexer:
                 # Clear the large email_data after processing to free memory
                 email_data.clear()
                 
+                # Yield to event loop every 10 emails to keep interface responsive
+                if processed_count % 10 == 0:
+                    await asyncio.sleep(0)
+                
             except Exception as e:
                 email_id = email_data.get("id", "unknown")
                 logger.error(f"Error processing email {email_id}: {e}")
