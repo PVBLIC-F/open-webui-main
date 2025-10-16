@@ -462,6 +462,13 @@ async def _background_gmail_sync(request, user_id: str, oauth_token: dict):
                             clean_text = clean_text[:max_chars]
                             logger.warning(f"Truncated text from {len(text)} to {max_chars} chars for embedding")
                         
+                        # Ensure text is not empty after cleaning
+                        if not clean_text or not clean_text.strip():
+                            logger.warning("Text is empty after cleaning, using placeholder")
+                            clean_text = "Email content not available"
+                        
+                        logger.debug(f"Embedding text: len={len(clean_text)}, preview={clean_text[:100]}...")
+                        
                         vector = self.app_state.EMBEDDING_FUNCTION(clean_text, prefix="", user=None)
                         
                         if vector is None:
