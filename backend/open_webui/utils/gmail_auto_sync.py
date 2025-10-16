@@ -601,9 +601,9 @@ async def _background_gmail_sync(request, user_id: str, oauth_token: dict):
                         None,
                         VECTOR_DB_CLIENT.upsert,
                         collection_name,
-                        items
+                        valid_items
                     )
-                    logger.info(f"✅ Upserted {len(items)} vectors to collection {collection_name}")
+                    logger.info(f"✅ Upserted {len(valid_items)} vectors to collection {collection_name}")
                 except Exception as e:
                     logger.error(f"❌ Vector DB upsert error: {e}")
                     raise
