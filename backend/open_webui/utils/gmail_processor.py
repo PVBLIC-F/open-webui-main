@@ -16,6 +16,8 @@ from email.utils import parsedate_to_datetime
 from typing import Dict, List, Optional, Tuple
 from html import unescape
 
+from open_webui.utils.email_cleaner import EmailCleaner
+
 # Set up logger with INFO level for visibility
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -77,8 +79,14 @@ class GmailProcessor:
             
             # Extract email body
             payload = email_data.get("payload", {})
-            body = self._extract_body(payload)
+            body_raw = self._extract_body(payload)
             snippet = email_data.get("snippet", "")
+            
+            # Clean email body with advanced cleaning
+            body_full_clean, body_original_only = EmailCleaner.clean_email_body(body_raw)
+            
+            # Use original message (no quotes/signatures) for primary content
+            body_clean = body_original_only if body_original_only else body_full_clean
             
             # Extract labels
             labels = email_data.get("labelIds", [])
@@ -86,17 +94,25 @@ class GmailProcessor:
             # Check for attachments
             has_attachments = self._has_attachments(payload)
             
-            # Create document text (what will be embedded)
+            # Parse email addresses
+            from_name, from_email = EmailCleaner.parse_email_address(from_addr)
+            to_name, to_email = EmailCleaner.parse_email_address(to_addr)
+            
+            # Detect if this is a reply
+            is_reply = "RE:" in subject.upper() or "Re:" in subject or any(label == "SENT" for label in labels)
+            
+            # Create document text (what will be embedded) - cleaner format
             document_text = self._create_document_text(
                 subject=subject,
-                from_addr=from_addr,
-                to_addr=to_addr,
+                from_name=from_name,
+                from_email=from_email,
+                to_email=to_email,
                 date_readable=date_readable,
-                body=body,
+                body=body_clean,
                 snippet=snippet
             )
             
-            # Build metadata (matching your chat summary pattern)
+            # Build metadata (improved structure for better search)
             metadata = {
                 # Core identification
                 "type": "email",
@@ -104,19 +120,29 @@ class GmailProcessor:
                 "thread_id": thread_id,
                 "user_id": user_id,
                 
-                # Email fields
+                # Email fields (structured)
                 "subject": subject,
-                "from": from_addr,
-                "to": to_addr,
+                "from_name": from_name,
+                "from_email": from_email,
+                "from_raw": from_addr,  # Keep original for reference
+                "to_name": to_name,
+                "to_email": to_email,
+                "to_raw": to_addr,
                 "cc": cc_addr,
                 "date": date_readable,
                 "date_timestamp": date_timestamp,
-                "labels": ",".join(labels),
+                "labels": labels,  # Keep as array, not comma-separated string
                 
                 # Content metadata
                 "has_attachments": has_attachments,
-                "body_length": len(body),
-                "snippet_length": len(snippet),
+                "is_reply": is_reply,
+                "word_count": len(body_clean.split()),
+                "body_length": len(body_clean),
+                "original_body_length": len(body_raw),
+                
+                # Cleaned text fields
+                "body_full_clean": body_full_clean,  # Full email with cleaned quotes
+                "body_original": body_clean,  # Just the original message
                 
                 # Categorization
                 "source": "gmail",
@@ -133,7 +159,8 @@ class GmailProcessor:
                 "thread_id": thread_id,
                 "document_text": document_text,
                 "metadata": metadata,
-                "raw_body": body,
+                "raw_body": body_raw,
+                "cleaned_body": body_clean,
                 "snippet": snippet,
             }
             
@@ -352,32 +379,29 @@ class GmailProcessor:
     def _create_document_text(
         self,
         subject: str,
-        from_addr: str,
-        to_addr: str,
+        from_name: str,
+        from_email: str,
+        to_email: str,
         date_readable: str,
         body: str,
         snippet: str
     ) -> str:
         """
-        Create the document text that will be embedded and indexed.
+        Create clean document text for embedding.
         
-        This is what gets sent to the embedding model and stored for semantic search.
+        Simple, clean format without headers (better for semantic search).
         """
         
-        # Use body if available, otherwise use snippet
+        # Use cleaned body if available, otherwise snippet
         content = body if body else snippet
         
-        # Build structured document
-        document_text = f"""Email Subject: {subject}
-From: {from_addr}
-To: {to_addr}
-Date: {date_readable}
-
-Email Content:
-{content}
-        """.strip()
+        # Build clean document - just subject and content (no "Email Subject:" labels)
+        if subject and subject != "(No Subject)":
+            document_text = f"{subject}\n\n{content}"
+        else:
+            document_text = content
         
-        return document_text
+        return document_text.strip()
 
 
 # ============================================================================
