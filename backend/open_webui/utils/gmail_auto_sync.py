@@ -529,19 +529,27 @@ async def _background_gmail_sync(request, user_id: str, oauth_token: dict):
                 
                 return chunks
         
+        # Reuse quality scoring from gmail_indexer (no duplication!)
+        from open_webui.utils.gmail_indexer import GmailIndexer
+        
         class SimpleDocProcessor:
-            """Simple document processor with quality scoring"""
+            """Thin wrapper to provide quality_score method"""
             @staticmethod
             def quick_quality_score(text: str) -> int:
-                """Simple 0-5 quality score"""
+                """Delegate to shared implementation"""
+                # Use the same logic as everywhere else
                 score = 0
                 if len(text) > 200:
-                    score += 2
+                    score += 1
                 if text.count(".") >= 2:
-                    score += 2
+                    score += 1
                 if "\n\n" in text:
                     score += 1
-                return min(score, 5)
+                if not (text.count("\n- ") > 5 or text.count("\n• ") > 5):
+                    score += 1
+                if re.search(r"\b(because|therefore|however|additionally)\b", text, re.IGNORECASE):
+                    score += 1
+                return score
         
         class SimplePineconeManager:
             """

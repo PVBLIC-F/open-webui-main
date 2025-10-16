@@ -22,6 +22,7 @@ from typing import Dict, List, Optional
 
 from open_webui.utils.gmail_processor import GmailProcessor
 from open_webui.utils.text_cleaner import TextCleaner
+from openai import AsyncOpenAI
 
 # Set up logger with INFO level for visibility
 logger = logging.getLogger(__name__)
@@ -47,6 +48,8 @@ class GmailIndexer:
         content_aware_splitter,
         document_processor,
         gmail_namespace: str = "gmail-inbox",
+        summarizer_client: AsyncOpenAI = None,
+        summarizer_model: str = None,
     ):
         """
         Initialize indexer with existing services.
@@ -56,12 +59,16 @@ class GmailIndexer:
             content_aware_splitter: ContentAwareTextSplitter instance
             document_processor: DocumentProcessor instance for quality scoring
             gmail_namespace: Pinecone namespace for Gmail emails (from PINECONE_NAMESPACE_GMAIL env var)
+            summarizer_client: OpenAI client for summarization (optional)
+            summarizer_model: Model for summarization (optional)
         """
         self.gmail_processor = GmailProcessor()
         self.embeddings = embedding_service
         self.splitter = content_aware_splitter
         self.doc_processor = document_processor
-        self.namespace = gmail_namespace  # Store namespace for Pinecone operations
+        self.namespace = gmail_namespace
+        self.summarizer_client = summarizer_client
+        self.summarizer_model = summarizer_model
 
     async def process_email_for_indexing(
         self,
@@ -103,18 +110,54 @@ class GmailIndexer:
         if not chunks:
             chunks = [document_text]  # Fallback to single chunk
         
-        logger.info(f"Email {email_id} split into {len(chunks)} chunks")
+        logger.info(f"Email {email_id} will have {len(chunks)} chunk(s)")
         
-        # Step 3: Generate embeddings for all chunks
-        chunk_embeddings = await self.embeddings.embed_batch(chunks)
+        # Step 3: Generate email summary (1-2 sentences)
+        email_summary = await self._generate_summary(
+            base_metadata.get("subject", ""),
+            base_metadata.get("body_original", "")
+        )
         
-        logger.info(f"Generated {len(chunk_embeddings)} embeddings for email {email_id}")
+        # Step 4: Build dual-representation vectors
+        # Vector 1: Always create a summary vector (for email discovery)
+        # Vectors 2-N: Content chunks (for long emails only)
         
-        # Step 4: Build upsert data (matching chat summary format)
+        all_chunks = []
+        all_embeddings = []
+        chunk_types = []
+        
+        # Always add summary as first "chunk"
+        summary_text = self._build_summary_text(
+            base_metadata.get("subject", ""),
+            base_metadata.get("from_name", ""),
+            base_metadata.get("date", ""),
+            email_summary
+        )
+        all_chunks.append(summary_text)
+        chunk_types.append("summary")
+        
+        # Add content chunks if email is long (include subject in each chunk)
+        if len(chunks) > 1 or len(document_text) > 1500:
+            for i, chunk in enumerate(chunks):
+                # Include subject with each chunk for context
+                chunk_with_subject = f"{base_metadata.get('subject', '')}\n\n{chunk}"
+                all_chunks.append(chunk_with_subject)
+                chunk_types.append("content")
+        
+        logger.info(f"Email {email_id}: 1 summary + {len(chunks) if len(chunks) > 1 else 0} content vectors")
+        
+        # Step 5: Generate embeddings for all chunks (summary + content)
+        all_embeddings = await self.embeddings.embed_batch(all_chunks)
+        
+        logger.info(f"Generated {len(all_embeddings)} embeddings for email {email_id}")
+        
+        # Step 6: Build upsert data with dual representation
         upsert_data = self._build_upsert_data(
-            chunks=chunks,
-            embeddings=chunk_embeddings,
+            chunks=all_chunks,
+            embeddings=all_embeddings,
+            chunk_types=chunk_types,
             base_metadata=base_metadata,
+            email_summary=email_summary,
         )
         
         processing_time = time.time() - start_time
@@ -132,11 +175,79 @@ class GmailIndexer:
             "processing_time": processing_time,
         }
     
+    async def _generate_summary(self, subject: str, body: str) -> str:
+        """
+        Generate 1-2 sentence summary of the email.
+        
+        Uses OpenAI/OpenRouter if available, otherwise creates extractive summary.
+        """
+        
+        # If no summarizer, create extractive summary
+        if not self.summarizer_client or not self.summarizer_model:
+            return self._extractive_summary(subject, body)
+        
+        try:
+            # Use AI to generate concise summary
+            prompt = f"Summarize this email in 1-2 sentences:\n\nSubject: {subject}\n\n{body[:1000]}"
+            
+            response = await asyncio.wait_for(
+                self.summarizer_client.chat.completions.create(
+                    model=self.summarizer_model,
+                    messages=[
+                        {"role": "system", "content": "You are an expert at summarizing emails concisely. Create 1-2 sentence summaries."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.3,
+                    max_tokens=100
+                ),
+                timeout=10.0
+            )
+            
+            summary = response.choices[0].message.content.strip()
+            logger.debug(f"AI summary generated: {summary}")
+            return summary
+            
+        except Exception as e:
+            logger.warning(f"AI summarization failed: {e}, using extractive")
+            return self._extractive_summary(subject, body)
+    
+    def _extractive_summary(self, subject: str, body: str) -> str:
+        """Create extractive summary (first 2 sentences of body)"""
+        if not body:
+            return subject
+        
+        # Get first 2 sentences
+        sentences = body.split('. ')[:2]
+        summary = '. '.join(sentences)
+        
+        # Limit length
+        if len(summary) > 200:
+            summary = summary[:200] + "..."
+        
+        return summary
+    
+    def _build_summary_text(self, subject: str, from_name: str, date: str, summary: str) -> str:
+        """Build the summary vector text (for email discovery)"""
+        parts = []
+        
+        if subject:
+            parts.append(f"Subject: {subject}")
+        if from_name:
+            parts.append(f"From: {from_name}")
+        if date:
+            parts.append(f"Date: {date}")
+        if summary:
+            parts.append(f"\n{summary}")
+        
+        return "\n".join(parts)
+    
     def _build_upsert_data(
         self,
         chunks: List[str],
         embeddings: List[List[float]],
+        chunk_types: List[str],
         base_metadata: Dict,
+        email_summary: str,
     ) -> List[Dict]:
         """
         Build Pinecone upsert data matching chat summary format.
@@ -157,26 +268,30 @@ class GmailIndexer:
         email_id = base_metadata["email_id"]
         user_id = base_metadata["user_id"]
         
-        for i, (chunk_text, chunk_vec) in enumerate(zip(chunks, embeddings)):
+        for i, (chunk_text, chunk_vec, chunk_type) in enumerate(zip(chunks, embeddings, chunk_types)):
             
-            # Calculate quality score (reusing DocumentProcessor logic)
+            # Calculate quality score
             quality_score = self.doc_processor.quick_quality_score(chunk_text)
             
-            # Create unique record ID
-            rec_id = f"email-{email_id}-{int(time.time())}-{i}"
+            # Create unique record ID with type
+            rec_id = f"email-{email_id}-{chunk_type}-{int(time.time())}-{i}"
             
-            # Build metadata matching chat summary structure
+            # Build metadata with chunk type
             metadata = {
-                # Core identification (CHANGED from chat to email)
-                "type": "email",  # ← Was "chat" in chat summaries
-                "email_id": email_id,  # ← Like "chat_id"
+                # Core identification
+                "type": "email",
+                "email_id": email_id,
                 "thread_id": base_metadata["thread_id"],
                 "user_id": user_id,
                 
-                # Content (SAME structure as chat)
+                # Content with chunk type
                 "chunk_text": TextCleaner.clean_for_pinecone(chunk_text),
+                "chunk_type": chunk_type,  # "summary" or "content"
                 "chunk_index": i,
                 "total_chunks": len(chunks),
+                
+                # Email summary (for all chunks)
+                "email_summary": email_summary,
                 
                 # Timing (SAME structure as chat)
                 "timestamp": datetime.utcnow().isoformat() + "Z",
