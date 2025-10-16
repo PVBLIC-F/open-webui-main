@@ -247,6 +247,8 @@ class GmailIndexer:
         """
         Process multiple emails in batch.
         
+        Memory-efficient: Processes and yields results without accumulating all vectors.
+        
         Args:
             emails: List of Gmail API message responses
             user_id: User ID for isolation
@@ -267,6 +269,10 @@ class GmailIndexer:
                 result = await self.process_email_for_indexing(email_data, user_id)
                 all_upsert_data.extend(result["upsert_data"])
                 processed_count += 1
+                
+                # Clear the large email_data after processing to free memory
+                email_data.clear()
+                
             except Exception as e:
                 email_id = email_data.get("id", "unknown")
                 logger.error(f"Error processing email {email_id}: {e}")

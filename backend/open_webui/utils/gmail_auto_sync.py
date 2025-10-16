@@ -179,11 +179,15 @@ class GmailAutoSync:
             indexed_count = await self._process_and_index_batch(
                 emails=emails,
                 user_id=user_id,
-                batch_size=100,
+                batch_size=50,  # Reduced from 100 to prevent memory buildup
             )
             
             self.active_syncs[user_id]["indexed"] = indexed_count
             self.active_syncs[user_id]["status"] = "completed"
+            
+            # Clear emails list to free memory
+            emails.clear()
+            del emails
             
             result = self._build_sync_result(user_id)
             
@@ -262,8 +266,15 @@ class GmailAutoSync:
                     logger.info(f"   ✅ Errors: {result['errors']}")
                     logger.info(f"   ✅ Processing time: {result['processing_time']:.2f}s")
                     logger.info(f"   📊 Running total: {total_indexed} emails, {total_vectors} vectors")
+                    
+                    # Clear upsert_data to free memory after upserting
+                    upsert_data.clear()
+                    del result
                 
                 self.active_syncs[user_id]["processed"] = i + len(batch)
+                
+                # Clear processed batch to free memory
+                batch.clear()
                 
             except Exception as e:
                 logger.error(f"Error processing batch {batch_num}: {e}")
@@ -447,13 +458,14 @@ async def _background_gmail_sync(request, user_id: str, oauth_token: dict):
             
             async def embed_batch(self, texts: List[str]) -> List[List[float]]:
                 """Generate embeddings using Open WebUI's embedding function"""
+                from open_webui.utils.text_cleaner import TextCleaner  # Import once, not in loop
+                
                 embeddings = []
                 
                 # Use existing embedding function from app state
                 for text in texts:
                     try:
                         # Clean text before embedding (critical!)
-                        from open_webui.utils.text_cleaner import TextCleaner
                         clean_text = TextCleaner.clean_text(text)
                         
                         # Truncate to safe limit: 8191 tokens ≈ 8000 chars (very conservative)
@@ -517,50 +529,47 @@ async def _background_gmail_sync(request, user_id: str, oauth_token: dict):
                 return min(score, 5)
         
         class SimplePineconeManager:
-            """Wrapper for Pinecone upsert operations"""
+            """Thin wrapper around VECTOR_DB_CLIENT for Gmail email storage"""
             def __init__(self, namespace):
                 self.namespace = namespace
             
             async def schedule_upsert(self, upsert_data: List[dict], namespace: str = None):
                 """
-                Async upsert to Pinecone using thread executor to avoid blocking.
+                Upsert vectors using existing VECTOR_DB_CLIENT (from pinecone.py).
                 
-                Uses asyncio.run_in_executor to run the synchronous VECTOR_DB_CLIENT.upsert()
-                in a thread pool, preventing it from blocking the async event loop.
+                Runs in thread executor to avoid blocking the async event loop.
+                Reuses all the proven logic from Open WebUI's vector DB system.
                 """
                 from open_webui.retrieval.vector.factory import VECTOR_DB_CLIENT
-                from open_webui.retrieval.vector.main import VectorItem
                 
-                # Convert to VectorItem format
+                # VECTOR_DB_CLIENT.upsert expects List[dict] with keys: id, text, vector, metadata
+                # Our upsert_data has: id, values, metadata
+                # Convert "values" → "vector" and extract "text" from metadata
                 items = [
-                    VectorItem(
-                        id=item["id"],
-                        vector=item["values"],
-                        text=item["metadata"].get("chunk_text", ""),
-                        metadata=item["metadata"]
-                    )
+                    {
+                        "id": item["id"],
+                        "text": item["metadata"].get("chunk_text", ""),
+                        "vector": item["values"],
+                        "metadata": item["metadata"]
+                    }
                     for item in upsert_data
                 ]
                 
-                # Use namespace parameter if provided, otherwise use instance namespace
-                ns = namespace if namespace is not None else self.namespace
-                
-                # Note: VECTOR_DB_CLIENT uses collection_name, not namespace
-                # For Pinecone, we'll use collection_name pattern
                 collection_name = f"gmail_{user_id}"
                 
                 try:
-                    # Run synchronous upsert in thread executor (non-blocking)
+                    # Use existing VECTOR_DB_CLIENT.upsert (handles batching, namespaces, etc.)
+                    # Run in thread executor to avoid blocking async event loop
                     loop = asyncio.get_running_loop()
                     await loop.run_in_executor(
-                        None,  # Use default thread pool executor
+                        None,
                         VECTOR_DB_CLIENT.upsert,
                         collection_name,
                         items
                     )
-                    logger.info(f"✅ Upserted {len(items)} vectors to collection {collection_name}")
+                    logger.info(f"✅ Upserted {len(items)} vectors to {collection_name} via VECTOR_DB_CLIENT")
                 except Exception as e:
-                    logger.error(f"Pinecone upsert error: {e}")
+                    logger.error(f"❌ Vector DB upsert error: {e}")
                     raise
         
         # Initialize services
