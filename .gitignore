@@ -1,6 +1,8 @@
 x.py
 yarn.lock
 .DS_Store
+*_LOCAL_TEST.py
+*_LOCAL_TEST.md
 node_modules
 /build
 /.svelte-kit
