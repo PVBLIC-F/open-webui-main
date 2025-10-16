@@ -213,19 +213,61 @@ class GmailIndexer:
             return self._extractive_summary(subject, body)
     
     def _extractive_summary(self, subject: str, body: str) -> str:
-        """Create extractive summary (first 2 sentences of body)"""
+        """
+        Create smart extractive summary (skip greetings, find meaningful content).
+        
+        Skips common email greetings/closings to extract actual content.
+        """
         if not body:
             return subject
         
-        # Get first 2 sentences
-        sentences = body.split('. ')[:2]
-        summary = '. '.join(sentences)
+        # Split into sentences
+        all_sentences = [s.strip() for s in body.split('. ') if s.strip()]
+        
+        # Common greetings/closings to skip (one-liners that add no value)
+        skip_patterns = [
+            r'^(hi|hello|hey|dear)\s*,?\s*$',
+            r'^thanks?\s*,?\s*$',
+            r'^thank you\s*,?\s*$',
+            r'^best\s*(regards?)?\s*,?\s*$',
+            r'^regards?\s*,?\s*$',
+            r'^sincerely\s*,?\s*$',
+            r'^cheers\s*,?\s*$',
+            r'see you',
+            r'talk soon',
+        ]
+        
+        # Filter out greetings/closings
+        meaningful_sentences = []
+        for sent in all_sentences:
+            sent_lower = sent.lower().strip()
+            
+            # Skip if matches greeting pattern
+            if any(re.match(pattern, sent_lower, re.IGNORECASE) for pattern in skip_patterns):
+                continue
+            
+            # Skip very short sentences (likely not meaningful)
+            if len(sent.split()) < 3:
+                continue
+            
+            meaningful_sentences.append(sent)
+        
+        # If we filtered everything out, use original first 2
+        if not meaningful_sentences:
+            meaningful_sentences = all_sentences[:2]
+        
+        # Take first 2 meaningful sentences
+        summary = '. '.join(meaningful_sentences[:2])
         
         # Clean for metadata storage (remove newlines, normalize spaces)
         summary = summary.replace('\n', ' ')
         summary = summary.replace('\r', ' ')
         summary = re.sub(r'\s+', ' ', summary)  # Normalize multiple spaces
         summary = summary.strip()
+        
+        # Add period if missing
+        if summary and not summary.endswith('.'):
+            summary = summary + '.'
         
         # Limit length
         if len(summary) > 200:
@@ -234,19 +276,23 @@ class GmailIndexer:
         return summary
     
     def _build_summary_text(self, subject: str, from_name: str, date: str, summary: str) -> str:
-        """Build the summary vector text (for email discovery)"""
-        parts = []
+        """
+        Build clean summary vector text for better semantic search.
         
-        if subject:
-            parts.append(f"Subject: {subject}")
-        if from_name:
-            parts.append(f"From: {from_name}")
-        if date:
-            parts.append(f"Date: {date}")
-        if summary:
-            parts.append(f"\n{summary}")
+        Format: "Subject - Summary"
+        All metadata (from, date, etc.) stored in structured fields, not in embedding text.
+        This makes embeddings more focused and improves search quality.
+        """
         
-        return "\n".join(parts)
+        # Simple, clean format: just subject and summary
+        if subject and summary:
+            return f"{subject} - {summary}"
+        elif subject:
+            return subject
+        elif summary:
+            return summary
+        else:
+            return "Email"  # Fallback
     
     def _build_upsert_data(
         self,
