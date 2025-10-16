@@ -456,10 +456,11 @@ async def _background_gmail_sync(request, user_id: str, oauth_token: dict):
                         from open_webui.utils.text_cleaner import TextCleaner
                         clean_text = TextCleaner.clean_text(text)
                         
-                        # Truncate if too long (8191 tokens ~ 32k chars for safety)
-                        if len(clean_text) > 30000:
-                            clean_text = clean_text[:30000]
-                            logger.warning(f"Truncated text from {len(text)} to 30000 chars for embedding")
+                        # Truncate to safe limit: 8191 tokens ≈ 8000 chars (very conservative)
+                        max_chars = 8000
+                        if len(clean_text) > max_chars:
+                            clean_text = clean_text[:max_chars]
+                            logger.warning(f"Truncated text from {len(text)} to {max_chars} chars for embedding")
                         
                         vector = self.app_state.EMBEDDING_FUNCTION(clean_text, prefix="", user=None)
                         
