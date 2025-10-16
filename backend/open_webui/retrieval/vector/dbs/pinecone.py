@@ -53,7 +53,12 @@ class PineconeClient(VectorDBBase):
         self.api_key = PINECONE_API_KEY
         self.environment = PINECONE_ENVIRONMENT
         self.index_name = PINECONE_INDEX_NAME
-        self.dimension = PINECONE_DIMENSION
+        # Extract actual values from PersistentConfig objects
+        self.dimension = (
+            PINECONE_DIMENSION.value
+            if hasattr(PINECONE_DIMENSION, "value")
+            else PINECONE_DIMENSION
+        )
         self.metric = PINECONE_METRIC
         self.cloud = PINECONE_CLOUD
 

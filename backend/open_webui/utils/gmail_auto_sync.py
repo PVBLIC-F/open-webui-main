@@ -195,11 +195,12 @@ class GmailAutoSync:
             logger.info("")
             logger.info("="*70)
             logger.info(f"🎉 GMAIL SYNC COMPLETED - User: {user_id}")
-            logger.info(f"   Total emails found: {result['total_emails']}")
+            logger.info(f"   Total emails fetched: {result['total_emails']}")
             logger.info(f"   Successfully indexed: {result['indexed']}")
+            logger.info(f"   Duplicates skipped: {self.active_syncs[user_id].get('duplicates_skipped', 0)}")
             logger.info(f"   Errors: {result['errors']}")
             logger.info(f"   Total time: {result['total_time']:.1f}s")
-            logger.info(f"   Emails/second: {result['indexed']/result['total_time']:.1f}" if result['total_time'] > 0 else "   Emails/second: N/A")
+            logger.info(f"   Processing rate: {result['indexed']/result['total_time']:.1f} emails/sec" if result['total_time'] > 0 else "   Processing rate: N/A")
             logger.info(f"   Status: ✅ SUCCESS")
             logger.info("="*70)
             
@@ -262,7 +263,10 @@ class GmailAutoSync:
                     total_indexed += result["processed"]
                     total_vectors += result["total_vectors"]
                     
-                    logger.info(f"   ✅ Processed: {result['processed']} emails")
+                    duplicates = result.get('duplicates_skipped', 0)
+                    logger.info(f"   ✅ Processed: {result['processed']} unique emails")
+                    if duplicates > 0:
+                        logger.info(f"   ⏭️  Skipped: {duplicates} duplicate emails (mass email deduplication)")
                     logger.info(f"   ✅ Vectors created: {result['total_vectors']}")
                     logger.info(f"   ✅ Errors: {result['errors']}")
                     logger.info(f"   ✅ Processing time: {result['processing_time']:.2f}s")
