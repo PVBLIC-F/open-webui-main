@@ -18,6 +18,7 @@ import logging
 import time
 import asyncio
 import re
+import hashlib
 from datetime import datetime
 from typing import Dict, List, Optional
 
@@ -275,6 +276,32 @@ class GmailIndexer:
         
         return summary
     
+    def _create_content_fingerprint(self, snippet: str) -> str:
+        """
+        Create content fingerprint for duplicate detection.
+        
+        Uses Gmail snippet (first ~150 chars) to detect mass emails.
+        Mass emails sent to 200 people will all have identical snippets.
+        
+        Args:
+            snippet: Gmail API snippet (preview of email content)
+            
+        Returns:
+            SHA256 hash of normalized snippet
+        """
+        if not snippet:
+            return "empty"
+        
+        # Normalize snippet for consistent hashing
+        normalized = snippet.lower().strip()
+        normalized = re.sub(r'\s+', ' ', normalized)  # Normalize whitespace
+        
+        # Take first 100 chars (enough to detect duplicates, ignore minor variations)
+        fingerprint_text = normalized[:100]
+        
+        # Create hash
+        return hashlib.sha256(fingerprint_text.encode()).hexdigest()[:16]
+    
     def _build_summary_text(self, subject: str, from_name: str, date: str, summary: str) -> str:
         """
         Build clean summary vector text for better semantic search.
@@ -418,8 +445,9 @@ class GmailIndexer:
         user_id: str,
     ) -> Dict:
         """
-        Process multiple emails in batch.
+        Process multiple emails in batch with content deduplication.
         
+        Detects and skips mass emails (same content sent to multiple people).
         Memory-efficient: Processes and yields results without accumulating all vectors.
         
         Args:
@@ -434,11 +462,36 @@ class GmailIndexer:
         all_upsert_data = []
         processed_count = 0
         error_count = 0
+        duplicate_count = 0
+        seen_content = {}  # content_hash -> email_id (track duplicates)
         
         logger.info(f"Processing batch of {len(emails)} emails for user {user_id}")
         
         for email_data in emails:
             try:
+                # Generate content fingerprint for deduplication
+                email_id = email_data.get("id", "unknown")
+                snippet = email_data.get("snippet", "")
+                
+                # Create fingerprint from snippet (first ~150 chars of email)
+                # Mass emails will have identical snippets
+                content_fingerprint = self._create_content_fingerprint(snippet)
+                
+                # Check if we've seen this content before
+                if content_fingerprint in seen_content:
+                    duplicate_count += 1
+                    original_email_id = seen_content[content_fingerprint]
+                    logger.info(
+                        f"⏭️  Skipping duplicate content: email {email_id} "
+                        f"(same as {original_email_id}) - Mass email detected"
+                    )
+                    email_data.clear()
+                    continue
+                
+                # Track this content
+                seen_content[content_fingerprint] = email_id
+                
+                # Process unique email
                 result = await self.process_email_for_indexing(email_data, user_id)
                 all_upsert_data.extend(result["upsert_data"])
                 processed_count += 1
@@ -459,13 +512,17 @@ class GmailIndexer:
         batch_time = time.time() - batch_start
         
         logger.info(
-            f"Batch processing complete: {processed_count} emails processed, "
-            f"{error_count} errors, {len(all_upsert_data)} vectors, "
-            f"{batch_time:.2f}s"
+            f"Batch processing complete: {processed_count} unique emails processed, "
+            f"{duplicate_count} duplicates skipped, {error_count} errors, "
+            f"{len(all_upsert_data)} vectors, {batch_time:.2f}s"
         )
+        
+        if duplicate_count > 0:
+            logger.info(f"💡 Deduplication saved {duplicate_count} embeddings (mass emails detected)")
         
         return {
             "processed": processed_count,
+            "duplicates_skipped": duplicate_count,
             "errors": error_count,
             "total_vectors": len(all_upsert_data),
             "upsert_data": all_upsert_data,
