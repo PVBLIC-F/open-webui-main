@@ -557,6 +557,48 @@ async def get_user_groups_by_id(user_id: str, user=Depends(get_admin_user)):
     return Groups.get_groups_by_member_id(user_id)
 
 
+@router.post("/{user_id}/gmail-sync/reset")
+async def reset_user_gmail_sync(user_id: str, user=Depends(get_admin_user)):
+    """
+    Reset Gmail sync status for a user (admin only).
+    
+    This will trigger a full sync on the next periodic sync cycle.
+    Use this when a user has deleted their Pinecone records or needs to rebuild their index.
+    """
+    from open_webui.models.gmail_sync import gmail_sync_status
+    
+    sync_status = gmail_sync_status.get_sync_status(user_id)
+    if not sync_status:
+        return {
+            "success": False,
+            "message": "No sync status found for this user"
+        }
+    
+    # Reset sync status to trigger full sync
+    updated = gmail_sync_status.update_sync_status(
+        user_id=user_id,
+        last_sync_timestamp=None,
+        sync_status="never",
+        total_emails_synced=0,
+        last_sync_count=0,
+        error_count=0,
+        last_error=None
+    )
+    
+    if updated:
+        return {
+            "success": True,
+            "message": f"Gmail sync reset for user {user_id}. Full sync will occur on next cycle.",
+            "user_id": user_id,
+            "next_sync": "Will be triggered by periodic scheduler (within 30 minutes)"
+        }
+    else:
+        return {
+            "success": False,
+            "message": "Failed to reset sync status"
+        }
+
+
 @router.get("/{user_id}/gmail-sync-status")
 async def get_user_gmail_sync_status(user_id: str, user=Depends(get_admin_user)):
     """
