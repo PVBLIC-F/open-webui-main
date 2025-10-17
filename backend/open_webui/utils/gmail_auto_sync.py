@@ -994,7 +994,8 @@ async def periodic_gmail_sync_scheduler():
             # Dynamic configuration reload (supports runtime updates)
             try:
                 from open_webui.config import GMAIL_PERIODIC_SYNC_INTERVAL_HOURS
-                sync_interval_hours = GMAIL_PERIODIC_SYNC_INTERVAL_HOURS
+                # Extract value from PersistentConfig object
+                sync_interval_hours = int(GMAIL_PERIODIC_SYNC_INTERVAL_HOURS)
             except Exception as e:
                 logger.warning(f"Failed to load sync interval config, using default: {e}")
                 sync_interval_hours = 6
