@@ -1375,8 +1375,10 @@ class OAuthManager:
             
             log.info(f"🔥 Gmail sync check: is_new_oauth_session={is_new_oauth_session}, provider={provider}")
             
-            if is_new_oauth_session and provider == "google":
-                log.info(f"🚀 Attempting to trigger Gmail sync for user {user.id}")
+            # Always check Gmail sync for Google OAuth (not just new sessions)
+            # The trigger function will check admin settings and user preferences
+            if provider == "google":
+                log.info(f"🚀 Checking Gmail sync eligibility for user {user.id}")
                 try:
                     from open_webui.utils.gmail_auto_sync import trigger_gmail_sync_if_needed
                     
@@ -1391,7 +1393,7 @@ class OAuthManager:
                     log.error(f"❌ Gmail auto-sync trigger failed for user {user.id}: {e}")
                     # Don't fail OAuth callback if Gmail sync fails
             else:
-                log.info(f"⏭️  Skipping Gmail sync (is_new={is_new_oauth_session}, provider={provider})")
+                log.info(f"⏭️  Skipping Gmail sync (provider={provider}, not Google)")
                 
         except Exception as e:
             log.error(f"Failed to store OAuth session server-side: {e}")
