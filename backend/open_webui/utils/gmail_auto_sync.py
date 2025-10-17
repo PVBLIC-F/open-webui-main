@@ -496,17 +496,7 @@ async def trigger_gmail_sync_if_needed(
         logger.info(f"   ⏭️  SKIP: OAuth token doesn't include Gmail scopes")
         return
 
-    # Check if we should only sync on signup
-    sync_on_signup_only = request.app.state.config.GMAIL_AUTO_SYNC_ON_SIGNUP_ONLY
-    logger.info(
-        f"   👤 New user: {is_new_user}, Sync on signup only: {sync_on_signup_only}"
-    )
-
-    if sync_on_signup_only and not is_new_user:
-        logger.info(f"   ⏭️  SKIP: Gmail auto-sync only on signup, user is not new")
-        return
-
-    # Check if admin has enabled Gmail sync for this user
+    # Check if admin has enabled Gmail sync for this user first
     user = Users.get_user_by_id(user_id)
     if not user:
         logger.info(f"   ⏭️  SKIP: User {user_id} not found")
@@ -516,10 +506,22 @@ async def trigger_gmail_sync_if_needed(
     admin_sync_enabled = getattr(user, 'gmail_sync_enabled', 0) == 1
     logger.info(f"   ⚙️  Admin Gmail sync setting: gmail_sync_enabled={admin_sync_enabled}")
 
+    # Check if we should only sync on signup (only applies if admin hasn't explicitly enabled)
+    sync_on_signup_only = request.app.state.config.GMAIL_AUTO_SYNC_ON_SIGNUP_ONLY
+    logger.info(
+        f"   👤 New user: {is_new_user}, Sync on signup only: {sync_on_signup_only}"
+    )
+
+    # If admin has explicitly enabled sync, allow it regardless of signup-only setting
     if not admin_sync_enabled:
-        logger.info(f"   ⏭️  SKIP: Admin has disabled Gmail sync for this user")
-        logger.info(f"      Enable in Admin -> Users -> Edit User -> Gmail Email Sync")
-        return
+        if sync_on_signup_only and not is_new_user:
+            logger.info(f"   ⏭️  SKIP: Gmail auto-sync only on signup, user is not new")
+            logger.info(f"      Admin can enable sync in Admin -> Users -> Edit User -> Gmail Email Sync")
+            return
+        else:
+            logger.info(f"   ⏭️  SKIP: Admin has disabled Gmail sync for this user")
+            logger.info(f"      Enable in Admin -> Users -> Edit User -> Gmail Email Sync")
+            return
         
     # Check if user has enabled Gmail sync in their settings (additional user preference)
     if user and user.settings:
