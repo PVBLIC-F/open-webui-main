@@ -282,7 +282,11 @@ class GmailAutoSync:
                 batch.clear()
                 
                 # Yield to event loop after each batch to keep interface responsive
-                await asyncio.sleep(0.1)  # Small delay to let other tasks run
+                await asyncio.sleep(0)  # Yield control to event loop immediately
+                
+                # Additional yield every few batches for better responsiveness
+                if batch_num % 5 == 0:
+                    await asyncio.sleep(0.01)  # Small delay every 5 batches
                 
             except Exception as e:
                 logger.error(f"Error processing batch {batch_num}: {e}")
@@ -508,7 +512,7 @@ async def _background_gmail_sync(request, user_id: str, oauth_token: dict):
                 
                 # Process embeddings concurrently but with small batches to avoid overwhelming
                 embeddings = []
-                batch_size = 5  # Small batch to keep event loop responsive
+                batch_size = 3  # Even smaller batch to keep event loop responsive
                 
                 for i in range(0, len(texts), batch_size):
                     batch = texts[i:i + batch_size]
@@ -517,6 +521,10 @@ async def _background_gmail_sync(request, user_id: str, oauth_token: dict):
                     
                     # Yield control to event loop between batches
                     await asyncio.sleep(0)
+                    
+                    # Additional yield every few batches
+                    if (i // batch_size) % 3 == 0:
+                        await asyncio.sleep(0.001)  # Small delay every 3 batches
                 
                 return embeddings
         
@@ -590,15 +598,31 @@ async def _background_gmail_sync(request, user_id: str, oauth_token: dict):
                     vector = item["values"]
                     # Check if vector has at least one non-zero value
                     if any(v != 0.0 for v in vector):
+                        # Handle both dict and VectorItem object cases
+                        metadata = item["metadata"]
+                        if hasattr(metadata, 'get'):
+                            # It's a dictionary
+                            chunk_text = metadata.get("chunk_text", "")
+                            metadata_dict = metadata
+                        else:
+                            # It's a VectorItem object or similar - access as attributes
+                            chunk_text = getattr(metadata, 'chunk_text', '')
+                            metadata_dict = metadata.__dict__ if hasattr(metadata, '__dict__') else metadata
+                        
                         valid_items.append({
                             "id": item["id"],
-                            "text": item["metadata"].get("chunk_text", ""),
+                            "text": chunk_text,
                             "vector": vector,
-                            "metadata": item["metadata"]
+                            "metadata": metadata_dict
                         })
                     else:
                         zero_vector_count += 1
-                        email_id = item["metadata"].get("email_id", "unknown")
+                        # Handle both dict and VectorItem object cases for email_id
+                        metadata = item["metadata"]
+                        if hasattr(metadata, 'get'):
+                            email_id = metadata.get("email_id", "unknown")
+                        else:
+                            email_id = getattr(metadata, 'email_id', "unknown")
                         logger.warning(f"⚠️  Skipping zero vector for email {email_id} (embedding failed)")
                 
                 if zero_vector_count > 0:
@@ -609,9 +633,11 @@ async def _background_gmail_sync(request, user_id: str, oauth_token: dict):
                     return
                 
                 # Collection-based isolation: each user has their own collection
+                # Note: Open WebUI uses collections for user isolation, not namespaces
                 collection_name = f"gmail_{user_id}"
                 
                 logger.info(f"📤 Upserting {len(valid_items)} valid vectors to collection: {collection_name}")
+                logger.info(f"   Collection-based isolation (not namespace) - each user gets their own collection")
                 
                 try:
                     # Use existing VECTOR_DB_CLIENT.upsert (handles batching, errors, retries)
@@ -624,8 +650,14 @@ async def _background_gmail_sync(request, user_id: str, oauth_token: dict):
                         valid_items
                     )
                     logger.info(f"✅ Upserted {len(valid_items)} vectors to collection {collection_name}")
+                    
+                    # Clear valid_items to free memory immediately after upsert
+                    valid_items.clear()
+                    
                 except Exception as e:
                     logger.error(f"❌ Vector DB upsert error: {e}")
+                    # Clear memory even on error
+                    valid_items.clear()
                     raise
         
         # Initialize services
