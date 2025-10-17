@@ -29,6 +29,7 @@ from open_webui.utils.gmail_fetcher import GmailFetcher
 from open_webui.utils.gmail_indexer import GmailIndexer
 from open_webui.models.users import Users
 from open_webui.models.oauth_sessions import OAuthSessions
+from open_webui.models.gmail_sync import gmail_sync_status
 
 # Set up logger with INFO level for visibility
 logger = logging.getLogger(__name__)
@@ -79,17 +80,19 @@ class GmailAutoSync:
         oauth_token: dict,
         max_emails: int = 5000,
         skip_spam_trash: bool = True,
+        incremental: bool = True,
     ) -> Dict:
         """
         Sync a user's Gmail inbox to Pinecone.
         
-        This is the main entry point for Gmail sync.
+        Supports both full sync (first time) and incremental sync (subsequent runs).
         
         Args:
             user_id: User ID for isolation
             oauth_token: OAuth token dict with access_token
             max_emails: Maximum emails to sync (default: 5000)
             skip_spam_trash: Skip SPAM and TRASH folders (default: True)
+            incremental: Whether to do incremental sync (default: True)
             
         Returns:
             Dict with sync statistics
@@ -99,8 +102,22 @@ class GmailAutoSync:
         logger.info(f"🚀 GMAIL SYNC STARTED - User: {user_id}")
         logger.info(f"   Max emails: {max_emails}")
         logger.info(f"   Skip spam/trash: {skip_spam_trash}")
+        logger.info(f"   Incremental: {incremental}")
         logger.info(f"   Namespace: {self.gmail_namespace}")
         logger.info("="*70)
+        
+        # Get or create sync status
+        sync_status = gmail_sync_status.get_sync_status(user_id)
+        if not sync_status:
+            sync_status = gmail_sync_status.create_sync_status(user_id)
+            logger.info(f"Created new sync status for user {user_id}")
+        else:
+            logger.info(f"Found existing sync status for user {user_id}")
+            logger.info(f"   Last sync: {datetime.fromtimestamp(sync_status.last_sync_timestamp) if sync_status.last_sync_timestamp else 'Never'}")
+            logger.info(f"   Total synced: {sync_status.total_emails_synced}")
+        
+        # Mark sync as starting
+        gmail_sync_status.mark_sync_start(user_id)
         
         # Initialize sync status
         self.active_syncs[user_id] = {
@@ -110,6 +127,8 @@ class GmailAutoSync:
             "processed": 0,
             "indexed": 0,
             "errors": 0,
+            "sync_type": "incremental" if incremental else "full",
+            "last_sync_timestamp": sync_status.last_sync_timestamp,
         }
         
         try:
@@ -137,10 +156,34 @@ class GmailAutoSync:
                 timeout=30
             )
             
+            # Determine sync query based on incremental mode
+            if incremental and sync_status.last_sync_timestamp:
+                # Incremental sync - get emails since last sync
+                days_since_sync = (time.time() - sync_status.last_sync_timestamp) / (24 * 3600)
+                if days_since_sync < 1:
+                    # If last sync was within 24 hours, get emails from last 24 hours
+                    query = "newer_than:1d"
+                    logger.info(f"   Incremental sync: fetching emails from last 24 hours")
+                elif days_since_sync < 7:
+                    # If last sync was within a week, get emails from last 7 days
+                    query = "newer_than:7d"
+                    logger.info(f"   Incremental sync: fetching emails from last 7 days")
+                else:
+                    # If last sync was older, get emails from last 30 days
+                    query = "newer_than:30d"
+                    logger.info(f"   Incremental sync: fetching emails from last 30 days")
+                
+                # Limit to smaller batch for incremental sync
+                max_emails = min(max_emails, 1000)
+            else:
+                # Full sync - get all emails
+                query = None
+                logger.info(f"   Full sync: fetching all emails")
+            
             emails, fetch_stats = await fetcher.fetch_all_emails(
                 max_emails=max_emails,
                 skip_spam_trash=skip_spam_trash,
-                query=None,  # No additional filters for first sync
+                query=query,
                 batch_size=100,
             )
             
@@ -186,6 +229,16 @@ class GmailAutoSync:
             self.active_syncs[user_id]["indexed"] = indexed_count
             self.active_syncs[user_id]["status"] = "completed"
             
+            # Mark sync as completed in database
+            sync_duration = int(time.time() - self.active_syncs[user_id]["start_time"])
+            gmail_sync_status.mark_sync_complete(
+                user_id=user_id,
+                emails_synced=indexed_count,
+                duration_seconds=sync_duration,
+                last_history_id=None,  # TODO: Track Gmail history ID for better incremental sync
+                last_email_id=None     # TODO: Track last email ID
+            )
+            
             # Clear emails list to free memory
             emails.clear()
             del emails
@@ -210,6 +263,10 @@ class GmailAutoSync:
             logger.error(f"❌ Gmail sync failed for user {user_id}: {e}", exc_info=True)
             self.active_syncs[user_id]["status"] = "failed"
             self.active_syncs[user_id]["error"] = str(e)
+            
+            # Mark sync as failed in database
+            gmail_sync_status.mark_sync_error(user_id, str(e))
+            
             raise
     
     async def _process_and_index_batch(
@@ -683,6 +740,7 @@ async def _background_gmail_sync(request, user_id: str, oauth_token: dict):
             oauth_token=oauth_token,
             max_emails=max_emails,
             skip_spam_trash=skip_spam_trash,
+            incremental=True,  # Enable incremental sync by default
         )
         
         logger.info("\n" + "🎉"*35)
