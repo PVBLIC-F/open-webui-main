@@ -433,6 +433,8 @@ async def update_user_by_id(
     form_data: UserUpdateForm,
     session_user=Depends(get_admin_user),
 ):
+    log.info(f"Updating user {user_id} with data: {form_data.model_dump()}")
+    log.info(f"Gmail sync enabled value: {form_data.gmail_sync_enabled}")
     # Prevent modification of the primary admin user by other admins
     try:
         first_user = Users.get_first_user()
@@ -476,15 +478,20 @@ async def update_user_by_id(
             Auths.update_user_password_by_id(user_id, hashed)
 
         Auths.update_email_by_id(user_id, form_data.email.lower())
-        updated_user = Users.update_user_by_id(
-            user_id,
-            {
-                "role": form_data.role,
-                "name": form_data.name,
-                "email": form_data.email.lower(),
-                "profile_image_url": form_data.profile_image_url,
-            },
-        )
+        # Prepare update data
+        update_data = {
+            "role": form_data.role,
+            "name": form_data.name,
+            "email": form_data.email.lower(),
+            "profile_image_url": form_data.profile_image_url,
+        }
+        
+        # Add gmail_sync_enabled if provided
+        if form_data.gmail_sync_enabled is not None:
+            update_data["gmail_sync_enabled"] = form_data.gmail_sync_enabled
+            log.info(f"Updating gmail_sync_enabled for user {user_id}: {form_data.gmail_sync_enabled}")
+        
+        updated_user = Users.update_user_by_id(user_id, update_data)
 
         if updated_user:
             return updated_user
