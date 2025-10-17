@@ -506,8 +506,22 @@ async def trigger_gmail_sync_if_needed(
         logger.info(f"   ⏭️  SKIP: Gmail auto-sync only on signup, user is not new")
         return
 
-    # Check if user has enabled Gmail sync in their settings
+    # Check if admin has enabled Gmail sync for this user
     user = Users.get_user_by_id(user_id)
+    if not user:
+        logger.info(f"   ⏭️  SKIP: User {user_id} not found")
+        return
+        
+    # Check admin setting for Gmail sync
+    admin_sync_enabled = getattr(user, 'gmail_sync_enabled', 0) == 1
+    logger.info(f"   ⚙️  Admin Gmail sync setting: gmail_sync_enabled={admin_sync_enabled}")
+
+    if not admin_sync_enabled:
+        logger.info(f"   ⏭️  SKIP: Admin has disabled Gmail sync for this user")
+        logger.info(f"      Enable in Admin -> Users -> Edit User -> Gmail Email Sync")
+        return
+        
+    # Check if user has enabled Gmail sync in their settings (additional user preference)
     if user and user.settings:
         settings_dict = (
             user.settings.model_dump()
@@ -517,15 +531,14 @@ async def trigger_gmail_sync_if_needed(
         gmail_settings = (
             settings_dict.get("gmail", {}) if isinstance(settings_dict, dict) else {}
         )
-        sync_enabled = gmail_settings.get("sync_enabled", False)
-        logger.info(f"   ⚙️  User Gmail sync setting: sync_enabled={sync_enabled}")
+        user_sync_enabled = gmail_settings.get("sync_enabled", True)  # Default to enabled if admin allows
+        logger.info(f"   ⚙️  User Gmail sync preference: sync_enabled={user_sync_enabled}")
 
-        if not sync_enabled:
-            logger.info(f"   ⏭️  SKIP: User hasn't enabled Gmail sync in settings")
-            logger.info(f"      Admin can enable in User Edit panel")
+        if not user_sync_enabled:
+            logger.info(f"   ⏭️  SKIP: User has disabled Gmail sync in their settings")
             return
     else:
-        logger.info(f"   ⚙️  No user settings found - will sync (first time)")
+        logger.info(f"   ⚙️  No user settings found - will sync (admin enabled, no user preference)")
 
     logger.info(f"   ✅ ALL CONDITIONS MET - Triggering Gmail sync!")
     logger.info(
