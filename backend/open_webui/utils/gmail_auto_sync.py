@@ -994,8 +994,11 @@ async def periodic_gmail_sync_scheduler():
             # Dynamic configuration reload (supports runtime updates)
             try:
                 from open_webui.config import GMAIL_PERIODIC_SYNC_INTERVAL_HOURS
-                # Extract value from PersistentConfig object
-                sync_interval_hours = int(GMAIL_PERIODIC_SYNC_INTERVAL_HOURS)
+                # Extract value from PersistentConfig object using .value attribute
+                sync_interval_hours = GMAIL_PERIODIC_SYNC_INTERVAL_HOURS.value
+                # Ensure it's an integer
+                if not isinstance(sync_interval_hours, int):
+                    sync_interval_hours = int(sync_interval_hours)
             except Exception as e:
                 logger.warning(f"Failed to load sync interval config, using default: {e}")
                 sync_interval_hours = 6
@@ -1157,21 +1160,37 @@ async def _sync_user_periodic(user_id: str) -> bool:
             "expires_in": 3600,
         }
         
+        # Check if this is first sync for this user
+        sync_status = gmail_sync_status.get_sync_status(user_id)
+        is_first_sync = (sync_status is None or sync_status.last_sync_timestamp is None)
+        
         # Create sync instance (reuses existing infrastructure)
         gmail_sync = GmailAutoSync()
         
+        # Determine timeout based on sync type
+        if is_first_sync:
+            # First sync: limit emails more aggressively, allow more time
+            max_sync_emails = 200  # Conservative for first background sync
+            sync_timeout = 600  # 10 minutes for first sync
+            logger.info(f"🆕 First sync for user {user_id} - limiting to {max_sync_emails} emails")
+        else:
+            # Ongoing sync: normal limits
+            max_sync_emails = 500
+            sync_timeout = 900  # 15 minutes
+        
         # Perform incremental sync with timeout protection
         try:
-            # Use asyncio.wait_for to enforce timeout (15 minutes max per user)
+            # Use asyncio.wait_for to enforce timeout
             result = await asyncio.wait_for(
                 gmail_sync.sync_user_gmail(
                     user_id=user_id,
                     oauth_token=oauth_token,
-                    max_emails=500,  # Conservative limit for background sync
+                    max_emails=max_sync_emails,
                     skip_spam_trash=True,
-                    incremental=True,  # Always incremental for efficiency
+                    incremental=True,  # Always use incremental mode
+                    # incremental=True with last_sync_timestamp=None will do full sync automatically
                 ),
-                timeout=900  # 15 minute timeout
+                timeout=sync_timeout
             )
         except asyncio.TimeoutError:
             duration = time.time() - sync_start
