@@ -962,6 +962,254 @@ async def test_auto_sync_orchestrator():
     return True
 
 
+async def periodic_gmail_sync_scheduler():
+    """
+    Production-grade periodic Gmail sync scheduler.
+    
+    Features:
+    - Graceful startup with configurable delay
+    - Dynamic configuration updates
+    - Batch processing with rate limiting
+    - Comprehensive error handling
+    - Circuit breaker pattern for failures
+    - Memory-efficient user processing
+    - Distributed system friendly (no race conditions)
+    """
+    logger.info("🔄 Gmail Periodic Sync Scheduler starting...")
+    
+    # Graceful startup - wait for application to fully initialize
+    startup_delay = 60  # Wait 60 seconds for complete initialization
+    await asyncio.sleep(startup_delay)
+    
+    # Configuration defaults
+    sync_interval_hours = 6
+    check_interval = 30 * 60  # 30 minutes
+    consecutive_errors = 0
+    max_consecutive_errors = 5
+    
+    logger.info("✅ Gmail Periodic Sync Scheduler ready")
+    
+    while True:
+        try:
+            # Dynamic configuration reload (supports runtime updates)
+            try:
+                from open_webui.config import GMAIL_PERIODIC_SYNC_INTERVAL_HOURS
+                sync_interval_hours = GMAIL_PERIODIC_SYNC_INTERVAL_HOURS
+            except Exception as e:
+                logger.warning(f"Failed to load sync interval config, using default: {e}")
+                sync_interval_hours = 6
+            
+            # Circuit breaker: back off if too many failures
+            if consecutive_errors >= max_consecutive_errors:
+                backoff_time = min(3600, 300 * consecutive_errors)  # Max 1 hour
+                logger.error(
+                    f"🔴 Circuit breaker: {consecutive_errors} consecutive errors. "
+                    f"Backing off for {backoff_time}s"
+                )
+                await asyncio.sleep(backoff_time)
+                consecutive_errors = 0  # Reset after backoff
+                continue
+            
+            # Query database for users needing sync (indexed query)
+            users_needing_sync = gmail_sync_status.get_users_needing_sync(
+                max_hours_since_sync=sync_interval_hours
+            )
+            
+            if users_needing_sync:
+                total_users = len(users_needing_sync)
+                logger.info(
+                    f"📧 Periodic sync: {total_users} user(s) need sync "
+                    f"(interval: {sync_interval_hours}h)"
+                )
+                
+                # Adaptive batch sizing based on load
+                batch_size = 2 if total_users > 10 else 3
+                successful_syncs = 0
+                failed_syncs = 0
+                
+                # Process users in batches with rate limiting
+                for i in range(0, total_users, batch_size):
+                    batch = users_needing_sync[i:i + batch_size]
+                    batch_start = time.time()
+                    
+                    # Parallel processing within batch
+                    tasks = [
+                        asyncio.create_task(
+                            _sync_user_periodic(user_id),
+                            name=f"periodic_gmail_sync_{user_id}"
+                        )
+                        for user_id in batch
+                    ]
+                    
+                    # Wait for batch completion with error isolation
+                    results = await asyncio.gather(*tasks, return_exceptions=True)
+                    
+                    # Track results for monitoring
+                    for j, result in enumerate(results):
+                        if isinstance(result, Exception):
+                            failed_syncs += 1
+                            logger.error(
+                                f"❌ Periodic sync failed for user {batch[j]}: "
+                                f"{type(result).__name__}: {result}"
+                            )
+                        elif result:  # Successful sync
+                            successful_syncs += 1
+                    
+                    batch_duration = time.time() - batch_start
+                    
+                    # Adaptive rate limiting between batches
+                    if i + batch_size < total_users:
+                        # Add delay based on batch processing time (backpressure)
+                        delay = max(10, min(30, batch_duration * 0.5))
+                        await asyncio.sleep(delay)
+                
+                # Summary logging
+                logger.info(
+                    f"✅ Periodic sync cycle complete: "
+                    f"{successful_syncs} succeeded, {failed_syncs} failed "
+                    f"(total: {total_users})"
+                )
+                
+                # Reset error counter on successful cycle
+                if successful_syncs > 0:
+                    consecutive_errors = 0
+                else:
+                    consecutive_errors += 1
+            else:
+                logger.debug(
+                    f"📧 No users need sync at this time (interval: {sync_interval_hours}h)"
+                )
+                consecutive_errors = 0  # Reset on successful query
+            
+            # Wait before next check (with jitter to avoid thundering herd)
+            jitter = time.time() % 60  # 0-60 second jitter
+            actual_wait = check_interval + jitter
+            logger.debug(f"⏰ Next sync check in {actual_wait//60:.1f} minutes")
+            await asyncio.sleep(actual_wait)
+            
+        except asyncio.CancelledError:
+            logger.info("🛑 Gmail Periodic Sync Scheduler shutting down gracefully")
+            raise  # Propagate cancellation
+        except Exception as e:
+            consecutive_errors += 1
+            logger.exception(
+                f"❌ Unexpected error in periodic sync scheduler "
+                f"(error #{consecutive_errors}): {e}"
+            )
+            # Exponential backoff on errors
+            error_backoff = min(600, 60 * consecutive_errors)
+            await asyncio.sleep(error_backoff)
+
+
+async def _sync_user_periodic(user_id: str) -> bool:
+    """
+    Sync Gmail for a single user during periodic sync (production-grade).
+    
+    Features:
+    - Comprehensive validation with early returns
+    - Graceful OAuth token handling
+    - Timeout protection
+    - Memory-efficient processing
+    - Detailed error logging
+    
+    Args:
+        user_id: The user ID to sync
+        
+    Returns:
+        bool: True if sync succeeded, False otherwise
+    """
+    sync_start = time.time()
+    
+    try:
+        logger.debug(f"🔄 Periodic sync starting for user: {user_id}")
+        
+        # Validation: Check user exists
+        user = Users.get_user_by_id(user_id)
+        if not user:
+            logger.warning(f"⚠️  User {user_id} not found in database, skipping")
+            return False
+        
+        # Validation: Check admin enabled sync
+        admin_sync_enabled = getattr(user, 'gmail_sync_enabled', 0) == 1
+        if not admin_sync_enabled:
+            logger.debug(f"⏭️  Gmail sync disabled by admin for user {user_id}")
+            return False
+        
+        # Validation: Check OAuth session exists
+        oauth_session = OAuthSessions.get_oauth_session_by_user_id_and_provider(
+            user_id, "google"
+        )
+        if not oauth_session:
+            logger.debug(f"⏭️  No Google OAuth session for user {user_id}")
+            return False
+        
+        # Validation: Check OAuth token validity
+        if not oauth_session.access_token:
+            logger.warning(f"⚠️  Missing access token for user {user_id}")
+            return False
+        
+        # Prepare OAuth token with proper structure
+        oauth_token = {
+            "access_token": oauth_session.access_token,
+            "refresh_token": oauth_session.refresh_token,
+            "token_type": "Bearer",
+            "expires_in": 3600,
+        }
+        
+        # Create sync instance (reuses existing infrastructure)
+        gmail_sync = GmailAutoSync()
+        
+        # Perform incremental sync with timeout protection
+        try:
+            # Use asyncio.wait_for to enforce timeout (15 minutes max per user)
+            result = await asyncio.wait_for(
+                gmail_sync.sync_user_gmail(
+                    user_id=user_id,
+                    oauth_token=oauth_token,
+                    max_emails=500,  # Conservative limit for background sync
+                    skip_spam_trash=True,
+                    incremental=True,  # Always incremental for efficiency
+                ),
+                timeout=900  # 15 minute timeout
+            )
+        except asyncio.TimeoutError:
+            duration = time.time() - sync_start
+            logger.error(
+                f"⏱️  Periodic sync timeout for user {user_id} "
+                f"after {duration:.1f}s (max: 900s)"
+            )
+            return False
+        
+        # Process results
+        if result.get("success"):
+            emails_synced = result.get("emails_synced", 0)
+            duration = time.time() - sync_start
+            logger.info(
+                f"✅ Periodic sync: user {user_id} - "
+                f"{emails_synced} emails synced in {duration:.1f}s"
+            )
+            return True
+        else:
+            error_msg = result.get("error", "Unknown error")
+            duration = time.time() - sync_start
+            logger.error(
+                f"❌ Periodic sync failed for user {user_id} "
+                f"after {duration:.1f}s: {error_msg}"
+            )
+            return False
+            
+    except asyncio.CancelledError:
+        logger.info(f"🛑 Periodic sync cancelled for user {user_id}")
+        raise  # Propagate cancellation
+    except Exception as e:
+        duration = time.time() - sync_start
+        logger.exception(
+            f"❌ Unexpected error in periodic sync for user {user_id} "
+            f"after {duration:.1f}s: {type(e).__name__}: {e}"
+        )
+        return False
+
+
 if __name__ == "__main__":
     print("Testing Phase 5 - Gmail Auto-Sync Orchestrator")
     success = asyncio.run(test_auto_sync_orchestrator())

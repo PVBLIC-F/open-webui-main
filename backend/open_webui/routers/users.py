@@ -555,3 +555,85 @@ async def delete_user_by_id(user_id: str, user=Depends(get_admin_user)):
 @router.get("/{user_id}/groups")
 async def get_user_groups_by_id(user_id: str, user=Depends(get_admin_user)):
     return Groups.get_groups_by_member_id(user_id)
+
+
+@router.get("/{user_id}/gmail-sync-status")
+async def get_user_gmail_sync_status(user_id: str, user=Depends(get_admin_user)):
+    """
+    Get Gmail sync status and metrics for a user (admin only).
+    
+    Returns comprehensive sync information including:
+    - Current sync status and configuration
+    - Performance metrics (emails synced, duration)
+    - Error tracking and diagnostics
+    - Next sync prediction
+    """
+    from open_webui.models.gmail_sync import gmail_sync_status
+    from datetime import datetime, timedelta
+    import time
+    
+    sync_status = gmail_sync_status.get_sync_status(user_id)
+    if not sync_status:
+        return {
+            "user_id": user_id,
+            "sync_enabled": False,
+            "status": "never",
+            "message": "No sync status found - user may not have Gmail connected",
+            "last_sync": None,
+            "next_sync_estimate": None
+        }
+    
+    # Calculate human-readable last sync time
+    last_sync_human = None
+    next_sync_estimate = None
+    if sync_status.last_sync_timestamp:
+        last_sync_dt = datetime.fromtimestamp(sync_status.last_sync_timestamp)
+        last_sync_human = last_sync_dt.isoformat()
+        
+        # Estimate next sync time based on frequency
+        next_sync_dt = last_sync_dt + timedelta(hours=sync_status.sync_frequency_hours)
+        next_sync_estimate = next_sync_dt.isoformat()
+        time_until_sync = (next_sync_dt - datetime.now()).total_seconds()
+        hours_until = max(0, time_until_sync / 3600)
+    else:
+        hours_until = 0
+    
+    # Calculate sync health score (0-100)
+    health_score = 100
+    if sync_status.error_count > 0:
+        health_score -= min(50, sync_status.error_count * 10)  # -10 per error, max -50
+    if sync_status.sync_status == "error":
+        health_score -= 30
+    if sync_status.sync_status == "paused":
+        health_score = 0
+    
+    return {
+        "user_id": user_id,
+        "sync_enabled": sync_status.sync_enabled,
+        "auto_sync_enabled": sync_status.auto_sync_enabled,
+        "status": sync_status.sync_status,
+        
+        # Timestamps
+        "last_sync_timestamp": sync_status.last_sync_timestamp,
+        "last_sync": last_sync_human,
+        "next_sync_estimate": next_sync_estimate,
+        "hours_until_next_sync": round(hours_until, 1) if next_sync_estimate else None,
+        
+        # Performance metrics
+        "last_sync_count": sync_status.last_sync_count,
+        "last_sync_duration_seconds": sync_status.last_sync_duration,
+        "total_emails_synced": sync_status.total_emails_synced,
+        
+        # Error tracking
+        "error_count": sync_status.error_count,
+        "last_error": sync_status.last_error,
+        "health_score": max(0, health_score),
+        
+        # Configuration
+        "sync_frequency_hours": sync_status.sync_frequency_hours,
+        "max_emails_per_sync": sync_status.max_emails_per_sync,
+        
+        # Diagnostics
+        "created_at": sync_status.created_at,
+        "updated_at": sync_status.updated_at
+    }

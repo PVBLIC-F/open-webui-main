@@ -430,6 +430,8 @@ from open_webui.config import (
     GMAIL_API_RATE_LIMIT_DELAY,
     GMAIL_SKIP_SPAM_AND_TRASH,
     GMAIL_SEARCH_TOOL_ENABLED,
+    GMAIL_PERIODIC_SYNC_ENABLED,
+    GMAIL_PERIODIC_SYNC_INTERVAL_HOURS,
     PINECONE_NAMESPACE_GMAIL,
     # Pinecone (needed for Gmail)
     PINECONE_DIMENSION,
@@ -597,6 +599,12 @@ async def lifespan(app: FastAPI):
         limiter.total_tokens = THREAD_POOL_SIZE
 
     asyncio.create_task(periodic_usage_pool_cleanup())
+
+    # Start Gmail periodic sync if enabled
+    if app.state.config.ENABLE_GMAIL_AUTO_SYNC and app.state.config.GMAIL_PERIODIC_SYNC_ENABLED:
+        from open_webui.utils.gmail_auto_sync import periodic_gmail_sync_scheduler
+        asyncio.create_task(periodic_gmail_sync_scheduler())
+        log.info("🔄 Gmail periodic sync scheduler started")
 
     if app.state.config.ENABLE_BASE_MODELS_CACHE:
         await get_all_models(
@@ -900,6 +908,8 @@ app.state.config.GMAIL_SYNC_BATCH_SIZE = GMAIL_SYNC_BATCH_SIZE
 app.state.config.GMAIL_API_RATE_LIMIT_DELAY = GMAIL_API_RATE_LIMIT_DELAY
 app.state.config.GMAIL_SKIP_SPAM_AND_TRASH = GMAIL_SKIP_SPAM_AND_TRASH
 app.state.config.GMAIL_SEARCH_TOOL_ENABLED = GMAIL_SEARCH_TOOL_ENABLED
+app.state.config.GMAIL_PERIODIC_SYNC_ENABLED = GMAIL_PERIODIC_SYNC_ENABLED
+app.state.config.GMAIL_PERIODIC_SYNC_INTERVAL_HOURS = GMAIL_PERIODIC_SYNC_INTERVAL_HOURS
 app.state.config.PINECONE_NAMESPACE_GMAIL = PINECONE_NAMESPACE_GMAIL
 app.state.config.PINECONE_DIMENSION = PINECONE_DIMENSION
 

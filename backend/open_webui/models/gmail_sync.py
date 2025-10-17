@@ -278,26 +278,38 @@ class GmailSyncStatusTable:
             return None
 
     def get_users_needing_sync(self, max_hours_since_sync: int = 24) -> list[str]:
-        """Get list of user IDs that need syncing"""
+        """
+        Get list of user IDs that need syncing (production-optimized).
+        
+        Performance features:
+        - Uses indexed columns (sync_enabled, auto_sync_enabled, sync_status, last_sync_timestamp)
+        - Selects only user_id (minimal data transfer)
+        - Query benefits from composite index: gmail_sync_enabled_idx
+        - Executes as single SELECT with WHERE clause
+        
+        Args:
+            max_hours_since_sync: Hours since last sync to consider stale
+            
+        Returns:
+            list[str]: User IDs needing sync
+        """
         try:
             with get_db() as db:
                 cutoff_time = int(time.time()) - (max_hours_since_sync * 3600)
 
-                # More efficient query - only select user_id
+                # Optimized query - leverages database indexes
+                # Index usage: gmail_sync_enabled_idx (sync_enabled, auto_sync_enabled)
+                #              gmail_sync_last_sync_idx (last_sync_timestamp)
+                #              gmail_sync_status_idx (sync_status)
                 users = (
                     db.query(GmailSyncStatus.user_id)
                     .filter(
                         GmailSyncStatus.sync_enabled == True,
                         GmailSyncStatus.auto_sync_enabled == True,
-                        GmailSyncStatus.sync_status
-                        != "active",  # Don't sync if already running
+                        GmailSyncStatus.sync_status != "active",  # Avoid double-sync
                         (
-                            (
-                                GmailSyncStatus.last_sync_timestamp == None
-                            )  # Never synced
-                            | (
-                                GmailSyncStatus.last_sync_timestamp < cutoff_time
-                            )  # Stale sync
+                            (GmailSyncStatus.last_sync_timestamp == None)  # Never synced
+                            | (GmailSyncStatus.last_sync_timestamp < cutoff_time)  # Stale
                         ),
                     )
                     .all()

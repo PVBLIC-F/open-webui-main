@@ -401,6 +401,19 @@ GMAIL_API_RATE_LIMIT_DELAY = PersistentConfig(
     float(os.environ.get("GMAIL_API_RATE_LIMIT_DELAY", "0.1")),
 )
 
+# Gmail Periodic Sync Configuration
+GMAIL_PERIODIC_SYNC_ENABLED = PersistentConfig(
+    "GMAIL_PERIODIC_SYNC_ENABLED",
+    "gmail.periodic_sync.enabled",
+    os.environ.get("GMAIL_PERIODIC_SYNC_ENABLED", "True").lower() == "true",
+)
+
+GMAIL_PERIODIC_SYNC_INTERVAL_HOURS = PersistentConfig(
+    "GMAIL_PERIODIC_SYNC_INTERVAL_HOURS",
+    "gmail.periodic_sync.interval_hours",
+    int(os.environ.get("GMAIL_PERIODIC_SYNC_INTERVAL_HOURS", "6")),
+)
+
 # Skip emails in spam and trash folders
 # When True: processes ALL emails (INBOX, SENT, labels, archived) except SPAM/TRASH
 # When False: processes ENTIRE mailbox including SPAM and TRASH
