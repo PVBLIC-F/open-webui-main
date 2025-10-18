@@ -146,14 +146,27 @@ class Tools:
                 logger.info(f"🔍 Attempting Gmail search: collection='{collection_name}', user_id='{user_id}', top_k={self.valves.top_k * 2}")
                 logger.info(f"📊 Query embedding dimension: {len(query_embedding)}")
                 
-                results = query_doc(
-                    collection_name=collection_name,
-                    query_embedding=query_embedding,
-                    k=self.valves.top_k * 2,
-                    user=user_obj
-                )
+                # Log the namespace that will be used
+                try:
+                    from open_webui.config import PINECONE_NAMESPACE_GMAIL
+                    gmail_ns = PINECONE_NAMESPACE_GMAIL.value if hasattr(PINECONE_NAMESPACE_GMAIL, 'value') else PINECONE_NAMESPACE_GMAIL
+                    logger.info(f"📂 Using Gmail namespace: '{gmail_ns}'")
+                except Exception as ns_error:
+                    logger.warning(f"Could not get PINECONE_NAMESPACE_GMAIL: {ns_error}")
                 
-                logger.info(f"📬 Search results: {results}")
+                try:
+                    results = query_doc(
+                        collection_name=collection_name,
+                        query_embedding=query_embedding,
+                        k=self.valves.top_k * 2,
+                        user=user_obj
+                    )
+                    logger.info(f"📬 query_doc completed, results type: {type(results)}, has_metadatas: {hasattr(results, 'metadatas') if results else 'N/A'}")
+                    if results and hasattr(results, 'metadatas'):
+                        logger.info(f"📬 metadatas length: {len(results.metadatas[0]) if results.metadatas and results.metadatas[0] else 0}")
+                except Exception as query_error:
+                    logger.error(f"❌ query_doc threw exception: {query_error}", exc_info=True)
+                    raise
                 
                 if not results:
                     logger.warning("⚠️ query_doc returned None or empty results")
@@ -162,6 +175,7 @@ class Tools:
                 # Check if results have any data
                 if not hasattr(results, 'metadatas') or not results.metadatas or not results.metadatas[0]:
                     logger.warning("⚠️ query_doc returned results but no metadata")
+                    logger.warning(f"⚠️ hasattr metadatas: {hasattr(results, 'metadatas')}, metadatas: {results.metadatas if hasattr(results, 'metadatas') else 'N/A'}")
                     return self._format_collection_not_found_error()
                     
                 logger.info(f"✅ Found {len(results.metadatas[0])} initial results from vector search")
