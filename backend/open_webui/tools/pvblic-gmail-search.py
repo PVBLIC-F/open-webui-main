@@ -101,6 +101,18 @@ class Tools:
 
             logger.info(f"🔍 Gmail search initiated by user {user_id}: '{query}'")
 
+            # Check if user has Gmail sync status (diagnostic)
+            try:
+                from open_webui.models.gmail_sync import gmail_sync_status
+                sync_status = gmail_sync_status.get_sync_status(user_id)
+                if sync_status:
+                    logger.info(f"📊 Gmail sync status: total_emails={sync_status.total_emails_synced}, "
+                              f"last_sync={sync_status.last_sync_timestamp}, status={sync_status.sync_status}")
+                else:
+                    logger.warning(f"⚠️  No Gmail sync status found for user {user_id} - emails may not be synced yet")
+            except Exception as status_error:
+                logger.warning(f"Could not check Gmail sync status: {status_error}")
+
             # Generate query embedding (with caching)
             query_embedding = await self._get_query_embedding(
                 query, webui_app.state.EMBEDDING_FUNCTION
@@ -131,7 +143,9 @@ class Tools:
                     created_at=int(time.time())
                 )
                 
-                logger.info(f"Using query_doc for Gmail search: collection='{collection_name}', user_id='{user_id}'")
+                logger.info(f"🔍 Attempting Gmail search: collection='{collection_name}', user_id='{user_id}', top_k={self.valves.top_k * 2}")
+                logger.info(f"📊 Query embedding dimension: {len(query_embedding)}")
+                
                 results = query_doc(
                     collection_name=collection_name,
                     query_embedding=query_embedding,
@@ -139,12 +153,21 @@ class Tools:
                     user=user_obj
                 )
                 
+                logger.info(f"📬 Search results: {results}")
+                
                 if not results:
-                    logger.warning("query_doc returned no results")
+                    logger.warning("⚠️ query_doc returned None or empty results")
+                    return self._format_collection_not_found_error()
+                
+                # Check if results have any data
+                if not hasattr(results, 'metadatas') or not results.metadatas or not results.metadatas[0]:
+                    logger.warning("⚠️ query_doc returned results but no metadata")
                     return self._format_collection_not_found_error()
                     
+                logger.info(f"✅ Found {len(results.metadatas[0])} initial results from vector search")
+                    
             except Exception as search_error:
-                logger.warning(f"Gmail search failed: {search_error}")
+                logger.error(f"❌ Gmail search failed with exception: {search_error}", exc_info=True)
                 # If search fails, it likely means no Gmail emails are synced
                 return self._format_collection_not_found_error()
 
