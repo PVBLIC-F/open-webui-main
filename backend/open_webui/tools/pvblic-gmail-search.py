@@ -116,10 +116,33 @@ class Tools:
             )
 
             try:
-                # Search using the new namespace-based approach with user isolation
-                results = await self._search_gmail_with_user_isolation(
-                    VECTOR_DB_CLIENT, collection_name, query_embedding, user_id, self.valves.top_k * 2
+                # Use the existing query_doc function which handles Gmail collections properly
+                from open_webui.retrieval.utils import query_doc
+                from open_webui.models.users import UserModel
+                
+                # Create a minimal user object for the search with required fields
+                user_obj = UserModel(
+                    id=user_id,
+                    name="Gmail Search User",
+                    email="search@example.com",
+                    profile_image_url="",
+                    last_active_at=int(time.time()),
+                    updated_at=int(time.time()),
+                    created_at=int(time.time())
                 )
+                
+                logger.info(f"Using query_doc for Gmail search: collection='{collection_name}', user_id='{user_id}'")
+                results = query_doc(
+                    collection_name=collection_name,
+                    query_embedding=query_embedding,
+                    k=self.valves.top_k * 2,
+                    user=user_obj
+                )
+                
+                if not results:
+                    logger.warning("query_doc returned no results")
+                    return self._format_collection_not_found_error()
+                    
             except Exception as search_error:
                 logger.warning(f"Gmail search failed: {search_error}")
                 # If search fails, it likely means no Gmail emails are synced
@@ -238,23 +261,49 @@ class Tools:
                 from open_webui.config import PINECONE_NAMESPACE_GMAIL
                 gmail_namespace = PINECONE_NAMESPACE_GMAIL.value if hasattr(PINECONE_NAMESPACE_GMAIL, 'value') else PINECONE_NAMESPACE_GMAIL
                 
-                logger.info(f"Using namespace-based search: collection='{collection_name}', namespace='{gmail_namespace}', user_id='{user_id}'")
-                return vector_db_client.search_with_user_filter(
-                    collection_name=collection_name,
-                    vectors=[query_embedding],
-                    limit=limit,
-                    user_id=user_id,
-                    namespace=gmail_namespace
-                )
+                logger.info(f"Using search_with_user_filter: collection='{collection_name}', namespace='{gmail_namespace}', user_id='{user_id}'")
+                try:
+                    return vector_db_client.search_with_user_filter(
+                        collection_name=collection_name,
+                        vectors=[query_embedding],
+                        limit=limit,
+                        user_id=user_id,
+                        namespace=gmail_namespace
+                    )
+                except Exception as filter_error:
+                    logger.warning(f"search_with_user_filter failed: {filter_error}, trying regular search with namespace")
+                    # Fallback to regular search with namespace
+                    return vector_db_client.search(
+                        collection_name=collection_name,
+                        vectors=[query_embedding],
+                        limit=limit,
+                        namespace=gmail_namespace
+                    )
             else:
-                # Fallback to collection-based approach (e.g., Chroma)
-                user_collection = f"gmail_{user_id}"
-                logger.info(f"Using collection-based search: collection='{user_collection}'")
-                return vector_db_client.search(
-                    collection_name=user_collection,
-                    vectors=[query_embedding],
-                    limit=limit
-                )
+                # Check if regular search supports namespace
+                import inspect
+                search_signature = inspect.signature(vector_db_client.search)
+                if 'namespace' in search_signature.parameters:
+                    # Vector DB supports namespace but not user filtering
+                    from open_webui.config import PINECONE_NAMESPACE_GMAIL
+                    gmail_namespace = PINECONE_NAMESPACE_GMAIL.value if hasattr(PINECONE_NAMESPACE_GMAIL, 'value') else PINECONE_NAMESPACE_GMAIL
+                    
+                    logger.info(f"Using namespace-only search: collection='{collection_name}', namespace='{gmail_namespace}'")
+                    return vector_db_client.search(
+                        collection_name=collection_name,
+                        vectors=[query_embedding],
+                        limit=limit,
+                        namespace=gmail_namespace
+                    )
+                else:
+                    # Fallback to collection-based approach (e.g., Chroma)
+                    user_collection = f"gmail_{user_id}"
+                    logger.info(f"Using collection-based search: collection='{user_collection}'")
+                    return vector_db_client.search(
+                        collection_name=user_collection,
+                        vectors=[query_embedding],
+                        limit=limit
+                    )
         except Exception as e:
             logger.error(f"Gmail search with user isolation failed: {e}")
             raise
