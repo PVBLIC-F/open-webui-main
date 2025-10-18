@@ -301,8 +301,8 @@ class PineconeClient(VectorDBBase):
             f"into '{collection_name_with_prefix}'"
         )
 
-    def upsert(self, collection_name: str, items: List[VectorItem]) -> None:
-        """Upsert (insert or update) vectors into a collection."""
+    def upsert(self, collection_name: str, items: List[VectorItem], namespace: str = None) -> None:
+        """Upsert (insert or update) vectors into a collection with optional namespace."""
         if not items:
             log.warning("No items to upsert")
             return
@@ -314,12 +314,18 @@ class PineconeClient(VectorDBBase):
         )
         points = self._create_points(items, collection_name_with_prefix)
 
+        # Prepare upsert parameters
+        upsert_params = {"vectors": None}  # Will be set per batch
+        if namespace:
+            upsert_params["namespace"] = namespace
+
         # Parallelize batch upserts for performance
         executor = self._executor
         futures = []
         for i in range(0, len(points), BATCH_SIZE):
             batch = points[i : i + BATCH_SIZE]
-            futures.append(executor.submit(self.index.upsert, vectors=batch))
+            upsert_params["vectors"] = batch
+            futures.append(executor.submit(self.index.upsert, **upsert_params))
         for future in concurrent.futures.as_completed(futures):
             try:
                 future.result()
@@ -328,9 +334,10 @@ class PineconeClient(VectorDBBase):
                 raise
         elapsed = time.time() - start_time
         log.debug(f"Upsert of {len(points)} vectors took {elapsed:.2f} seconds")
+        namespace_info = f" in namespace '{namespace}'" if namespace else ""
         log.info(
             f"Successfully upserted {len(points)} vectors in parallel batches "
-            f"into '{collection_name_with_prefix}'"
+            f"into '{collection_name_with_prefix}'{namespace_info}"
         )
 
     async def insert_async(self, collection_name: str, items: List[VectorItem]) -> None:
@@ -365,7 +372,7 @@ class PineconeClient(VectorDBBase):
             f"into '{collection_name_with_prefix}'"
         )
 
-    async def upsert_async(self, collection_name: str, items: List[VectorItem]) -> None:
+    async def upsert_async(self, collection_name: str, items: List[VectorItem], namespace: str = None) -> None:
         """Async version of upsert using asyncio and run_in_executor for improved performance."""
         if not items:
             log.warning("No items to upsert")
@@ -381,10 +388,16 @@ class PineconeClient(VectorDBBase):
             points[i : i + BATCH_SIZE] for i in range(0, len(points), BATCH_SIZE)
         ]
         loop = asyncio.get_event_loop()
+        
+        # Prepare upsert function with namespace support
+        def upsert_batch(batch):
+            upsert_params = {"vectors": batch}
+            if namespace:
+                upsert_params["namespace"] = namespace
+            return self.index.upsert(**upsert_params)
+        
         tasks = [
-            loop.run_in_executor(
-                None, functools.partial(self.index.upsert, vectors=batch)
-            )
+            loop.run_in_executor(None, upsert_batch, batch)
             for batch in batches
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -392,15 +405,16 @@ class PineconeClient(VectorDBBase):
             if isinstance(result, Exception):
                 log.error(f"Error in async upsert batch: {result}")
                 raise result
+        namespace_info = f" in namespace '{namespace}'" if namespace else ""
         log.info(
             f"Successfully async upserted {len(points)} vectors in batches "
-            f"into '{collection_name_with_prefix}'"
+            f"into '{collection_name_with_prefix}'{namespace_info}"
         )
 
     def search(
-        self, collection_name: str, vectors: List[List[Union[float, int]]], limit: int
+        self, collection_name: str, vectors: List[List[Union[float, int]]], limit: int, namespace: str = None
     ) -> Optional[SearchResult]:
-        """Search for similar vectors in a collection."""
+        """Search for similar vectors in a collection with optional namespace."""
         if not vectors or not vectors[0]:
             log.warning("No vectors provided for search")
             return None
@@ -416,13 +430,18 @@ class PineconeClient(VectorDBBase):
             # Search using the first vector (assuming this is the intended behavior)
             query_vector = vectors[0]
 
+            # Prepare query parameters
+            query_params = {
+                "vector": query_vector,
+                "top_k": limit,
+                "include_metadata": True,
+                "filter": {"collection_name": collection_name_with_prefix},
+            }
+            if namespace:
+                query_params["namespace"] = namespace
+
             # Perform the search
-            query_response = self.index.query(
-                vector=query_vector,
-                top_k=limit,
-                include_metadata=True,
-                filter={"collection_name": collection_name_with_prefix},
-            )
+            query_response = self.index.query(**query_params)
 
             matches = getattr(query_response, "matches", []) or []
             if not matches:
@@ -453,6 +472,72 @@ class PineconeClient(VectorDBBase):
             )
         except Exception as e:
             log.error(f"Error searching in '{collection_name_with_prefix}': {e}")
+            return None
+
+    def search_with_user_filter(
+        self, collection_name: str, vectors: List[List[Union[float, int]]], limit: int, user_id: str, namespace: str = None
+    ) -> Optional[SearchResult]:
+        """Search for similar vectors in a collection with user isolation and optional namespace."""
+        if not vectors or not vectors[0]:
+            log.warning("No vectors provided for search")
+            return None
+
+        collection_name_with_prefix = self._get_collection_name_with_prefix(
+            collection_name
+        )
+
+        if limit is None or limit <= 0:
+            limit = NO_LIMIT
+
+        try:
+            # Search using the first vector (assuming this is the intended behavior)
+            query_vector = vectors[0]
+
+            # Prepare query parameters with user isolation
+            query_params = {
+                "vector": query_vector,
+                "top_k": limit,
+                "include_metadata": True,
+                "filter": {
+                    "user_id": user_id,  # User isolation filter
+                },
+            }
+            if namespace:
+                query_params["namespace"] = namespace
+
+            # Perform the search
+            query_response = self.index.query(**query_params)
+
+            matches = getattr(query_response, "matches", []) or []
+            if not matches:
+                # Return empty result if no matches
+                return SearchResult(
+                    ids=[[]],
+                    documents=[[]],
+                    metadatas=[[]],
+                    distances=[[]],
+                )
+
+            # Convert to GetResult format
+            get_result = self._result_to_get_result(matches)
+
+            # Convert distances to similarities
+            distances = [
+                [
+                    self._normalize_distance(getattr(match, "score", 0.0))
+                    for match in matches
+                ]
+            ]
+
+            return SearchResult(
+                ids=get_result.ids,
+                documents=get_result.documents,
+                metadatas=get_result.metadatas,
+                distances=distances,
+            )
+        except Exception as e:
+            namespace_info = f" in namespace '{namespace}'" if namespace else ""
+            log.error(f"Error searching in '{collection_name_with_prefix}'{namespace_info} for user '{user_id}': {e}")
             return None
 
     def query(

@@ -118,11 +118,57 @@ def query_doc(
 ):
     try:
         log.debug(f"query_doc:doc {collection_name}")
-        result = VECTOR_DB_CLIENT.search(
-            collection_name=collection_name,
-            vectors=[query_embedding],
-            limit=k,
-        )
+        
+        # Special handling for Gmail collections - use namespace and user isolation
+        if collection_name == "gmail" and user:
+            # Check if this is a collection-based Gmail setup (e.g., Chroma) or namespace-based (e.g., Pinecone)
+            if collection_name == "gmail":
+                # Try namespace-based search first (Pinecone)
+                from open_webui.config import PINECONE_NAMESPACE_GMAIL
+                gmail_namespace = PINECONE_NAMESPACE_GMAIL.value if hasattr(PINECONE_NAMESPACE_GMAIL, 'value') else PINECONE_NAMESPACE_GMAIL
+                
+                # Check if the vector DB client supports namespace and user filtering
+                if hasattr(VECTOR_DB_CLIENT, 'search_with_user_filter'):
+                    result = VECTOR_DB_CLIENT.search_with_user_filter(
+                        collection_name=collection_name,
+                        vectors=[query_embedding],
+                        limit=k,
+                        user_id=user.id,
+                        namespace=gmail_namespace
+                    )
+                    log.info(f"query_doc:gmail_search with user isolation for user {user.id} in namespace {gmail_namespace}")
+                elif hasattr(VECTOR_DB_CLIENT, 'search'):
+                    # Check if search method supports namespace parameter
+                    import inspect
+                    search_signature = inspect.signature(VECTOR_DB_CLIENT.search)
+                    if 'namespace' in search_signature.parameters:
+                        result = VECTOR_DB_CLIENT.search(
+                            collection_name=collection_name,
+                            vectors=[query_embedding],
+                            limit=k,
+                            namespace=gmail_namespace
+                        )
+                        log.info(f"query_doc:gmail_search with namespace for user {user.id} in namespace {gmail_namespace}")
+                    else:
+                        # Fallback to collection-based search (e.g., Chroma)
+                        user_collection = f"gmail_{user.id}"
+                        result = VECTOR_DB_CLIENT.search(
+                            collection_name=user_collection,
+                            vectors=[query_embedding],
+                            limit=k
+                        )
+                        log.info(f"query_doc:gmail_search with collection isolation for user {user.id} in collection {user_collection}")
+                else:
+                    # No search method available
+                    result = None
+                    log.warning(f"query_doc:gmail_search - no search method available for vector DB")
+        else:
+            # Regular search for non-Gmail collections
+            result = VECTOR_DB_CLIENT.search(
+                collection_name=collection_name,
+                vectors=[query_embedding],
+                limit=k,
+            )
 
         if result:
             log.info(f"query_doc:result {result.ids} {result.metadatas}")
