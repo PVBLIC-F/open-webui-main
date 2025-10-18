@@ -100,23 +100,33 @@ class Tools:
             from open_webui.main import app as webui_app
 
             logger.info(f"🔍 Gmail search initiated by user {user_id}: '{query}'")
+            print(f"[GMAIL_SEARCH_DEBUG] Search initiated for user: {user_id}")  # Force print for debugging
 
-            # Check if user has Gmail sync status (diagnostic)
+            # Check if user has Gmail sync status (diagnostic) - wrapped to prevent crashes
             try:
+                logger.info("📋 Checking Gmail sync status...")
+                print("[GMAIL_SEARCH_DEBUG] Step 1: Checking sync status")
                 from open_webui.models.gmail_sync import gmail_sync_status
+                print("[GMAIL_SEARCH_DEBUG] Step 2: Imported gmail_sync_status")
                 sync_status = gmail_sync_status.get_sync_status(user_id)
+                print(f"[GMAIL_SEARCH_DEBUG] Step 3: Got sync status: {sync_status}")
                 if sync_status:
                     logger.info(f"📊 Gmail sync status: total_emails={sync_status.total_emails_synced}, "
                               f"last_sync={sync_status.last_sync_timestamp}, status={sync_status.sync_status}")
                 else:
                     logger.warning(f"⚠️  No Gmail sync status found for user {user_id} - emails may not be synced yet")
             except Exception as status_error:
-                logger.warning(f"Could not check Gmail sync status: {status_error}")
+                print(f"[GMAIL_SEARCH_DEBUG] ERROR in sync status check: {status_error}")
+                logger.warning(f"⚠️ Could not check Gmail sync status (this is non-fatal): {status_error}", exc_info=True)
 
             # Generate query embedding (with caching)
+            print("[GMAIL_SEARCH_DEBUG] Step 4: About to generate embedding")
+            logger.info("🔄 Generating query embedding...")
             query_embedding = await self._get_query_embedding(
                 query, webui_app.state.EMBEDDING_FUNCTION
             )
+            print(f"[GMAIL_SEARCH_DEBUG] Step 5: Generated embedding, length: {len(query_embedding) if query_embedding else 0}")
+            logger.info(f"✅ Query embedding generated: dimension={len(query_embedding) if query_embedding else 0}")
 
             if not query_embedding or len(query_embedding) == 0:
                 return "❌ Error: Failed to generate search embedding"
