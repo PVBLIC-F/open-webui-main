@@ -369,10 +369,11 @@ class GmailAutoSync:
                 upsert_data = result["upsert_data"]
 
                 if upsert_data:
-                    # Upsert to vector DB (collection-based isolation, not namespace)
+                    # Upsert to vector DB with namespace and user isolation
                     await self.pinecone.schedule_upsert(
                         upsert_data,
-                        namespace=None,  # Not used by Open WebUI's vector DB abstraction
+                        user_id=user_id,
+                        namespace=None,  # Will use self.namespace from PineconeManager
                     )
 
                     total_indexed += result["processed"]
@@ -732,17 +733,18 @@ async def _background_gmail_sync(request, user_id: str, oauth_token: dict):
             """
 
             def __init__(self, namespace):
-                self.namespace = namespace  # Not used (Open WebUI doesn't support namespaces in abstraction)
+                self.namespace = namespace  # Gmail namespace (e.g., "gmail-inbox")
 
             async def schedule_upsert(
-                self, upsert_data: List[dict], namespace: str = None
+                self, upsert_data: List[dict], user_id: str, namespace: str = None
             ):
                 """
-                Upsert vectors using existing VECTOR_DB_CLIENT (from pinecone.py).
+                Upsert vectors using existing VECTOR_DB_CLIENT with namespace support.
 
-                User Isolation Strategy:
-                - Collection name: gmail_{user_id} (primary isolation)
-                - Metadata user_id: {user_id} (secondary filter)
+                Namespace Strategy:
+                - Gmail emails: Use PINECONE_NAMESPACE_GMAIL (e.g., "gmail-inbox")
+                - Chat summaries: Use PINECONE_NAMESPACE (e.g., "chat-summary-knowledge")
+                - User isolation via metadata user_id
                 - Type metadata: "email" (document type filter)
 
                 Runs in thread executor to avoid blocking the async event loop.
@@ -804,27 +806,55 @@ async def _background_gmail_sync(request, user_id: str, oauth_token: dict):
                     )
                     return
 
-                # Collection-based isolation: each user has their own collection
-                # Note: Open WebUI uses collections for user isolation, not namespaces
-                collection_name = f"gmail_{user_id}"
+                # Use namespace-based isolation for Gmail emails WITH user isolation
+                # Collection name: "gmail" (shared across all users)
+                # Namespace: self.namespace (e.g., "gmail-inbox") 
+                # User isolation: metadata user_id + collection filter
+                collection_name = "gmail"
+                gmail_namespace = self.namespace or "gmail-inbox"
+
+                # Ensure all vectors have user_id in metadata for isolation
+                for item in valid_items:
+                    if "metadata" not in item:
+                        item["metadata"] = {}
+                    item["metadata"]["user_id"] = user_id
+                    item["metadata"]["collection_name"] = f"gmail_{user_id}"  # For filtering
 
                 logger.info(
                     f"📤 Upserting {len(valid_items)} valid vectors to collection: {collection_name}"
                 )
                 logger.info(
-                    f"   Collection-based isolation (not namespace) - each user gets their own collection"
+                    f"   Namespace: '{gmail_namespace}' (Gmail emails separated from chat summaries)"
+                )
+                logger.info(
+                    f"   User isolation: metadata user_id=""{user_id}"" + collection filter"
                 )
 
                 try:
-                    # Use existing VECTOR_DB_CLIENT.upsert (handles batching, errors, retries)
+                    # Use existing VECTOR_DB_CLIENT.upsert with namespace support
                     # Run in thread executor to avoid blocking async event loop
                     loop = asyncio.get_running_loop()
-                    await loop.run_in_executor(
-                        None, VECTOR_DB_CLIENT.upsert, collection_name, valid_items
-                    )
-                    logger.info(
-                        f"✅ Upserted {len(valid_items)} vectors to collection {collection_name}"
-                    )
+                    
+                    # Check if the vector DB client supports namespace parameter
+                    import inspect
+                    upsert_signature = inspect.signature(VECTOR_DB_CLIENT.upsert)
+                    if 'namespace' in upsert_signature.parameters:
+                        # Vector DB supports namespace (e.g., Pinecone)
+                        await loop.run_in_executor(
+                            None, VECTOR_DB_CLIENT.upsert, collection_name, valid_items, gmail_namespace
+                        )
+                        logger.info(
+                            f"✅ Upserted {len(valid_items)} vectors to collection {collection_name} in namespace '{gmail_namespace}' with user isolation"
+                        )
+                    else:
+                        # Vector DB doesn't support namespace (e.g., Chroma) - use collection-based isolation
+                        user_collection = f"gmail_{user_id}"
+                        await loop.run_in_executor(
+                            None, VECTOR_DB_CLIENT.upsert, user_collection, valid_items
+                        )
+                        logger.info(
+                            f"✅ Upserted {len(valid_items)} vectors to collection {user_collection} (no namespace support - using collection isolation)"
+                        )
 
                     # Clear valid_items to free memory immediately after upsert
                     valid_items.clear()
@@ -904,8 +934,8 @@ async def test_auto_sync_orchestrator():
             return 4
 
     class MockPineconeManager:
-        async def schedule_upsert(self, data, namespace):
-            logger.info(f"Mock upsert: {len(data)} vectors to namespace '{namespace}'")
+        async def schedule_upsert(self, data, user_id, namespace=None):
+            logger.info(f"Mock upsert: {len(data)} vectors for user '{user_id}' to namespace '{namespace}'")
             return f"job_{time.time()}"
 
     print("\n✅ TEST 1: Initialize Auto-Sync Orchestrator")
