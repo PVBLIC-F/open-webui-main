@@ -261,10 +261,10 @@ class EmailContentEnricher:
         
         # Common organization patterns - more specific
         org_patterns = [
-            # Explicit legal entities
+            # Explicit legal entities - Match ONLY the org name, not preceding words
             r'\b[A-Z][a-z]{2,20}(?: [A-Z][a-z]{2,20}){0,3} (?:Inc\.?|Corp\.?|LLC|Ltd\.?|Corporation|Company|Co\.)\b',
-            # Known organization keywords
-            r'\b(?:[A-Z][A-Z]+|[A-Z][a-z]{2,20}(?: [A-Z][a-z]{2,20}){0,2}) (?:Foundation|Institute|University|College|Hospital|Bank|Group|Partners|Associates)\b',
+            # Known organization keywords - Match ONLY the org name
+            r'\b[A-Z][a-z]{2,20}(?: [A-Z][a-z]{2,20}){0,2} (?:Foundation|Institute|University|College|Hospital|Bank|Group|Partners|Associates)\b',
             # ALL CAPS organizations (3+ letters)
             r'\b[A-Z]{3,10}\b(?! [a-z])',  # IBM, NASA, WHO (not followed by lowercase)
         ]
@@ -273,6 +273,9 @@ class EmailContentEnricher:
             matches = re.finditer(pattern, text)
             for match in matches:
                 org_name = match.group(0).strip()
+                
+                # Remove leading articles/words like "We Are" from org name
+                org_name = re.sub(r'^(?:We |The |A |An |Are )', '', org_name, flags=re.IGNORECASE).strip()
                 
                 # Skip if already found
                 if org_name in seen_orgs:
@@ -379,10 +382,13 @@ class EmailContentEnricher:
         if len(name) < 6 or name.count(' ') > 2:  # Must be 6+ chars, max 2 spaces
             return False
         
-        # Check if contains common title words (likely not a person)
-        title_words = ['mr', 'mrs', 'ms', 'dr', 'prof', 'rev', 'office', 'team', 'group']
+        # Check if contains common title words or street indicators (likely not a person)
+        non_person_words = [
+            'mr', 'mrs', 'ms', 'dr', 'prof', 'rev', 'office', 'team', 'group',
+            'street', 'avenue', 'road', 'boulevard', 'lane', 'drive', 'court', 'place'
+        ]
         name_words = name_lower.split()
-        if any(word in title_words for word in name_words):
+        if any(word in non_person_words for word in name_words):
             return False
         
         # Check context for person indicators (stronger signal)
