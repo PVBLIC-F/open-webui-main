@@ -1170,8 +1170,8 @@ async def _sync_user_periodic(user_id: str) -> bool:
             return False
         
         # Validation: Check OAuth session exists
-        oauth_session = OAuthSessions.get_oauth_session_by_user_id_and_provider(
-            user_id, "google"
+        oauth_session = OAuthSessions.get_session_by_provider_and_user_id(
+            "google", user_id
         )
         if not oauth_session:
             logger.debug(f"⏭️  No Google OAuth session for user {user_id}")
