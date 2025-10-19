@@ -109,7 +109,8 @@ class EmailContentEnricher:
         body = email_data.get('body', '')
         combined_text = f"{subject} {body}"
         
-        logger.info(f"Enriching email: {subject[:50]}...")
+        logger.info(f"🔬 EmailContentEnricher.enrich_email() called - subject: {subject[:50]}...")
+        logger.info(f"🔬 Using IMPROVED entity extraction patterns (v2.0)")
         
         # Perform comprehensive analysis
         analysis = self._analyze_content(combined_text, subject)
@@ -132,7 +133,11 @@ class EmailContentEnricher:
             'enrichment_timestamp': datetime.now().isoformat()
         })
         
-        logger.info(f"Enriched email with {len(analysis.entities)} entities, {len(analysis.topics)} topics")
+        logger.info(f"✅ Enriched email with {len(analysis.entities)} entity types, {len(analysis.topics)} topics")
+        logger.info(f"   Entity types found: {list(analysis.entities.keys())}")
+        logger.info(f"   Topics: {analysis.topics}")
+        logger.info(f"   Content type: {analysis.content_type}")
+        logger.info(f"   Semantic tags: {analysis.semantic_tags}")
         return enriched_data
 
     def _analyze_content(self, text: str, subject: str) -> ContentAnalysis:
