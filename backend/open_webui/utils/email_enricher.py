@@ -368,7 +368,7 @@ class EmailContentEnricher:
             r'hotel|resort|bank|corporation|company|foundation',
             # Generic terms that might match pattern
             r'final confirmation|table reservations?|ticket information',
-            r'family office|dear (?:sir|madam|team|all)',
+            r'family office|dear [a-z]+',  # Dear <anyone>
             r'action required|important notice|key (?:points?|topics?)',
             r'meeting notes?|discussion points?',
             # Email signature/closing terms
