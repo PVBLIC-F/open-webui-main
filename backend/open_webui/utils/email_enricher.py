@@ -53,23 +53,22 @@ class EmailContentEnricher:
     """
 
     def __init__(self):
-        # Entity extraction patterns
+        # Entity extraction patterns - precise patterns only
         self.entity_patterns = {
             'email': r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',
-            'phone': r'\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b',
+            'phone': r'\b(?:\+1\s?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b',  # US phone numbers
             'url': r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+',
-            'money': r'\$[\d,]+\.?\d*',
-            'percentage': r'\d+(?:\.\d+)?%',
-            'date': r'\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},?\s+\d{4}\b',
-            'time': r'\b\d{1,2}:\d{2}\s*(?:AM|PM|am|pm)?\b',
-            'zip_code': r'\b\d{5}(?:-\d{4})?\b',
-            'ssn': r'\b\d{3}-\d{2}-\d{4}\b'
+            'money': r'\$\d{1,3}(?:,\d{3})*(?:\.\d{2})?',  # Proper money format: $1,000.00
+            'percentage': r'\b\d+(?:\.\d+)?%\b',
+            'date': r'\b(?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\.?\s+\d{1,2}(?:st|nd|rd|th)?,?\s+\d{4}\b',
+            'time': r'\b\d{1,2}:\d{2}\s*(?:AM|PM|am|pm)\b',  # Require AM/PM
         }
 
         # Topic keywords for classification
         self.topic_keywords = {
             'project_management': ['project', 'milestone', 'deadline', 'task', 'deliverable', 'timeline'],
             'meeting': ['meeting', 'call', 'conference', 'agenda', 'schedule', 'appointment'],
+            'event': ['event', 'soiree', 'gala', 'reception', 'gathering', 'celebration', 'venue', 'rsvp'],
             'budget': ['budget', 'cost', 'price', 'money', 'financial', 'expense', 'funding'],
             'technical': ['technical', 'code', 'system', 'api', 'database', 'software', 'development'],
             'hr': ['employee', 'hiring', 'interview', 'benefits', 'salary', 'performance'],
@@ -77,7 +76,8 @@ class EmailContentEnricher:
             'marketing': ['marketing', 'campaign', 'advertising', 'promotion', 'brand'],
             'legal': ['legal', 'contract', 'agreement', 'compliance', 'law', 'regulation'],
             'operations': ['operations', 'process', 'workflow', 'procedure', 'policy'],
-            'research': ['research', 'study', 'analysis', 'data', 'findings', 'report']
+            'research': ['research', 'study', 'analysis', 'data', 'findings', 'report'],
+            'foundation': ['foundation', 'nonprofit', 'charity', 'donation', 'philanthropic', 'grant']
         }
 
         # Sentiment indicators
@@ -215,28 +215,35 @@ class EmailContentEnricher:
     def _extract_people(self, text: str) -> List[EntityInfo]:
         """Extract people names using pattern matching"""
         people = []
+        seen_names = set()
         
         # Common name patterns (first name + last name)
         name_patterns = [
-            r'\b[A-Z][a-z]+ [A-Z][a-z]+\b',  # John Smith
-            r'\b[A-Z]\. [A-Z][a-z]+\b',      # J. Smith
-            r'\b[A-Z][a-z]+ [A-Z]\. [A-Z][a-z]+\b'  # John A. Smith
+            r'\b[A-Z][a-z]{2,15} [A-Z][a-z]{2,15}\b',  # John Smith (2-15 chars per name)
+            r'\b[A-Z]\. [A-Z][a-z]{2,15}\b',           # J. Smith
+            r'\b[A-Z][a-z]{2,15} [A-Z]\. [A-Z][a-z]{2,15}\b'  # John A. Smith
         ]
         
         for pattern in name_patterns:
             matches = re.finditer(pattern, text)
             for match in matches:
-                name = match.group(0)
+                name = match.group(0).strip()
+                
+                # Skip if already found
+                if name in seen_names:
+                    continue
+                
                 context = self._get_entity_context(text, match.start(), match.end())
                 
                 # Filter out common false positives
                 if not self._is_likely_person(name, context):
                     continue
                 
+                seen_names.add(name)
                 people.append(EntityInfo(
                     type='person',
                     value=name,
-                    confidence=0.7,  # Moderate confidence for pattern-based extraction
+                    confidence=0.7,
                     context=context
                 ))
         
@@ -245,20 +252,38 @@ class EmailContentEnricher:
     def _extract_organizations(self, text: str) -> List[EntityInfo]:
         """Extract organization names"""
         organizations = []
+        seen_orgs = set()
         
-        # Common organization patterns
+        # Common organization patterns - more specific
         org_patterns = [
-            r'\b[A-Z][a-z]+ (?:Inc|Corp|LLC|Ltd|Company|Co\.|Corporation)\b',
-            r'\b[A-Z][a-z]+ [A-Z][a-z]+ (?:Inc|Corp|LLC|Ltd|Company|Co\.|Corporation)\b',
-            r'\b[A-Z]+ (?:Inc|Corp|LLC|Ltd|Company|Co\.|Corporation)\b'  # IBM Inc
+            # Explicit legal entities
+            r'\b[A-Z][a-z]{2,20}(?: [A-Z][a-z]{2,20}){0,3} (?:Inc\.?|Corp\.?|LLC|Ltd\.?|Corporation|Company|Co\.)\b',
+            # Known organization keywords
+            r'\b(?:[A-Z][A-Z]+|[A-Z][a-z]{2,20}(?: [A-Z][a-z]{2,20}){0,2}) (?:Foundation|Institute|University|College|Hospital|Bank|Group|Partners|Associates)\b',
+            # ALL CAPS organizations (3+ letters)
+            r'\b[A-Z]{3,10}\b(?! [a-z])',  # IBM, NASA, WHO (not followed by lowercase)
         ]
         
         for pattern in org_patterns:
-            matches = re.finditer(pattern, text, re.IGNORECASE)
+            matches = re.finditer(pattern, text)
             for match in matches:
-                org_name = match.group(0)
+                org_name = match.group(0).strip()
+                
+                # Skip if already found
+                if org_name in seen_orgs:
+                    continue
+                
+                # Skip single words that are too short
+                if ' ' not in org_name and len(org_name) < 4:
+                    continue
+                
+                # Skip common false positives
+                if self._is_false_org(org_name):
+                    continue
+                
                 context = self._get_entity_context(text, match.start(), match.end())
                 
+                seen_orgs.add(org_name)
                 organizations.append(EntityInfo(
                     type='organization',
                     value=org_name,
@@ -268,23 +293,51 @@ class EmailContentEnricher:
         
         return organizations
 
+    def _is_false_org(self, org_name: str) -> bool:
+        """Check if organization name is likely a false positive"""
+        org_lower = org_name.lower()
+        
+        # Common false positives
+        false_orgs = [
+            'dear', 'sincerely', 'regards', 'thanks', 'best', 'hello',
+            'important', 'urgent', 'action', 'required', 'information',
+            'confirmation', 'reservation', 'ticket', 'final', 'exclusive'
+        ]
+        
+        # Check if it's a common false positive
+        for false_org in false_orgs:
+            if false_org in org_lower:
+                return True
+        
+        return False
+
     def _extract_locations(self, text: str) -> List[EntityInfo]:
         """Extract location names"""
         locations = []
+        seen_locations = set()
         
-        # Common city/state patterns
+        # Common city/state patterns - more specific
         location_patterns = [
-            r'\b[A-Z][a-z]+,?\s+[A-Z]{2}\b',  # New York, NY
-            r'\b[A-Z][a-z]+ (?:City|Town|Village)\b',  # New York City
-            r'\b(?:New York|Los Angeles|Chicago|Houston|Phoenix|Philadelphia|San Antonio|San Diego|Dallas|San Jose)\b'
+            # City, State abbreviation
+            r'\b[A-Z][a-z]{2,20},\s+[A-Z]{2}\b',  # New York, NY (requires comma)
+            # Full addresses with street numbers
+            r'\b\d{1,5}\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3},\s+[A-Z][a-z]+,\s+[A-Z]{2}\s+\d{5}\b',
+            # Major US cities (only well-known ones)
+            r'\b(?:New York|Los Angeles|Chicago|Houston|Philadelphia|San Diego|San Francisco|Boston|Seattle|Miami|Washington DC)\b'
         ]
         
         for pattern in location_patterns:
-            matches = re.finditer(pattern, text, re.IGNORECASE)
+            matches = re.finditer(pattern, text)
             for match in matches:
-                location = match.group(0)
+                location = match.group(0).strip()
+                
+                # Skip if already found
+                if location in seen_locations:
+                    continue
+                
                 context = self._get_entity_context(text, match.start(), match.end())
                 
+                seen_locations.add(location)
                 locations.append(EntityInfo(
                     type='location',
                     value=location,
@@ -296,22 +349,49 @@ class EmailContentEnricher:
 
     def _is_likely_person(self, name: str, context: str) -> bool:
         """Determine if a name is likely a person (not a company/product)"""
-        # Common false positive indicators
-        false_positives = [
-            'New York', 'Los Angeles', 'San Francisco', 'United States',
-            'United Kingdom', 'United Nations', 'General Electric',
-            'General Motors', 'American Express', 'Bank of America'
+        name_lower = name.lower()
+        
+        # Common false positive indicators - locations, companies, generic terms
+        false_positive_patterns = [
+            # Locations
+            r'new york|los angeles|san francisco|new jersey|san diego',
+            r'united states|united kingdom|virgin hotel|virgin islands',
+            # Company indicators
+            r'hotel|resort|bank|corporation|company|foundation',
+            # Generic terms that might match pattern
+            r'final confirmation|table reservations?|ticket information',
+            r'family office|dear (?:sir|madam|team|all)',
+            r'action required|important notice|key (?:points?|topics?)',
+            r'meeting notes?|discussion points?',
         ]
         
-        if name in false_positives:
+        # Check if name matches false positive patterns
+        for pattern in false_positive_patterns:
+            if re.search(pattern, name_lower):
+                return False
+        
+        # Names that are too short or generic
+        if len(name) < 6 or name.count(' ') > 2:  # Must be 6+ chars, max 2 spaces
             return False
         
-        # Check context for person indicators
-        person_indicators = ['said', 'told', 'asked', 'replied', 'wrote', 'emailed', 'called']
-        if any(indicator in context.lower() for indicator in person_indicators):
+        # Check if contains common title words (likely not a person)
+        title_words = ['mr', 'mrs', 'ms', 'dr', 'prof', 'rev', 'office', 'team', 'group']
+        name_words = name_lower.split()
+        if any(word in title_words for word in name_words):
+            return False
+        
+        # Check context for person indicators (stronger signal)
+        person_indicators = [
+            'dear', 'hi', 'hello', 'from', 'to:', 'cc:', 
+            'said', 'told', 'asked', 'replied', 'wrote', 'emailed', 'called',
+            'sincerely', 'regards', 'thanks', 'contact'
+        ]
+        context_lower = context.lower()
+        if any(indicator in context_lower for indicator in person_indicators):
             return True
         
-        return True  # Default to true for pattern-based extraction
+        # Default to false to avoid false positives (conservative approach)
+        return False
 
     def _get_entity_context(self, text: str, start: int, end: int, context_size: int = 50) -> str:
         """Get context around an entity"""
