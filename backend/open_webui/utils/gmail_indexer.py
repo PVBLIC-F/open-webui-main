@@ -24,6 +24,8 @@ from typing import Dict, List, Optional
 
 from open_webui.utils.gmail_processor import GmailProcessor
 from open_webui.utils.text_cleaner import TextCleaner
+from open_webui.utils.semantic_chunker import SemanticEmailChunker
+from open_webui.utils.email_enricher import EmailContentEnricher
 from openai import AsyncOpenAI
 
 # Set up logger with INFO level for visibility
@@ -68,6 +70,8 @@ class GmailIndexer:
         self.embeddings = embedding_service
         self.splitter = content_aware_splitter
         self.doc_processor = document_processor
+        self.semantic_chunker = SemanticEmailChunker()
+        self.email_enricher = EmailContentEnricher()
         self.namespace = gmail_namespace
         self.summarizer_client = summarizer_client
         self.summarizer_model = summarizer_model
@@ -104,20 +108,30 @@ class GmailIndexer:
 
         logger.info(f"Processing email {email_id} ({base_metadata['subject'][:50]}...)")
 
-        # Step 2: Chunk the email text using content-aware splitter
-        chunks = self.splitter.split_text(document_text)
+        # Step 2: Enrich email data with semantic analysis
+        enriched_email_data = self.email_enricher.enrich_email({
+            'subject': base_metadata.get('subject', ''),
+            'body': document_text,
+            **base_metadata
+        })
 
-        if not chunks:
-            chunks = [document_text]  # Fallback to single chunk
+        # Step 3: Create semantic chunks using intelligent chunking
+        semantic_chunks = self.semantic_chunker.chunk_email(
+            document_text, 
+            base_metadata.get('subject', '')
+        )
 
-        logger.info(f"Email {email_id} will have {len(chunks)} chunk(s)")
+        # Convert semantic chunks to simple text chunks for compatibility
+        chunks = [chunk.text for chunk in semantic_chunks] if semantic_chunks else [document_text]
 
-        # Step 3: Generate email summary (1-2 sentences)
+        logger.info(f"Email {email_id} will have {len(chunks)} semantic chunk(s)")
+
+        # Step 4: Generate email summary (1-2 sentences)
         email_summary = await self._generate_summary(
             base_metadata.get("subject", ""), base_metadata.get("body_original", "")
         )
 
-        # Step 4: Build dual-representation vectors
+        # Step 5: Build dual-representation vectors
         # Vector 1: Always create a summary vector (for email discovery)
         # Vectors 2-N: Content chunks (for long emails only)
 
@@ -165,17 +179,18 @@ class GmailIndexer:
             f"Email {email_id}: 1 summary + {len(chunks) if len(chunks) > 1 else 0} content vectors"
         )
 
-        # Step 5: Generate embeddings for all chunks (summary + content)
+        # Step 6: Generate embeddings for all chunks (summary + content)
         all_embeddings = await self.embeddings.embed_batch(all_chunks)
 
         logger.info(f"Generated {len(all_embeddings)} embeddings for email {email_id}")
 
-        # Step 6: Build upsert data with dual representation
+        # Step 7: Build upsert data with dual representation and enriched metadata
         upsert_data = self._build_upsert_data(
             chunks=all_chunks,
             embeddings=all_embeddings,
             chunk_types=chunk_types,
             base_metadata=base_metadata,
+            enriched_data=enriched_email_data,
             email_summary=email_summary,
         )
 
@@ -320,6 +335,37 @@ class GmailIndexer:
 
         return summary if summary else subject
 
+    def _extract_entity_values(self, entities: dict, entity_type: str) -> str:
+        """
+        Extract entity values from enriched data and format for Pinecone storage.
+        
+        Args:
+            entities: Dictionary of entities from email_enricher
+            entity_type: Type of entity to extract (e.g., 'people', 'organizations')
+            
+        Returns:
+            Comma-separated string of entity values
+        """
+        if not entities or entity_type not in entities:
+            return ""
+        
+        entity_list = entities[entity_type]
+        if not entity_list:
+            return ""
+        
+        # Extract just the values from entity objects
+        values = []
+        for entity in entity_list:
+            if isinstance(entity, dict):
+                values.append(entity.get('value', ''))
+            else:
+                # Handle EntityInfo objects
+                values.append(getattr(entity, 'value', str(entity)))
+        
+        # Remove empty values and join
+        values = [v for v in values if v]
+        return ",".join(values[:10])  # Limit to 10 entities per type
+
     def _create_content_fingerprint(self, snippet: str) -> str:
         """
         Create content fingerprint for duplicate detection.
@@ -373,6 +419,7 @@ class GmailIndexer:
         embeddings: List[List[float]],
         chunk_types: List[str],
         base_metadata: Dict,
+        enriched_data: Dict,
         email_summary: str,
     ) -> List[Dict]:
         """
@@ -445,6 +492,22 @@ class GmailIndexer:
                 "summary_id": rec_id,  # ← For consistency with chat summaries
                 # Deduplication
                 "hash": base_metadata["hash"],
+                
+                # Enhanced metadata from content enrichment (Pinecone-compatible format)
+                "topics": ",".join(enriched_data.get("topics", [])),
+                "sentiment_score": enriched_data.get("sentiment", {}).get("overall", 0.0),
+                "sentiment_positive": enriched_data.get("sentiment", {}).get("positive", 0.0),
+                "sentiment_negative": enriched_data.get("sentiment", {}).get("negative", 0.0),
+                "key_phrases": ",".join(enriched_data.get("key_phrases", [])),
+                "semantic_tags": ",".join(enriched_data.get("semantic_tags", [])),
+                "content_type": enriched_data.get("content_type", "general"),
+                "action_items": ",".join(enriched_data.get("action_items", [])),
+                # Entity extraction - store as comma-separated values
+                "entity_people": self._extract_entity_values(enriched_data.get("entities", {}), "people"),
+                "entity_organizations": self._extract_entity_values(enriched_data.get("entities", {}), "organizations"),
+                "entity_locations": self._extract_entity_values(enriched_data.get("entities", {}), "locations"),
+                "entity_dates": self._extract_entity_values(enriched_data.get("entities", {}), "date"),
+                "entity_money": self._extract_entity_values(enriched_data.get("entities", {}), "money"),
             }
 
             upsert_data.append(

@@ -1,0 +1,574 @@
+"""
+Email Content Enricher
+
+Advanced email content analysis and metadata enrichment for improved
+semantic search and content discovery.
+
+Features:
+- Named Entity Recognition (people, organizations, locations, dates)
+- Topic classification and sentiment analysis
+- Key phrase extraction and semantic tagging
+- Content type classification
+- Relationship extraction
+"""
+
+import re
+import logging
+from typing import Dict, List, Optional, Tuple
+from dataclasses import dataclass
+from datetime import datetime
+import hashlib
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class EntityInfo:
+    """Information about extracted entities"""
+    type: str  # 'person', 'organization', 'location', 'date', 'money', etc.
+    value: str
+    confidence: float
+    context: str
+
+
+@dataclass
+class ContentAnalysis:
+    """Complete content analysis results"""
+    entities: Dict[str, List[EntityInfo]]
+    topics: List[str]
+    sentiment: Dict[str, float]
+    key_phrases: List[str]
+    semantic_tags: List[str]
+    content_type: str
+    action_items: List[str]
+    relationships: List[Dict]
+
+
+class EmailContentEnricher:
+    """
+    Advanced email content analysis and enrichment for semantic search.
+    
+    Provides comprehensive content understanding including entity extraction,
+    topic classification, sentiment analysis, and relationship mapping.
+    """
+
+    def __init__(self):
+        # Entity extraction patterns
+        self.entity_patterns = {
+            'email': r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',
+            'phone': r'\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b',
+            'url': r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+',
+            'money': r'\$[\d,]+\.?\d*',
+            'percentage': r'\d+(?:\.\d+)?%',
+            'date': r'\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},?\s+\d{4}\b',
+            'time': r'\b\d{1,2}:\d{2}\s*(?:AM|PM|am|pm)?\b',
+            'zip_code': r'\b\d{5}(?:-\d{4})?\b',
+            'ssn': r'\b\d{3}-\d{2}-\d{4}\b'
+        }
+
+        # Topic keywords for classification
+        self.topic_keywords = {
+            'project_management': ['project', 'milestone', 'deadline', 'task', 'deliverable', 'timeline'],
+            'meeting': ['meeting', 'call', 'conference', 'agenda', 'schedule', 'appointment'],
+            'budget': ['budget', 'cost', 'price', 'money', 'financial', 'expense', 'funding'],
+            'technical': ['technical', 'code', 'system', 'api', 'database', 'software', 'development'],
+            'hr': ['employee', 'hiring', 'interview', 'benefits', 'salary', 'performance'],
+            'sales': ['sales', 'client', 'customer', 'proposal', 'contract', 'revenue'],
+            'marketing': ['marketing', 'campaign', 'advertising', 'promotion', 'brand'],
+            'legal': ['legal', 'contract', 'agreement', 'compliance', 'law', 'regulation'],
+            'operations': ['operations', 'process', 'workflow', 'procedure', 'policy'],
+            'research': ['research', 'study', 'analysis', 'data', 'findings', 'report']
+        }
+
+        # Sentiment indicators
+        self.sentiment_indicators = {
+            'positive': ['great', 'excellent', 'good', 'amazing', 'wonderful', 'fantastic', 'awesome', 'perfect'],
+            'negative': ['bad', 'terrible', 'awful', 'horrible', 'disappointing', 'frustrating', 'problem', 'issue'],
+            'neutral': ['okay', 'fine', 'acceptable', 'standard', 'normal', 'regular']
+        }
+
+        # Action item patterns
+        self.action_patterns = [
+            r'(?:action item|todo|task|follow up|next step)\s*:?\s*([^.!?]*)',
+            r'(?:assign|delegate|responsible|owner)\s+([^.!?]*)',
+            r'(?:track|monitor|check|verify|confirm)\s+([^.!?]*)',
+            r'(?:need to|should|must|will|going to)\s+([^.!?]*)'
+        ]
+
+    def enrich_email(self, email_data: Dict) -> Dict:
+        """
+        Enrich email data with comprehensive content analysis.
+        
+        Args:
+            email_data: Dictionary containing email information
+            
+        Returns:
+            Enriched email data with additional metadata
+        """
+        subject = email_data.get('subject', '')
+        body = email_data.get('body', '')
+        combined_text = f"{subject} {body}"
+        
+        logger.info(f"Enriching email: {subject[:50]}...")
+        
+        # Perform comprehensive analysis
+        analysis = self._analyze_content(combined_text, subject)
+        
+        # Create enriched metadata (ensure JSON-serializable)
+        enriched_data = email_data.copy()
+        enriched_data.update({
+            'entities': self._serialize_entities(analysis.entities),
+            'topics': analysis.topics,
+            'sentiment': analysis.sentiment,
+            'key_phrases': analysis.key_phrases,
+            'semantic_tags': analysis.semantic_tags,
+            'content_type': analysis.content_type,
+            'action_items': analysis.action_items,
+            'relationships': analysis.relationships,
+            
+            # Derived fields for search optimization
+            'searchable_text': self._create_searchable_text(email_data, analysis),
+            'content_hash': self._generate_content_hash(combined_text),
+            'enrichment_timestamp': datetime.now().isoformat()
+        })
+        
+        logger.info(f"Enriched email with {len(analysis.entities)} entities, {len(analysis.topics)} topics")
+        return enriched_data
+
+    def _analyze_content(self, text: str, subject: str) -> ContentAnalysis:
+        """Perform comprehensive content analysis"""
+        # Extract entities
+        entities = self._extract_entities(text)
+        
+        # Classify topics
+        topics = self._classify_topics(text)
+        
+        # Analyze sentiment
+        sentiment = self._analyze_sentiment(text)
+        
+        # Extract key phrases
+        key_phrases = self._extract_key_phrases(text)
+        
+        # Generate semantic tags
+        semantic_tags = self._generate_semantic_tags(text, subject)
+        
+        # Classify content type
+        content_type = self._classify_content_type(text, subject)
+        
+        # Extract action items
+        action_items = self._extract_action_items(text)
+        
+        # Extract relationships
+        relationships = self._extract_relationships(text, entities)
+        
+        return ContentAnalysis(
+            entities=entities,
+            topics=topics,
+            sentiment=sentiment,
+            key_phrases=key_phrases,
+            semantic_tags=semantic_tags,
+            content_type=content_type,
+            action_items=action_items,
+            relationships=relationships
+        )
+
+    def _extract_entities(self, text: str) -> Dict[str, List[EntityInfo]]:
+        """Extract named entities from text"""
+        entities = {}
+        
+        for entity_type, pattern in self.entity_patterns.items():
+            matches = re.finditer(pattern, text, re.IGNORECASE)
+            entity_list = []
+            
+            for match in matches:
+                value = match.group(0)
+                context = self._get_entity_context(text, match.start(), match.end())
+                
+                entity_info = EntityInfo(
+                    type=entity_type,
+                    value=value,
+                    confidence=self._calculate_entity_confidence(entity_type, value, context),
+                    context=context
+                )
+                entity_list.append(entity_info)
+            
+            if entity_list:
+                entities[entity_type] = entity_list
+        
+        # Extract people (simple pattern-based approach)
+        people = self._extract_people(text)
+        if people:
+            entities['people'] = people
+        
+        # Extract organizations
+        organizations = self._extract_organizations(text)
+        if organizations:
+            entities['organizations'] = organizations
+        
+        # Extract locations
+        locations = self._extract_locations(text)
+        if locations:
+            entities['locations'] = locations
+        
+        return entities
+
+    def _extract_people(self, text: str) -> List[EntityInfo]:
+        """Extract people names using pattern matching"""
+        people = []
+        
+        # Common name patterns (first name + last name)
+        name_patterns = [
+            r'\b[A-Z][a-z]+ [A-Z][a-z]+\b',  # John Smith
+            r'\b[A-Z]\. [A-Z][a-z]+\b',      # J. Smith
+            r'\b[A-Z][a-z]+ [A-Z]\. [A-Z][a-z]+\b'  # John A. Smith
+        ]
+        
+        for pattern in name_patterns:
+            matches = re.finditer(pattern, text)
+            for match in matches:
+                name = match.group(0)
+                context = self._get_entity_context(text, match.start(), match.end())
+                
+                # Filter out common false positives
+                if not self._is_likely_person(name, context):
+                    continue
+                
+                people.append(EntityInfo(
+                    type='person',
+                    value=name,
+                    confidence=0.7,  # Moderate confidence for pattern-based extraction
+                    context=context
+                ))
+        
+        return people
+
+    def _extract_organizations(self, text: str) -> List[EntityInfo]:
+        """Extract organization names"""
+        organizations = []
+        
+        # Common organization patterns
+        org_patterns = [
+            r'\b[A-Z][a-z]+ (?:Inc|Corp|LLC|Ltd|Company|Co\.|Corporation)\b',
+            r'\b[A-Z][a-z]+ [A-Z][a-z]+ (?:Inc|Corp|LLC|Ltd|Company|Co\.|Corporation)\b',
+            r'\b[A-Z]+ (?:Inc|Corp|LLC|Ltd|Company|Co\.|Corporation)\b'  # IBM Inc
+        ]
+        
+        for pattern in org_patterns:
+            matches = re.finditer(pattern, text, re.IGNORECASE)
+            for match in matches:
+                org_name = match.group(0)
+                context = self._get_entity_context(text, match.start(), match.end())
+                
+                organizations.append(EntityInfo(
+                    type='organization',
+                    value=org_name,
+                    confidence=0.8,
+                    context=context
+                ))
+        
+        return organizations
+
+    def _extract_locations(self, text: str) -> List[EntityInfo]:
+        """Extract location names"""
+        locations = []
+        
+        # Common city/state patterns
+        location_patterns = [
+            r'\b[A-Z][a-z]+,?\s+[A-Z]{2}\b',  # New York, NY
+            r'\b[A-Z][a-z]+ (?:City|Town|Village)\b',  # New York City
+            r'\b(?:New York|Los Angeles|Chicago|Houston|Phoenix|Philadelphia|San Antonio|San Diego|Dallas|San Jose)\b'
+        ]
+        
+        for pattern in location_patterns:
+            matches = re.finditer(pattern, text, re.IGNORECASE)
+            for match in matches:
+                location = match.group(0)
+                context = self._get_entity_context(text, match.start(), match.end())
+                
+                locations.append(EntityInfo(
+                    type='location',
+                    value=location,
+                    confidence=0.7,
+                    context=context
+                ))
+        
+        return locations
+
+    def _is_likely_person(self, name: str, context: str) -> bool:
+        """Determine if a name is likely a person (not a company/product)"""
+        # Common false positive indicators
+        false_positives = [
+            'New York', 'Los Angeles', 'San Francisco', 'United States',
+            'United Kingdom', 'United Nations', 'General Electric',
+            'General Motors', 'American Express', 'Bank of America'
+        ]
+        
+        if name in false_positives:
+            return False
+        
+        # Check context for person indicators
+        person_indicators = ['said', 'told', 'asked', 'replied', 'wrote', 'emailed', 'called']
+        if any(indicator in context.lower() for indicator in person_indicators):
+            return True
+        
+        return True  # Default to true for pattern-based extraction
+
+    def _get_entity_context(self, text: str, start: int, end: int, context_size: int = 50) -> str:
+        """Get context around an entity"""
+        context_start = max(0, start - context_size)
+        context_end = min(len(text), end + context_size)
+        return text[context_start:context_end].strip()
+
+    def _calculate_entity_confidence(self, entity_type: str, value: str, context: str) -> float:
+        """Calculate confidence score for entity extraction"""
+        base_confidence = {
+            'email': 0.95,
+            'phone': 0.9,
+            'url': 0.95,
+            'money': 0.9,
+            'percentage': 0.95,
+            'date': 0.8,
+            'time': 0.85,
+            'zip_code': 0.9,
+            'ssn': 0.95,
+            'person': 0.7,
+            'organization': 0.8,
+            'location': 0.7
+        }.get(entity_type, 0.5)
+        
+        # Adjust based on context
+        if len(context) > 100:  # More context = higher confidence
+            base_confidence = min(1.0, base_confidence + 0.1)
+        
+        return base_confidence
+
+    def _classify_topics(self, text: str) -> List[str]:
+        """Classify topics based on keyword matching"""
+        text_lower = text.lower()
+        topics = []
+        
+        for topic, keywords in self.topic_keywords.items():
+            # Count keyword matches
+            matches = sum(1 for keyword in keywords if keyword in text_lower)
+            
+            # If we have enough matches, include this topic
+            if matches >= 2 or (matches == 1 and len(keywords) <= 3):
+                topics.append(topic)
+        
+        return topics
+
+    def _analyze_sentiment(self, text: str) -> Dict[str, float]:
+        """Analyze sentiment of the text"""
+        text_lower = text.lower()
+        
+        # Count sentiment indicators
+        positive_count = sum(1 for word in self.sentiment_indicators['positive'] if word in text_lower)
+        negative_count = sum(1 for word in self.sentiment_indicators['negative'] if word in text_lower)
+        neutral_count = sum(1 for word in self.sentiment_indicators['neutral'] if word in text_lower)
+        
+        total_sentiment_words = positive_count + negative_count + neutral_count
+        
+        if total_sentiment_words == 0:
+            return {'overall': 0.0, 'confidence': 0.0, 'positive': 0.0, 'negative': 0.0, 'neutral': 0.0}
+        
+        # Calculate sentiment scores
+        positive_score = positive_count / total_sentiment_words
+        negative_score = negative_count / total_sentiment_words
+        neutral_score = neutral_count / total_sentiment_words
+        
+        # Overall sentiment (-1 to 1)
+        overall_sentiment = positive_score - negative_score
+        
+        # Confidence based on number of sentiment words
+        confidence = min(1.0, total_sentiment_words / 5.0)
+        
+        return {
+            'overall': overall_sentiment,
+            'confidence': confidence,
+            'positive': positive_score,
+            'negative': negative_score,
+            'neutral': neutral_score
+        }
+
+    def _extract_key_phrases(self, text: str) -> List[str]:
+        """Extract key phrases from text"""
+        # Simple key phrase extraction based on patterns
+        key_phrases = []
+        
+        # Extract noun phrases (simplified)
+        noun_phrases = re.findall(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b', text)
+        
+        # Filter and rank phrases
+        for phrase in noun_phrases:
+            if len(phrase.split()) >= 2 and len(phrase) > 5:  # Multi-word phrases
+                key_phrases.append(phrase)
+        
+        # Remove duplicates and limit
+        key_phrases = list(set(key_phrases))[:10]
+        
+        return key_phrases
+
+    def _generate_semantic_tags(self, text: str, subject: str) -> List[str]:
+        """Generate semantic tags for better search"""
+        tags = []
+        text_lower = text.lower()
+        subject_lower = subject.lower()
+        
+        # Content type tags
+        if '?' in text:
+            tags.append('question')
+        if any(word in text_lower for word in ['deadline', 'due', 'by']):
+            tags.append('deadline')
+        if any(word in text_lower for word in ['meeting', 'call', 'schedule']):
+            tags.append('meeting')
+        if any(word in text_lower for word in ['urgent', 'asap', 'immediately']):
+            tags.append('urgent')
+        if any(word in text_lower for word in ['please', 'request', 'ask']):
+            tags.append('request')
+        if any(word in text_lower for word in ['decision', 'agree', 'decided']):
+            tags.append('decision')
+        if any(word in text_lower for word in ['action', 'todo', 'task']):
+            tags.append('action_item')
+        
+        # Priority indicators
+        if any(word in subject_lower for word in ['urgent', 'asap', 'important', 'critical']):
+            tags.append('high_priority')
+        
+        # Entity type tags
+        if '@' in text:
+            tags.append('contact_info')
+        if '$' in text:
+            tags.append('financial')
+        if '%' in text:
+            tags.append('percentage')
+        if 'http' in text_lower:
+            tags.append('link')
+        
+        # Communication type
+        if any(word in text_lower for word in ['thank', 'thanks', 'appreciate']):
+            tags.append('gratitude')
+        if any(word in text_lower for word in ['sorry', 'apologize', 'regret']):
+            tags.append('apology')
+        if any(word in text_lower for word in ['congratulations', 'congrats', 'celebrate']):
+            tags.append('celebration')
+        
+        return tags
+
+    def _classify_content_type(self, text: str, subject: str) -> str:
+        """Classify the type of email content"""
+        text_lower = text.lower()
+        subject_lower = subject.lower()
+        
+        # Meeting-related
+        if any(word in text_lower for word in ['meeting', 'call', 'conference', 'schedule']):
+            return 'meeting'
+        
+        # Question/Inquiry
+        if '?' in text or any(word in text_lower for word in ['question', 'inquiry', 'ask']):
+            return 'inquiry'
+        
+        # Request
+        if any(word in text_lower for word in ['please', 'request', 'ask', 'need']):
+            return 'request'
+        
+        # Update/Status
+        if any(word in text_lower for word in ['update', 'status', 'progress', 'report']):
+            return 'update'
+        
+        # Decision/Agreement
+        if any(word in text_lower for word in ['decide', 'agree', 'approve', 'decision']):
+            return 'decision'
+        
+        # Deadline/Urgent
+        if any(word in text_lower for word in ['deadline', 'urgent', 'asap', 'due']):
+            return 'deadline'
+        
+        # Thank you
+        if any(word in text_lower for word in ['thank', 'thanks', 'appreciate']):
+            return 'gratitude'
+        
+        # Default
+        return 'general'
+
+    def _extract_action_items(self, text: str) -> List[str]:
+        """Extract action items from text"""
+        action_items = []
+        
+        for pattern in self.action_patterns:
+            matches = re.finditer(pattern, text, re.IGNORECASE)
+            for match in matches:
+                action = match.group(1).strip()
+                if action and len(action) > 5:  # Meaningful action items
+                    action_items.append(action)
+        
+        return list(set(action_items))  # Remove duplicates
+
+    def _extract_relationships(self, text: str, entities: Dict[str, List[EntityInfo]]) -> List[Dict]:
+        """Extract relationships between entities"""
+        relationships = []
+        
+        # Simple relationship extraction based on proximity
+        people = entities.get('people', [])
+        organizations = entities.get('organizations', [])
+        
+        # Person-Organization relationships
+        for person in people:
+            for org in organizations:
+                # Check if they appear in the same context
+                if abs(person.context.find(person.value) - org.context.find(org.value)) < 100:
+                    relationships.append({
+                        'type': 'person_organization',
+                        'source': person.value,
+                        'target': org.value,
+                        'confidence': 0.6
+                    })
+        
+        return relationships
+
+    def _create_searchable_text(self, email_data: Dict, analysis: ContentAnalysis) -> str:
+        """Create enhanced searchable text combining original content with enriched data"""
+        searchable_parts = []
+        
+        # Add original subject and body
+        if email_data.get('subject'):
+            searchable_parts.append(email_data['subject'])
+        if email_data.get('body'):
+            searchable_parts.append(email_data['body'])
+        
+        # Add key phrases
+        if analysis.key_phrases:
+            searchable_parts.append(' '.join(analysis.key_phrases))
+        
+        # Add topics as searchable terms
+        if analysis.topics:
+            searchable_parts.append(' '.join(analysis.topics))
+        
+        # Add entity values
+        for entity_type, entities in analysis.entities.items():
+            for entity in entities:
+                searchable_parts.append(entity.value)
+        
+        # Add semantic tags
+        if analysis.semantic_tags:
+            searchable_parts.append(' '.join(analysis.semantic_tags))
+        
+        return ' '.join(searchable_parts)
+
+    def _serialize_entities(self, entities: Dict[str, List[EntityInfo]]) -> Dict[str, List[Dict]]:
+        """Convert EntityInfo objects to JSON-serializable dicts"""
+        serialized = {}
+        for entity_type, entity_list in entities.items():
+            serialized[entity_type] = [
+                {
+                    'type': entity.type,
+                    'value': entity.value,
+                    'confidence': entity.confidence,
+                    'context': entity.context[:100]  # Limit context length for storage
+                }
+                for entity in entity_list
+            ]
+        return serialized
+
+    def _generate_content_hash(self, text: str) -> str:
+        """Generate a hash for content deduplication"""
+        return hashlib.md5(text.encode()).hexdigest()
