@@ -371,6 +371,13 @@ class EmailContentEnricher:
             r'family office|dear (?:sir|madam|team|all)',
             r'action required|important notice|key (?:points?|topics?)',
             r'meeting notes?|discussion points?',
+            # Email signature/closing terms
+            r'kind regards?|best regards?|warm regards?|sincerely|thanks|thank you',
+            r'yours (?:truly|sincerely|faithfully)',
+            # Job titles and departments
+            r'business development|sales (?:manager|director|representative)',
+            r'account (?:manager|executive)|customer success',
+            r'marketing (?:manager|director)|human resources',
         ]
         
         # Check if name matches false positive patterns
