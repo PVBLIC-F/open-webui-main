@@ -95,7 +95,8 @@ class SemanticEmailChunker:
         if not email_body or not email_body.strip():
             return []
 
-        logger.info(f"Chunking email with {len(email_body)} characters")
+        logger.info(f"🔪 SemanticEmailChunker.chunk_email() called - {len(email_body)} characters")
+        logger.info(f"🔪 Using SEMANTIC chunking (v2.0) - extracting meaningful sections")
 
         # Step 1: Extract meaningful sections
         sections = self._extract_sections(email_body)
