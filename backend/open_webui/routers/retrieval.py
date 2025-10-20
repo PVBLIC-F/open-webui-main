@@ -103,6 +103,7 @@ from open_webui.config import (
     DEFAULT_LOCALE,
     RAG_EMBEDDING_CONTENT_PREFIX,
     RAG_EMBEDDING_QUERY_PREFIX,
+    PINECONE_API_KEY,
 )
 from open_webui.env import (
     SRC_LOG_LEVELS,
@@ -656,7 +657,27 @@ def get_rf(
                 log.error(f"ColBERT: {e}")
                 raise Exception(ERROR_MESSAGES.DEFAULT(e))
         else:
-            if engine == "external":
+            if engine == "pinecone":
+                try:
+                    from open_webui.retrieval.models.pinecone_reranker import (
+                        PineconeReranker,
+                    )
+
+                    # Use PINECONE_API_KEY if external_reranker_api_key is not provided
+                    api_key = external_reranker_api_key or PINECONE_API_KEY
+                    if not api_key:
+                        raise ValueError(
+                            "PINECONE_API_KEY or RAG_EXTERNAL_RERANKER_API_KEY must be set"
+                        )
+
+                    rf = PineconeReranker(
+                        api_key=api_key,
+                        model=reranking_model,
+                    )
+                except Exception as e:
+                    log.error(f"PineconeReranking: {e}")
+                    raise Exception(ERROR_MESSAGES.DEFAULT(e))
+            elif engine == "external":
                 try:
                     from open_webui.retrieval.models.external import ExternalReranker
 
