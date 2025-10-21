@@ -1806,100 +1806,20 @@ def save_docs_to_vector_db(
                 log.info(f"Document with hash {metadata['hash']} already exists")
                 raise ValueError(ERROR_MESSAGES.DUPLICATE_CONTENT)
 
-    # Clean text content before processing
+    # Clean text content before processing (preserved from main branch)
     log.debug("Cleaning document text content")
     for doc in docs:
         doc.page_content = TextCleaner.clean_text(doc.page_content)
         # Clean markdown artifacts early (before chunking)
         doc.page_content = TextCleaner.clean_markdown_artifacts(doc.page_content)
 
-    # Apply semantic chunking first if enabled (creates semantically coherent chunks)
-    if split and request.app.state.config.ENABLE_SEMANTIC_CHUNKING:
-        log.info("Applying semantic chunking to detect topic boundaries")
-
-        # Get embedding function for semantic similarity
-        embedding_function = get_embedding_function(
-            request.app.state.config.RAG_EMBEDDING_ENGINE,
-            request.app.state.config.RAG_EMBEDDING_MODEL,
-            request.app.state.ef,
-            (
-                request.app.state.config.RAG_OPENAI_API_BASE_URL
-                if request.app.state.config.RAG_EMBEDDING_ENGINE == "openai"
-                else (
-                    request.app.state.config.RAG_OLLAMA_BASE_URL
-                    if request.app.state.config.RAG_EMBEDDING_ENGINE == "ollama"
-                    else request.app.state.config.RAG_AZURE_OPENAI_BASE_URL
-                )
-            ),
-            (
-                request.app.state.config.RAG_OPENAI_API_KEY
-                if request.app.state.config.RAG_EMBEDDING_ENGINE == "openai"
-                else (
-                    request.app.state.config.RAG_OLLAMA_API_KEY
-                    if request.app.state.config.RAG_EMBEDDING_ENGINE == "ollama"
-                    else request.app.state.config.RAG_AZURE_OPENAI_API_KEY
-                )
-            ),
-            request.app.state.config.RAG_EMBEDDING_BATCH_SIZE,
-        )
-
-        # Apply semantic splitting to each document
-        semantic_docs = []
-        for doc in docs:
-            try:
-                semantic_chunks = SemanticTextSplitter.split_text_semantically(
-                    doc.page_content,
-                    embedding_function,
-                    similarity_threshold=request.app.state.config.SEMANTIC_SIMILARITY_THRESHOLD,
-                    min_chunk_size=request.app.state.config.SEMANTIC_MIN_CHUNK_SIZE,
-                    max_chunk_size=request.app.state.config.SEMANTIC_MAX_CHUNK_SIZE,
-                )
-
-                # Create Document objects for each semantic chunk
-                for idx, chunk_text in enumerate(semantic_chunks):
-                    semantic_doc = Document(
-                        page_content=chunk_text,
-                        metadata={
-                            **doc.metadata,
-                            "semantic_chunk_index": idx,
-                            "is_semantic": True,
-                        },
-                    )
-                    semantic_docs.append(semantic_doc)
-
-            except Exception as e:
-                log.error(f"Error in semantic chunking: {e}")
-                # Fallback to original document
-                semantic_docs.append(doc)
-
-        docs = semantic_docs
-        log.info(f"Semantic chunking created {len(docs)} semantically coherent chunks")
-
-    # Apply secondary chunking based on configuration (only if semantic chunking is not enabled)
-    if split and not request.app.state.config.ENABLE_SEMANTIC_CHUNKING:
-        if request.app.state.config.ENABLE_HIERARCHICAL_CHUNKING:
-            log.info("Using hierarchical chunking (parent-child chunks)")
-
-            # Create parent splitter (large chunks for context)
-            parent_splitter = RecursiveCharacterTextSplitter(
-                separators=["\n\n", "\n", ".", "!", "?", ",", " ", ""],
-                chunk_size=request.app.state.config.PARENT_CHUNK_SIZE,
-                chunk_overlap=request.app.state.config.PARENT_CHUNK_OVERLAP,
-                add_start_index=True,
-            )
-
-            # Create child splitter (small chunks for retrieval)
-            child_splitter = RecursiveCharacterTextSplitter(
-                separators=["\n\n", "\n", ".", "!", "?", ",", " ", ""],
-                chunk_size=request.app.state.config.CHILD_CHUNK_SIZE,
-                chunk_overlap=request.app.state.config.CHILD_CHUNK_OVERLAP,
-            )
-
-            # Create hierarchical chunks
-            docs = HierarchicalChunker.create_hierarchical_chunks(
-                docs, parent_splitter, child_splitter
-            )
-        elif request.app.state.config.TEXT_SPLITTER in ["", "character"]:
+    # Apply text splitting based on configuration
+    if split:
+        if request.app.state.config.TEXT_SPLITTER in ["", "unstructured"]:
+            # Unstructured.io handles chunking internally, no additional splitting needed
+            log.info("Using Unstructured.io semantic chunking (handled internally)")
+            # docs are already chunked by UnstructuredUnifiedLoader
+        elif request.app.state.config.TEXT_SPLITTER in ["character"]:
             text_splitter = RecursiveCharacterTextSplitter(
                 separators=["\n\n", "\n", ".", "!", "?", ",", " ", ""],
                 chunk_size=request.app.state.config.CHUNK_SIZE,
