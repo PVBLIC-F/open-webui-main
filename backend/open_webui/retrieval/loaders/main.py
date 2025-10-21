@@ -395,12 +395,12 @@ class Loader:
             # NEW: Use Unstructured.io as the default unified loader
             loader = UnstructuredUnifiedLoader(
                 file_path=file_path,
-                strategy=self.kwargs.get("UNSTRUCTURED_STRATEGY", "hi_res"),
+                strategy=self.kwargs.get("UNSTRUCTURED_STRATEGY", "fast"),  # Use fast for better performance
                 clean_text=self.kwargs.get("UNSTRUCTURED_CLEAN_TEXT", True),
                 chunk_by_semantic=self.kwargs.get("UNSTRUCTURED_SEMANTIC_CHUNKING", True),
                 max_characters=self.kwargs.get("CHUNK_SIZE", 1000),
                 chunk_overlap=self.kwargs.get("CHUNK_OVERLAP", 200),
-                cleaning_level=self.kwargs.get("UNSTRUCTURED_CLEANING_LEVEL", "standard"),
+                cleaning_level=self.kwargs.get("UNSTRUCTURED_CLEANING_LEVEL", "minimal"),  # Use minimal for better performance
             )
         else:
             # Fallback: Use Unstructured.io for all file types
@@ -408,12 +408,12 @@ class Loader:
             log.info(f"Using Unstructured.io fallback for file type: {file_ext}")
             loader = UnstructuredUnifiedLoader(
                 file_path=file_path,
-                strategy=self.kwargs.get("UNSTRUCTURED_STRATEGY", "auto"),  # Use auto for unknown types
+                strategy=self.kwargs.get("UNSTRUCTURED_STRATEGY", "fast"),  # Use fast for better performance
                 clean_text=self.kwargs.get("UNSTRUCTURED_CLEAN_TEXT", True),
                 chunk_by_semantic=self.kwargs.get("UNSTRUCTURED_SEMANTIC_CHUNKING", True),
                 max_characters=self.kwargs.get("CHUNK_SIZE", 1000),
                 chunk_overlap=self.kwargs.get("CHUNK_OVERLAP", 200),
-                cleaning_level=self.kwargs.get("UNSTRUCTURED_CLEANING_LEVEL", "standard"),
+                cleaning_level=self.kwargs.get("UNSTRUCTURED_CLEANING_LEVEL", "minimal"),  # Use minimal for better performance
             )
 
         return loader
