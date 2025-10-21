@@ -19,7 +19,6 @@ from pathlib import Path
 
 from langchain_core.documents import Document
 from unstructured.partition.auto import partition
-from unstructured.chunking.title import chunk_by_title
 from unstructured.chunking.basic import chunk_elements
 from unstructured.cleaners.core import (
     clean_extra_whitespace,
@@ -28,9 +27,7 @@ from unstructured.cleaners.core import (
     clean_ordered_bullets,
     clean_non_ascii_chars,
     clean_trailing_punctuation,
-    clean,
 )
-from unstructured.staging.base import elements_to_json
 
 log = logging.getLogger(__name__)
 
@@ -266,10 +263,11 @@ class UnstructuredUnifiedLoader:
         return text.strip()
     
     def _chunk_semantically(self, elements):
-        """Chunk elements using semantic boundaries"""
+        """
+        Chunk elements using basic character-based chunking.
+        Uses chunk_elements for better performance than semantic chunking.
+        """
         try:
-            # Use basic chunking for better performance
-            # chunk_by_title can be slow for large documents
             chunks = chunk_elements(
                 elements,
                 max_characters=self.max_characters,
@@ -289,26 +287,41 @@ class UnstructuredUnifiedLoader:
     def _convert_to_documents(self, chunks) -> List[Document]:
         """Convert Unstructured chunks to LangChain Documents"""
         documents = []
+        total_chunks = len(chunks)  # Pre-calculate to avoid repeated len() calls
         
         for i, chunk in enumerate(chunks):
             try:
                 # Extract content
                 content = str(chunk)
                 
+                # Skip empty content
+                if not content or not content.strip():
+                    continue
+                
                 # Extract metadata
                 metadata = {}
                 if hasattr(chunk, 'metadata') and chunk.metadata:
                     metadata = chunk.metadata.to_dict()
                 
-                # Add additional metadata
+                # Add additional metadata (optimized for performance)
                 metadata.update({
                     "source": self.file_path,
                     "chunk_index": i,
-                    "total_chunks": len(chunks),
+                    "total_chunks": total_chunks,
                     "processing_engine": "unstructured",
                     "strategy": self.strategy,
                     "cleaning_level": self.cleaning_level,
                 })
+                
+                # Remove large/unnecessary fields to improve performance
+                fields_to_remove = [
+                    "orig_elements",  # Very large compressed JSON, not needed for retrieval
+                    "name",           # Redundant with filename
+                    "source",         # Redundant with filename (we set our own source)
+                ]
+                for field in fields_to_remove:
+                    if field in metadata:
+                        del metadata[field]
                 
                 # Create document
                 doc = Document(
