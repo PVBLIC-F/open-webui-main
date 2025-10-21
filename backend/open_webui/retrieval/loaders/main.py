@@ -253,6 +253,18 @@ class Loader:
             and not file_content_type.find("html") >= 0
         )
 
+    def _create_unstructured_loader(self, file_path: str) -> UnstructuredUnifiedLoader:
+        """Helper method to create UnstructuredUnifiedLoader with consistent configuration"""
+        return UnstructuredUnifiedLoader(
+            file_path=file_path,
+            strategy=self.kwargs.get("UNSTRUCTURED_STRATEGY", "fast"),
+            clean_text=self.kwargs.get("UNSTRUCTURED_CLEAN_TEXT", True),
+            chunk_by_semantic=self.kwargs.get("UNSTRUCTURED_SEMANTIC_CHUNKING", True),
+            max_characters=self.kwargs.get("CHUNK_SIZE", 1000),
+            chunk_overlap=self.kwargs.get("CHUNK_OVERLAP", 200),
+            cleaning_level=self.kwargs.get("UNSTRUCTURED_CLEANING_LEVEL", "minimal"),
+        )
+
     def _get_loader(self, filename: str, file_content_type: str, file_path: str):
         file_ext = filename.split(".")[-1].lower()
 
@@ -392,28 +404,12 @@ class Loader:
                 file_path=file_path,
             )
         elif self.engine in ["", "unstructured"]:
-            # NEW: Use Unstructured.io as the default unified loader
-            loader = UnstructuredUnifiedLoader(
-                file_path=file_path,
-                strategy=self.kwargs.get("UNSTRUCTURED_STRATEGY", "fast"),  # Use fast for better performance
-                clean_text=self.kwargs.get("UNSTRUCTURED_CLEAN_TEXT", True),
-                chunk_by_semantic=self.kwargs.get("UNSTRUCTURED_SEMANTIC_CHUNKING", True),
-                max_characters=self.kwargs.get("CHUNK_SIZE", 1000),
-                chunk_overlap=self.kwargs.get("CHUNK_OVERLAP", 200),
-                cleaning_level=self.kwargs.get("UNSTRUCTURED_CLEANING_LEVEL", "minimal"),  # Use minimal for better performance
-            )
+            # Use Unstructured.io as the default unified loader
+            loader = self._create_unstructured_loader(file_path)
         else:
             # Fallback: Use Unstructured.io for all file types
             # This ensures we support ALL Unstructured file types
             log.info(f"Using Unstructured.io fallback for file type: {file_ext}")
-            loader = UnstructuredUnifiedLoader(
-                file_path=file_path,
-                strategy=self.kwargs.get("UNSTRUCTURED_STRATEGY", "fast"),  # Use fast for better performance
-                clean_text=self.kwargs.get("UNSTRUCTURED_CLEAN_TEXT", True),
-                chunk_by_semantic=self.kwargs.get("UNSTRUCTURED_SEMANTIC_CHUNKING", True),
-                max_characters=self.kwargs.get("CHUNK_SIZE", 1000),
-                chunk_overlap=self.kwargs.get("CHUNK_OVERLAP", 200),
-                cleaning_level=self.kwargs.get("UNSTRUCTURED_CLEANING_LEVEL", "minimal"),  # Use minimal for better performance
-            )
+            loader = self._create_unstructured_loader(file_path)
 
         return loader
