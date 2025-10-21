@@ -1324,7 +1324,11 @@ def save_docs_to_vector_db(
                 raise ValueError(ERROR_MESSAGES.DUPLICATE_CONTENT)
 
     if split:
-        if request.app.state.config.TEXT_SPLITTER in ["", "character"]:
+        if request.app.state.config.TEXT_SPLITTER in ["", "unstructured"]:
+            # Unstructured.io handles chunking internally, no additional splitting needed
+            log.info("Using Unstructured.io semantic chunking (handled internally)")
+            # docs are already chunked by UnstructuredUnifiedLoader
+        elif request.app.state.config.TEXT_SPLITTER in ["character"]:
             text_splitter = RecursiveCharacterTextSplitter(
                 chunk_size=request.app.state.config.CHUNK_SIZE,
                 chunk_overlap=request.app.state.config.CHUNK_OVERLAP,
