@@ -1401,15 +1401,38 @@ def save_docs_to_vector_db(
         raise ValueError(ERROR_MESSAGES.EMPTY_CONTENT)
 
     texts = [doc.page_content for doc in docs]
+    # Optimize metadata for better performance and lower storage costs
+    def optimize_metadata(doc_metadata, additional_metadata):
+        """Optimize metadata by removing large/unnecessary fields and consolidating data"""
+        optimized = {}
+        
+        # Copy essential fields
+        essential_fields = [
+            "file_id", "filename", "filetype", "hash", "created_by", "chunk_index", 
+            "total_chunks", "page_number", "processing_engine", "strategy", 
+            "cleaning_level", "source", "languages", "last_modified"
+        ]
+        
+        for field in essential_fields:
+            if field in doc_metadata:
+                optimized[field] = doc_metadata[field]
+        
+        # Add additional metadata
+        if additional_metadata:
+            optimized.update(additional_metadata)
+        
+        # Add compact embedding config (single string instead of object)
+        optimized["embedding"] = f"{request.app.state.config.RAG_EMBEDDING_ENGINE}:{request.app.state.config.RAG_EMBEDDING_MODEL}"
+        
+        # Validate metadata size (Pinecone has limits)
+        metadata_size = len(str(optimized))
+        if metadata_size > 40000:  # Pinecone limit is ~40KB
+            log.warning(f"Metadata size ({metadata_size} bytes) is close to Pinecone limit")
+        
+        return optimized
+
     metadatas = [
-        {
-            **doc.metadata,
-            **(metadata if metadata else {}),
-            "embedding_config": {
-                "engine": request.app.state.config.RAG_EMBEDDING_ENGINE,
-                "model": request.app.state.config.RAG_EMBEDDING_MODEL,
-            },
-        }
+        optimize_metadata(doc.metadata, metadata if metadata else {})
         for doc in docs
     ]
 
@@ -1475,12 +1498,21 @@ def save_docs_to_vector_db(
         ]
 
         log.info(f"adding to collection {collection_name}")
-        VECTOR_DB_CLIENT.insert(
-            collection_name=collection_name,
-            items=items,
-        )
+        
+        # Process in batches for better performance (especially for large documents)
+        batch_size = 100  # Optimal batch size for most vector databases
+        total_added = 0
+        
+        for i in range(0, len(items), batch_size):
+            batch = items[i:i + batch_size]
+            VECTOR_DB_CLIENT.insert(
+                collection_name=collection_name,
+                items=batch,
+            )
+            total_added += len(batch)
+            log.debug(f"Added batch {i//batch_size + 1}: {len(batch)} items")
 
-        log.info(f"added {len(items)} items to collection {collection_name}")
+        log.info(f"added {total_added} items to collection {collection_name}")
         return True
     except Exception as e:
         log.exception(e)
