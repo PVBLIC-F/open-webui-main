@@ -1551,7 +1551,11 @@ def process_file(
                     docs = [
                         Document(
                             page_content=result.documents[0][idx],
-                            metadata=result.metadatas[0][idx],
+                            metadata={
+                                **result.metadatas[0][idx],
+                                # Update collection_name to the knowledge base collection
+                                "collection_name": collection_name,
+                            },
                         )
                         for idx, id in enumerate(result.ids[0])
                     ]
@@ -1565,6 +1569,8 @@ def process_file(
                                 "created_by": file.user_id,
                                 "file_id": file.id,
                                 "source": file.filename,
+                                # Set collection_name to the knowledge base collection
+                                "collection_name": collection_name,
                             },
                         )
                     ]
