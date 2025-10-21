@@ -351,7 +351,8 @@
 									class="dark:bg-gray-900 w-fit pr-8 rounded-sm px-2 text-xs bg-transparent outline-hidden text-right"
 									bind:value={RAGConfig.CONTENT_EXTRACTION_ENGINE}
 								>
-									<option value="">{$i18n.t('Default')}</option>
+									<option value="">{$i18n.t('Default (Unstructured)')}</option>
+									<option value="unstructured">{$i18n.t('Unstructured.io')}</option>
 									<option value="external">{$i18n.t('External')}</option>
 									<option value="tika">{$i18n.t('Tika')}</option>
 									<option value="docling">{$i18n.t('Docling')}</option>
@@ -878,7 +879,9 @@
 									class="dark:bg-gray-900 w-fit pr-8 rounded-sm px-2 text-xs bg-transparent outline-hidden text-right"
 									bind:value={RAGConfig.TEXT_SPLITTER}
 								>
-									<option value="">{$i18n.t('Default')} ({$i18n.t('Character')})</option>
+									<option value="">{$i18n.t('Default (Unstructured)')} ({$i18n.t('Semantic')})</option>
+									<option value="unstructured">{$i18n.t('Unstructured.io')} ({$i18n.t('Semantic')})</option>
+									<option value="character">{$i18n.t('Character')}</option>
 									<option value="token">{$i18n.t('Token')} ({$i18n.t('Tiktoken')})</option>
 									<option value="markdown_header">{$i18n.t('Markdown (Header)')}</option>
 								</select>

@@ -2236,7 +2236,7 @@ ONEDRIVE_SHAREPOINT_TENANT_ID = PersistentConfig(
 CONTENT_EXTRACTION_ENGINE = PersistentConfig(
     "CONTENT_EXTRACTION_ENGINE",
     "rag.CONTENT_EXTRACTION_ENGINE",
-    os.environ.get("CONTENT_EXTRACTION_ENGINE", "").lower(),
+    os.environ.get("CONTENT_EXTRACTION_ENGINE", "unstructured").lower(),
 )
 
 DATALAB_MARKER_API_KEY = PersistentConfig(
@@ -2652,7 +2652,7 @@ RAG_EXTERNAL_RERANKER_API_KEY = PersistentConfig(
 RAG_TEXT_SPLITTER = PersistentConfig(
     "RAG_TEXT_SPLITTER",
     "rag.text_splitter",
-    os.environ.get("RAG_TEXT_SPLITTER", ""),
+    os.environ.get("RAG_TEXT_SPLITTER", "unstructured"),
 )
 
 
