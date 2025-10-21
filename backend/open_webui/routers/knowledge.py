@@ -546,12 +546,27 @@ def remove_file_from_knowledge_by_id(
 
     # Remove content from the vector database
     try:
+        log.info(f"Attempting to delete vectors for file_id: {form_data.file_id} from collection: {knowledge.id}")
+        
+        # First, let's check if there are any vectors with this file_id
+        result = VECTOR_DB_CLIENT.query(
+            collection_name=knowledge.id, 
+            filter={"file_id": form_data.file_id}
+        )
+        
+        if result and result.ids and result.ids[0]:
+            log.info(f"Found {len(result.ids[0])} vectors to delete for file_id: {form_data.file_id}")
+        else:
+            log.warning(f"No vectors found for file_id: {form_data.file_id} in collection: {knowledge.id}")
+        
         VECTOR_DB_CLIENT.delete(
             collection_name=knowledge.id, filter={"file_id": form_data.file_id}
         )
+        log.info(f"Successfully deleted vectors for file_id: {form_data.file_id}")
+        
     except Exception as e:
+        log.error(f"Error deleting vectors for file_id {form_data.file_id}: {e}")
         log.debug("This was most likely caused by bypassing embedding processing")
-        log.debug(e)
         pass
 
     if delete_file:
