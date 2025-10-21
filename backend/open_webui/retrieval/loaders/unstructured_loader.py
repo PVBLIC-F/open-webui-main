@@ -50,13 +50,13 @@ class UnstructuredUnifiedLoader:
     def __init__(
         self,
         file_path: str,
-        strategy: str = "hi_res",
+        strategy: str = "fast",  # Changed from "hi_res" for better performance
         include_metadata: bool = True,
         clean_text: bool = True,
         chunk_by_semantic: bool = True,
         max_characters: int = 1000,
         chunk_overlap: int = 200,
-        cleaning_level: str = "standard",  # minimal, standard, aggressive
+        cleaning_level: str = "minimal",  # Changed from "standard" for better performance
         **kwargs
     ):
         self.file_path = file_path
@@ -117,72 +117,127 @@ class UnstructuredUnifiedLoader:
             
             log.debug(f"Using strategy '{strategy}' for file type '{file_ext}'")
             
-            # Partition the document
+            # Partition the document with performance optimizations
             elements = partition(
                 filename=self.file_path,
                 strategy=strategy,
                 include_metadata=self.include_metadata,
+                # Add performance optimizations for faster processing
+                infer_table_structure=False,  # Disable table structure inference for speed
+                extract_images_in_pdf=False,  # Disable image extraction for speed
                 **self.kwargs
             )
+            
+            # Log processing results
+            log.info(f"Successfully partitioned document: {len(elements)} elements extracted")
             
             return elements
             
         except Exception as e:
             log.error(f"Error partitioning document {self.file_path}: {e}")
+            
+            # If the error is related to complex processing, try a simpler strategy
+            if "list index out of range" in str(e).lower() or "timeout" in str(e).lower():
+                log.warning(f"Complex processing failed, trying 'fast' strategy: {e}")
+                try:
+                    elements = partition(
+                        filename=self.file_path,
+                        strategy="fast",
+                        include_metadata=self.include_metadata,
+                        infer_table_structure=False,
+                        extract_images_in_pdf=False,
+                        **self.kwargs
+                    )
+                    log.info(f"Fallback strategy successful: {len(elements)} elements extracted")
+                    return elements
+                except Exception as fallback_error:
+                    log.error(f"Fallback strategy also failed: {fallback_error}")
+            
             raise
     
     def _get_optimal_strategy(self, file_ext: str) -> str:
         """
-        Select optimal processing strategy based on file type and size
+        Select optimal processing strategy based on file type and size.
+        Prioritizes speed over quality for better user experience.
         """
         file_size = os.path.getsize(self.file_path)
         
-        # PDFs benefit from hi_res strategy for better layout detection
+        # PDFs: Use fast strategy for better performance
+        # hi_res is very slow and resource intensive
         if file_ext == ".pdf":
-            if file_size > 10_000_000:  # > 10MB
-                return "fast"  # Large PDFs should use fast mode
-            return "hi_res"
+            # Only use hi_res for small PDFs if explicitly set in self.strategy
+            if self.strategy == "hi_res" and file_size < 5_000_000:  # < 5MB
+                return "hi_res"
+            return "fast"
         
         # Office documents work well with fast strategy
         elif file_ext in [".docx", ".pptx", ".xlsx", ".doc", ".ppt", ".xls"]:
             return "fast"
         
         # Text-based formats don't need OCR
-        elif file_ext in [".txt", ".md", ".html", ".csv", ".json"]:
+        elif file_ext in [".txt", ".md", ".html", ".csv", ".json", ".xml"]:
             return "fast"
         
         # Images need OCR
-        elif file_ext in [".png", ".jpg", ".jpeg", ".tiff", ".bmp"]:
+        elif file_ext in [".png", ".jpg", ".jpeg", ".tiff", ".bmp", ".gif"]:
             return "ocr_only"
         
-        # Default to auto for unknown types
-        return "auto"
+        # Default to fast for unknown types (faster than "auto")
+        return "fast"
     
     def _clean_elements(self, elements):
         """Apply comprehensive text cleaning to elements"""
+        # Skip cleaning entirely if level is "none" for maximum speed
+        if self.cleaning_level == "none":
+            return elements
+            
         cleaned_elements = []
         
-        for element in elements:
+        for i, element in enumerate(elements):
             try:
-                # Get original text
-                text = str(element)
+                # Get original text safely - handle different element types
+                text = None
+                if hasattr(element, 'text'):
+                    text = element.text if element.text else None
+                
+                # If no text attribute or it's None, try converting to string
+                if text is None:
+                    try:
+                        text = str(element)
+                    except Exception:
+                        log.debug(f"Element {i} has no text content, skipping")
+                        continue
+                
+                # Skip empty or very short text
+                if not text or len(text.strip()) < 2:
+                    continue
                 
                 # Apply cleaning based on level
-                if self.cleaning_level == "minimal":
-                    text = self._minimal_cleaning(text)
-                elif self.cleaning_level == "standard":
-                    text = self._standard_cleaning(text)
-                elif self.cleaning_level == "aggressive":
-                    text = self._aggressive_cleaning(text)
+                try:
+                    if self.cleaning_level == "minimal":
+                        text = self._minimal_cleaning(text)
+                    elif self.cleaning_level == "standard":
+                        text = self._standard_cleaning(text)
+                    elif self.cleaning_level == "aggressive":
+                        text = self._aggressive_cleaning(text)
+                except Exception as clean_err:
+                    log.warning(f"Error in cleaning function for element {i}: {clean_err}")
+                    # Continue with uncleaned text rather than failing
                 
-                # Update element text
-                element.text = text
+                # Update element text if it has a text attribute
+                if hasattr(element, 'text'):
+                    element.text = text
                 cleaned_elements.append(element)
                 
             except Exception as e:
-                log.warning(f"Error cleaning element: {e}")
-                cleaned_elements.append(element)  # Keep original if cleaning fails
+                log.warning(f"Error processing element {i}: {e}")
+                # Keep original element if any processing fails
+                try:
+                    cleaned_elements.append(element)
+                except Exception:
+                    pass  # Skip this element entirely if we can't add it
         
+        log.debug(f"Cleaned {len(cleaned_elements)} elements from {len(elements)} total")
         return cleaned_elements
     
     def _minimal_cleaning(self, text: str) -> str:
@@ -213,25 +268,23 @@ class UnstructuredUnifiedLoader:
     def _chunk_semantically(self, elements):
         """Chunk elements using semantic boundaries"""
         try:
-            # Use title-based chunking for better semantic coherence
-            chunks = chunk_by_title(
+            # Use basic chunking for better performance
+            # chunk_by_title can be slow for large documents
+            chunks = chunk_elements(
                 elements,
                 max_characters=self.max_characters,
                 overlap=self.chunk_overlap,
-                combine_text_under_n_chars=100,  # Combine very small chunks
+                new_after_n_chars=self.max_characters,
             )
             
-            log.debug(f"Created {len(chunks)} semantic chunks")
+            log.debug(f"Created {len(chunks)} chunks")
             return chunks
             
         except Exception as e:
-            log.warning(f"Error in semantic chunking, falling back to basic chunking: {e}")
-            # Fallback to basic chunking
-            return chunk_elements(
-                elements,
-                max_characters=self.max_characters,
-                overlap=self.chunk_overlap,
-            )
+            log.warning(f"Error in chunking: {e}")
+            # If chunking fails, return elements as-is
+            log.info(f"Returning {len(elements)} elements without chunking")
+            return elements
     
     def _convert_to_documents(self, chunks) -> List[Document]:
         """Convert Unstructured chunks to LangChain Documents"""
@@ -287,11 +340,11 @@ def create_unstructured_loader(
     """
     return UnstructuredUnifiedLoader(
         file_path=file_path,
-        strategy=config.get("UNSTRUCTURED_STRATEGY", "hi_res"),
+        strategy=config.get("UNSTRUCTURED_STRATEGY", "fast"),  # Default to fast for performance
         include_metadata=config.get("UNSTRUCTURED_INCLUDE_METADATA", True),
         clean_text=config.get("UNSTRUCTURED_CLEAN_TEXT", True),
         chunk_by_semantic=config.get("UNSTRUCTURED_SEMANTIC_CHUNKING", True),
         max_characters=config.get("CHUNK_SIZE", 1000),
         chunk_overlap=config.get("CHUNK_OVERLAP", 200),
-        cleaning_level=config.get("UNSTRUCTURED_CLEANING_LEVEL", "standard"),
+        cleaning_level=config.get("UNSTRUCTURED_CLEANING_LEVEL", "minimal"),  # Default to minimal for performance
     )
