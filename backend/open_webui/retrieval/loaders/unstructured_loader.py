@@ -128,13 +128,33 @@ class UnstructuredUnifiedLoader:
             # Log processing results
             log.info(f"Successfully partitioned document: {len(elements)} elements extracted")
             
-            return elements
+            # Filter out empty elements and validate content
+            valid_elements = []
+            for element in elements:
+                if hasattr(element, 'text') and element.text and element.text.strip():
+                    valid_elements.append(element)
+                elif hasattr(element, 'content') and element.content and element.content.strip():
+                    valid_elements.append(element)
+            
+            if len(valid_elements) == 0 and len(elements) > 0:
+                log.warning(f"All {len(elements)} extracted elements were empty for {self.file_path}")
+                # Try to extract any text content from elements
+                for element in elements:
+                    if hasattr(element, '__dict__'):
+                        for attr_name, attr_value in element.__dict__.items():
+                            if isinstance(attr_value, str) and attr_value.strip():
+                                log.info(f"Found text in {attr_name}: {attr_value[:100]}...")
+                                valid_elements.append(element)
+                                break
+            
+            log.info(f"Valid elements after filtering: {len(valid_elements)}")
+            return valid_elements
             
         except Exception as e:
             log.error(f"Error partitioning document {self.file_path}: {e}")
             
             # If the error is related to complex processing, try a simpler strategy
-            if "list index out of range" in str(e).lower() or "timeout" in str(e).lower():
+            if any(keyword in str(e).lower() for keyword in ["list index out of range", "timeout", "empty", "no content", "failed to extract"]):
                 log.warning(f"Complex processing failed, trying 'fast' strategy: {e}")
                 try:
                     elements = partition(
@@ -146,9 +166,35 @@ class UnstructuredUnifiedLoader:
                         **self.kwargs
                     )
                     log.info(f"Fallback strategy successful: {len(elements)} elements extracted")
-                    return elements
+                    
+                    # Apply the same filtering as the main strategy
+                    valid_elements = []
+                    for element in elements:
+                        if hasattr(element, 'text') and element.text and element.text.strip():
+                            valid_elements.append(element)
+                        elif hasattr(element, 'content') and element.content and element.content.strip():
+                            valid_elements.append(element)
+                    
+                    log.info(f"Valid elements after fallback filtering: {len(valid_elements)}")
+                    return valid_elements
+                    
                 except Exception as fallback_error:
                     log.error(f"Fallback strategy also failed: {fallback_error}")
+                    
+                    # Last resort: try with minimal options
+                    try:
+                        log.warning("Trying minimal processing as last resort")
+                        elements = partition(
+                            filename=self.file_path,
+                            strategy="fast",
+                            include_metadata=False,
+                            infer_table_structure=False,
+                            extract_images_in_pdf=False,
+                        )
+                        log.info(f"Minimal processing successful: {len(elements)} elements extracted")
+                        return elements
+                    except Exception as minimal_error:
+                        log.error(f"Minimal processing also failed: {minimal_error}")
             
             raise
     
