@@ -1331,8 +1331,24 @@ def save_docs_to_vector_db(
         if result is not None:
             existing_doc_ids = result.ids[0]
             if existing_doc_ids:
-                log.info(f"Document with hash {metadata['hash']} already exists")
-                raise ValueError(ERROR_MESSAGES.DUPLICATE_CONTENT)
+                log.info(f"Document with hash {metadata['hash']} already exists in collection {collection_name}")
+                
+                # If overwrite is True, delete existing documents first
+                if overwrite:
+                    log.info(f"Overwriting existing documents with hash {metadata['hash']}")
+                    try:
+                        VECTOR_DB_CLIENT.delete(
+                            collection_name=collection_name,
+                            ids=existing_doc_ids
+                        )
+                        log.info(f"Deleted {len(existing_doc_ids)} existing documents")
+                    except Exception as e:
+                        log.warning(f"Failed to delete existing documents: {e}")
+                        # Continue processing instead of failing
+                else:
+                    # Provide more informative error message
+                    filename = metadata.get("name", "Unknown file")
+                    raise ValueError(f"File '{filename}' with identical content already exists in this knowledge base. To replace it, please delete the existing file first or use the overwrite option.")
 
     if split:
         if request.app.state.config.TEXT_SPLITTER in ["", "unstructured"]:
@@ -1408,10 +1424,21 @@ def save_docs_to_vector_db(
         else:
             raise ValueError(ERROR_MESSAGES.DEFAULT("Invalid text splitter"))
 
+     # Filter out empty documents and validate content
+    docs = [doc for doc in docs if doc.page_content and doc.page_content.strip()]
+    
     if len(docs) == 0:
+        log.warning(f"No valid content found in documents for collection {collection_name}")
         raise ValueError(ERROR_MESSAGES.EMPTY_CONTENT)
 
     texts = [doc.page_content for doc in docs]
+    
+    # Additional validation: ensure texts are not just whitespace
+    texts = [text.strip() for text in texts if text.strip()]
+    
+    if len(texts) == 0:
+        log.warning(f"No valid text content found after filtering for collection {collection_name}")
+        raise ValueError(ERROR_MESSAGES.EMPTY_CONTENT)
     # Optimize metadata for better performance and lower storage costs
     def optimize_metadata(doc_metadata, additional_metadata):
         """Optimize metadata by removing large/unnecessary fields and consolidating data"""
@@ -1496,6 +1523,30 @@ def save_docs_to_vector_db(
             prefix=RAG_EMBEDDING_CONTENT_PREFIX,
             user=user,
         )
+        
+        if embeddings is None:
+            log.error("Embedding generation failed")
+            return False
+        
+        # Filter out None embeddings and corresponding texts/metadatas
+        valid_embeddings = []
+        valid_texts = []
+        valid_metadatas = []
+        
+        for i, embedding in enumerate(embeddings):
+            if embedding is not None:
+                valid_embeddings.append(embedding)
+                valid_texts.append(texts[i])
+                valid_metadatas.append(metadatas[i])
+        
+        if len(valid_embeddings) == 0:
+            log.error("No valid embeddings generated")
+            return False
+        
+        embeddings = valid_embeddings
+        texts = valid_texts
+        metadatas = valid_metadatas
+        
         log.info(f"embeddings generated {len(embeddings)} for {len(texts)} items")
 
         items = [
@@ -1727,6 +1778,7 @@ def process_file(
                             "hash": hash,
                         },
                         add=(True if form_data.collection_name else False),
+                        overwrite=True,  # Allow overwriting for better user experience
                         user=user,
                     )
                     log.info(f"added {len(docs)} items to collection {collection_name}")
