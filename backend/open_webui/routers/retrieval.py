@@ -164,7 +164,18 @@ def get_rf(
                 log.error(f"ColBERT: {e}")
                 raise Exception(ERROR_MESSAGES.DEFAULT(e))
         else:
-            if engine == "external":
+            if engine == "pinecone":
+                try:
+                    from open_webui.retrieval.models.pinecone_reranker import PineconeReranker
+
+                    rf = PineconeReranker(
+                        api_key=None,  # Will use PINECONE_API_KEY from environment
+                        model=reranking_model,
+                    )
+                except Exception as e:
+                    log.error(f"PineconeReranking: {e}")
+                    raise Exception(ERROR_MESSAGES.DEFAULT(e))
+            elif engine == "external":
                 try:
                     from open_webui.retrieval.models.external import ExternalReranker
 
