@@ -2634,6 +2634,7 @@ RAG_RERANKING_MODEL_TRUST_REMOTE_CODE = (
     os.environ.get("RAG_RERANKING_MODEL_TRUST_REMOTE_CODE", "True").lower() == "true"
 )
 
+
 RAG_EXTERNAL_RERANKER_URL = PersistentConfig(
     "RAG_EXTERNAL_RERANKER_URL",
     "rag.external_reranker_url",
