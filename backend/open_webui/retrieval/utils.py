@@ -849,10 +849,17 @@ def generate_openai_batch_embeddings(
     user: UserModel = None,
 ) -> Optional[list[list[float]]]:
     try:
+        # Filter out empty or whitespace-only texts
+        valid_texts = [text.strip() for text in texts if text and text.strip()]
+        
+        if len(valid_texts) == 0:
+            log.warning("No valid texts provided for embedding generation")
+            return None
+            
         log.debug(
-            f"generate_openai_batch_embeddings:model {model} batch size: {len(texts)}"
+            f"generate_openai_batch_embeddings:model {model} batch size: {len(valid_texts)} (filtered from {len(texts)})"
         )
-        json_data = {"input": texts, "model": model}
+        json_data = {"input": valid_texts, "model": model}
         if isinstance(RAG_EMBEDDING_PREFIX_FIELD_NAME, str) and isinstance(prefix, str):
             json_data[RAG_EMBEDDING_PREFIX_FIELD_NAME] = prefix
 
@@ -877,7 +884,21 @@ def generate_openai_batch_embeddings(
         r.raise_for_status()
         data = r.json()
         if "data" in data:
-            return [elem["embedding"] for elem in data["data"]]
+            embeddings = [elem["embedding"] for elem in data["data"]]
+            
+            # If we filtered out some texts, we need to return None for the empty ones
+            if len(valid_texts) < len(texts):
+                result = []
+                valid_idx = 0
+                for i, text in enumerate(texts):
+                    if text and text.strip():
+                        result.append(embeddings[valid_idx])
+                        valid_idx += 1
+                    else:
+                        result.append(None)
+                return result
+            else:
+                return embeddings
         else:
             raise "Something went wrong :/"
     except Exception as e:
@@ -895,10 +916,17 @@ def generate_azure_openai_batch_embeddings(
     user: UserModel = None,
 ) -> Optional[list[list[float]]]:
     try:
+        # Filter out empty or whitespace-only texts
+        valid_texts = [text.strip() for text in texts if text and text.strip()]
+        
+        if len(valid_texts) == 0:
+            log.warning("No valid texts provided for Azure OpenAI embedding generation")
+            return None
+            
         log.debug(
-            f"generate_azure_openai_batch_embeddings:deployment {model} batch size: {len(texts)}"
+            f"generate_azure_openai_batch_embeddings:deployment {model} batch size: {len(valid_texts)} (filtered from {len(texts)})"
         )
-        json_data = {"input": texts}
+        json_data = {"input": valid_texts}
         if isinstance(RAG_EMBEDDING_PREFIX_FIELD_NAME, str) and isinstance(prefix, str):
             json_data[RAG_EMBEDDING_PREFIX_FIELD_NAME] = prefix
 
@@ -930,7 +958,21 @@ def generate_azure_openai_batch_embeddings(
             r.raise_for_status()
             data = r.json()
             if "data" in data:
-                return [elem["embedding"] for elem in data["data"]]
+                embeddings = [elem["embedding"] for elem in data["data"]]
+                
+                # If we filtered out some texts, we need to return None for the empty ones
+                if len(valid_texts) < len(texts):
+                    result = []
+                    valid_idx = 0
+                    for i, text in enumerate(texts):
+                        if text and text.strip():
+                            result.append(embeddings[valid_idx])
+                            valid_idx += 1
+                        else:
+                            result.append(None)
+                    return result
+                else:
+                    return embeddings
             else:
                 raise Exception("Something went wrong :/")
         return None
