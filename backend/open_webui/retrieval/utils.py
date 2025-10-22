@@ -556,6 +556,10 @@ def get_reranking_function(reranking_engine, reranking_model, reranking_function
         return lambda sentences, user=None: reranking_function.predict(
             sentences, user=user
         )
+    elif reranking_engine == "pinecone":
+        return lambda sentences, user=None: reranking_function.predict(
+            sentences, user=user
+        )
     else:
         return lambda sentences, user=None: reranking_function.predict(sentences)
 
