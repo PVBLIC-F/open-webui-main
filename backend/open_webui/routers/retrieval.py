@@ -1576,12 +1576,14 @@ def save_docs_to_vector_db(
         ]
         
         for field in essential_fields:
-            if field in doc_metadata:
+            if field in doc_metadata and doc_metadata[field] is not None:
                 optimized[field] = doc_metadata[field]
         
-        # Add additional metadata
+        # Add additional metadata (filtering out None values)
         if additional_metadata:
-            optimized.update(additional_metadata)
+            for key, value in additional_metadata.items():
+                if value is not None:
+                    optimized[key] = value
         
         # Add compact embedding config (single string instead of object)
         optimized["embedding"] = f"{request.app.state.config.RAG_EMBEDDING_ENGINE}:{request.app.state.config.RAG_EMBEDDING_MODEL}"
@@ -1839,26 +1841,36 @@ def process_file(
                         )
                     
                     # Create enriched document with all metadata
+                    # Build metadata dict, only including non-None values
+                    enriched_metadata = {
+                        **doc.metadata,
+                        # Topic/Entity metadata (always include, even if empty lists)
+                        "topics": enrichment.get("topics", []),
+                        "entities_people": enrichment.get("entities", {}).get("people", []),
+                        "keywords": enrichment.get("keywords", []),
+                        "key_concepts": enrichment.get("key_concepts", []),
+                        # Chunk position metadata
+                        "chunk_index": idx,
+                        "total_chunks": len(docs),
+                    }
+                    
+                    # Add timestamp metadata only if available
+                    if timestamp_data.get("timestamp_start") is not None:
+                        enriched_metadata["timestamp_start"] = timestamp_data["timestamp_start"]
+                    if timestamp_data.get("timestamp_end") is not None:
+                        enriched_metadata["timestamp_end"] = timestamp_data["timestamp_end"]
+                    if timestamp_data.get("duration") is not None:
+                        enriched_metadata["duration"] = timestamp_data["duration"]
+                    
+                    # Add transcript metadata only if available
+                    if transcript_language is not None:
+                        enriched_metadata["transcript_language"] = transcript_language
+                    if transcript_duration is not None:
+                        enriched_metadata["transcript_duration"] = transcript_duration
+                    
                     enriched_doc = Document(
                         page_content=doc.page_content,
-                        metadata={
-                            **doc.metadata,
-                            # Timestamp metadata
-                            "timestamp_start": timestamp_data.get("timestamp_start"),
-                            "timestamp_end": timestamp_data.get("timestamp_end"),
-                            "duration": timestamp_data.get("duration"),
-                            # Topic/Entity metadata
-                            "topics": enrichment.get("topics", []),
-                            "entities_people": enrichment.get("entities", {}).get("people", []),
-                            "keywords": enrichment.get("keywords", []),
-                            "key_concepts": enrichment.get("key_concepts", []),
-                            # Chunk position metadata
-                            "chunk_index": idx,
-                            "total_chunks": len(docs),
-                            # Transcript metadata
-                            "transcript_language": transcript_language,
-                            "transcript_duration": transcript_duration,
-                        }
+                        metadata=enriched_metadata
                     )
                     enriched_docs.append(enriched_doc)
                 
