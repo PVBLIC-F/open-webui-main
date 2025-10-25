@@ -2133,6 +2133,8 @@ def process_file(
             if form_data.content:
                 # Update the content in the file
                 # Usage: /files/{file_id}/data/content/update, /files/ (audio file upload pipeline)
+                # Note: Audio/video transcripts come through this path and need chunking
+                # Unlike file-based processing, transcripts don't go through Loader/Unstructured
 
                 try:
                     # /files/{file_id}/data/content/update
@@ -2143,6 +2145,7 @@ def process_file(
                     # Audio file upload pipeline
                     pass
 
+                # Create single document with full transcript
                 docs = [
                     Document(
                         page_content=form_data.content.replace("<br/>", "\n"),
@@ -2155,6 +2158,61 @@ def process_file(
                         },
                     )
                 ]
+                
+                # Manually chunk audio/video transcripts since they bypass the Loader
+                # For unstructured TEXT_SPLITTER, force character splitting since 
+                # Unstructured.io requires file paths (not raw text)
+                text_splitter_config = request.app.state.config.TEXT_SPLITTER
+                
+                if text_splitter_config in ["", "unstructured", "character"]:
+                    # Use RecursiveCharacterTextSplitter for transcripts
+                    text_splitter = RecursiveCharacterTextSplitter(
+                        chunk_size=request.app.state.config.CHUNK_SIZE,
+                        chunk_overlap=request.app.state.config.CHUNK_OVERLAP,
+                        add_start_index=True,
+                    )
+                    docs = text_splitter.split_documents(docs)
+                    log.info(f"Split audio/video transcript into {len(docs)} chunks")
+                elif text_splitter_config == "token":
+                    # Use token-based splitting
+                    tiktoken.get_encoding(str(request.app.state.config.TIKTOKEN_ENCODING_NAME))
+                    text_splitter = TokenTextSplitter(
+                        encoding_name=str(request.app.state.config.TIKTOKEN_ENCODING_NAME),
+                        chunk_size=request.app.state.config.CHUNK_SIZE,
+                        chunk_overlap=request.app.state.config.CHUNK_OVERLAP,
+                        add_start_index=True,
+                    )
+                    docs = text_splitter.split_documents(docs)
+                    log.info(f"Split audio/video transcript into {len(docs)} chunks using token splitter")
+                elif text_splitter_config == "markdown_header":
+                    # Use markdown header splitting
+                    headers_to_split_on = [
+                        ("#", "Header 1"),
+                        ("##", "Header 2"),
+                        ("###", "Header 3"),
+                    ]
+                    markdown_splitter = MarkdownHeaderTextSplitter(
+                        headers_to_split_on=headers_to_split_on,
+                        strip_headers=False,
+                    )
+                    md_splits = markdown_splitter.split_text(docs[0].page_content)
+                    text_splitter = RecursiveCharacterTextSplitter(
+                        chunk_size=request.app.state.config.CHUNK_SIZE,
+                        chunk_overlap=request.app.state.config.CHUNK_OVERLAP,
+                        add_start_index=True,
+                    )
+                    docs = text_splitter.split_documents(md_splits)
+                    log.info(f"Split audio/video transcript into {len(docs)} chunks using markdown splitter")
+                else:
+                    # Fallback to character splitting for unknown TEXT_SPLITTER values
+                    log.warning(f"Unknown TEXT_SPLITTER '{text_splitter_config}', using character splitter as fallback")
+                    text_splitter = RecursiveCharacterTextSplitter(
+                        chunk_size=request.app.state.config.CHUNK_SIZE,
+                        chunk_overlap=request.app.state.config.CHUNK_OVERLAP,
+                        add_start_index=True,
+                    )
+                    docs = text_splitter.split_documents(docs)
+                    log.info(f"Split audio/video transcript into {len(docs)} chunks using fallback character splitter")
 
                 text_content = form_data.content
             elif form_data.collection_name:
@@ -2326,6 +2384,10 @@ def process_file(
                 }
             else:
                 try:
+                    # Note: split=False because audio/video transcripts are already chunked above
+                    # Text files will have split=True (default) since they're chunked by Loader
+                    should_split = not form_data.content  # Don't split if content provided (already chunked)
+                    
                     result = save_docs_to_vector_db(
                         request,
                         docs=docs,
@@ -2337,6 +2399,7 @@ def process_file(
                         },
                         add=(True if form_data.collection_name else False),
                         overwrite=True,  # Allow overwriting for better user experience
+                        split=should_split,  # Skip splitting for transcripts (already chunked)
                         user=user,
                     )
                     log.info(f"added {len(docs)} items to collection {collection_name}")
