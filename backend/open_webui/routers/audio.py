@@ -4,7 +4,8 @@ import logging
 import os
 import uuid
 import html
-import base64
+import subprocess
+import tempfile
 from functools import lru_cache
 from pydub import AudioSegment
 from pydub.silence import split_on_silence
@@ -28,6 +29,8 @@ from fastapi import (
     UploadFile,
     status,
     APIRouter,
+    Query,
+    BackgroundTasks,
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -35,6 +38,8 @@ from pydantic import BaseModel
 
 
 from open_webui.utils.auth import get_admin_user, get_verified_user
+from open_webui.models.files import Files
+from open_webui.storage.provider import Storage
 from open_webui.config import (
     WHISPER_MODEL_AUTO_UPDATE,
     WHISPER_MODEL_DIR,
@@ -1484,3 +1489,129 @@ async def get_voices(request: Request, user=Depends(get_verified_user)):
             {"id": k, "name": v} for k, v in get_available_voices(request).items()
         ]
     }
+
+
+############################
+# Audio Segment Extraction
+############################
+
+
+@router.get("/files/{file_id}/segment")
+async def get_audio_segment(
+    file_id: str,
+    start: float = Query(..., description="Start timestamp in seconds"),
+    end: float = Query(..., description="End timestamp in seconds"),
+    background_tasks: BackgroundTasks = Depends(),
+    user=Depends(get_verified_user),
+):
+    """
+    Extract and stream a specific audio segment from a file based on timestamps.
+    Used for RAG responses to provide playable audio clips of relevant segments.
+    
+    Args:
+        file_id: The file ID to extract audio from
+        start: Start timestamp in seconds (e.g., 1379.54)
+        end: End timestamp in seconds (e.g., 1502.68)
+    
+    Returns:
+        Streamable MP3 audio file of the requested segment
+    """
+    try:
+        # Validate timestamps
+        if start < 0 or end <= start:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid timestamp range. End must be greater than start, and both must be non-negative."
+            )
+        
+        # Get file and verify access
+        file = Files.get_file_by_id(file_id)
+        if not file:
+            raise HTTPException(
+                status_code=404,
+                detail="File not found"
+            )
+        
+        # Check user has access to this file
+        if file.user_id != user.id and user.role != "admin":
+            raise HTTPException(
+                status_code=403,
+                detail="Access denied"
+            )
+        
+        # Get original file path
+        file_path = Storage.get_file(file.path)
+        if not os.path.exists(file_path):
+            raise HTTPException(
+                status_code=404,
+                detail="Original file not found on storage"
+            )
+        
+        # Create temporary output file
+        output_filename = f"segment_{file_id}_{int(start)}_{int(end)}.mp3"
+        output_path = os.path.join(tempfile.gettempdir(), output_filename)
+        
+        # Extract audio segment using ffmpeg
+        # -ss: start time, -to: end time
+        # -c:a libmp3lame: encode to MP3
+        # -b:a 128k: 128kbps bitrate for good quality/size balance
+        # -y: overwrite output file if exists
+        cmd = [
+            "ffmpeg",
+            "-i", file_path,
+            "-ss", str(start),
+            "-to", str(end),
+            "-c:a", "libmp3lame",
+            "-b:a", "128k",
+            "-y",
+            output_path
+        ]
+        
+        result = subprocess.run(
+            cmd,
+            check=True,
+            capture_output=True,
+            text=True
+        )
+        
+        # Verify output file was created
+        if not os.path.exists(output_path):
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to create audio segment"
+            )
+        
+        # Schedule cleanup of temporary file after response is sent
+        def cleanup():
+            try:
+                if os.path.exists(output_path):
+                    os.remove(output_path)
+                    log.debug(f"Cleaned up temporary file: {output_path}")
+            except Exception as e:
+                log.warning(f"Failed to cleanup temporary file {output_path}: {e}")
+        
+        background_tasks.add_task(cleanup)
+        
+        # Return audio file as streaming response
+        return FileResponse(
+            output_path,
+            media_type="audio/mpeg",
+            filename=output_filename,
+            headers={
+                "Cache-Control": "public, max-age=3600",  # Cache for 1 hour
+                "Content-Disposition": f'inline; filename="{output_filename}"'
+            }
+        )
+        
+    except subprocess.CalledProcessError as e:
+        log.error(f"ffmpeg extraction failed: {e.stderr}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Audio extraction failed: {e.stderr[:200]}"
+        )
+    except Exception as e:
+        log.exception(f"Error extracting audio segment: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error processing audio segment: {str(e)}"
+        )
