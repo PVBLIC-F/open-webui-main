@@ -31,6 +31,14 @@ from unstructured.cleaners.core import (
 
 log = logging.getLogger(__name__)
 
+# Try to import chunk_by_title (available in newer versions)
+try:
+    from unstructured.chunking.title import chunk_by_title
+    HAS_CHUNK_BY_TITLE = True
+except ImportError:
+    HAS_CHUNK_BY_TITLE = False
+    log.debug("chunk_by_title not available, using chunk_elements instead")
+
 
 class UnstructuredUnifiedLoader:
     """
@@ -51,9 +59,12 @@ class UnstructuredUnifiedLoader:
         include_metadata: bool = True,
         clean_text: bool = True,
         chunk_by_semantic: bool = True,
+        chunking_strategy: str = "by_title",  # "by_title" or "basic" - by_title preserves document structure better
         max_characters: int = 1000,
         chunk_overlap: int = 200,
         cleaning_level: str = "minimal",  # Changed from "standard" for better performance
+        infer_table_structure: bool = False,  # Now configurable instead of always False
+        extract_images_in_pdf: bool = False,  # Now configurable
         **kwargs
     ):
         self.file_path = file_path
@@ -61,9 +72,12 @@ class UnstructuredUnifiedLoader:
         self.include_metadata = include_metadata
         self.clean_text = clean_text
         self.chunk_by_semantic = chunk_by_semantic
+        self.chunking_strategy = chunking_strategy
         self.max_characters = max_characters
         self.chunk_overlap = chunk_overlap
         self.cleaning_level = cleaning_level
+        self.infer_table_structure = infer_table_structure
+        self.extract_images_in_pdf = extract_images_in_pdf
         self.kwargs = kwargs
         
         # Validate file exists
@@ -114,14 +128,14 @@ class UnstructuredUnifiedLoader:
             
             log.debug(f"Using strategy '{strategy}' for file type '{file_ext}'")
             
-            # Partition the document with performance optimizations
+            # Partition the document with configurable options
             elements = partition(
                 filename=self.file_path,
                 strategy=strategy,
                 include_metadata=self.include_metadata,
-                # Add performance optimizations for faster processing
-                infer_table_structure=False,  # Disable table structure inference for speed
-                extract_images_in_pdf=False,  # Disable image extraction for speed
+                # Configurable options for performance vs. quality tradeoff
+                infer_table_structure=self.infer_table_structure,
+                extract_images_in_pdf=self.extract_images_in_pdf,
                 **self.kwargs
             )
             
@@ -310,10 +324,30 @@ class UnstructuredUnifiedLoader:
     
     def _chunk_semantically(self, elements):
         """
-        Chunk elements using basic character-based chunking.
-        Uses chunk_elements for better performance than semantic chunking.
+        Chunk elements using the configured chunking strategy.
+        
+        Supports two strategies:
+        - "by_title": Respects document structure (headers, titles, sections) for better semantic coherence
+        - "basic": Character-based chunking for simpler, faster processing
         """
         try:
+            # Use chunk_by_title if available and requested (better semantic chunking)
+            if self.chunking_strategy == "by_title" and HAS_CHUNK_BY_TITLE:
+                log.debug("Using chunk_by_title for structure-aware chunking")
+                chunks = chunk_by_title(
+                    elements,
+                    max_characters=self.max_characters,
+                    overlap=self.chunk_overlap,
+                    new_after_n_chars=self.max_characters,
+                    combine_text_under_n_chars=100,  # Combine very small sections
+                )
+                log.debug(f"Created {len(chunks)} chunks using chunk_by_title")
+                return chunks
+            
+            # Fallback to basic chunking
+            if self.chunking_strategy == "by_title" and not HAS_CHUNK_BY_TITLE:
+                log.warning("chunk_by_title requested but not available, falling back to chunk_elements")
+            
             chunks = chunk_elements(
                 elements,
                 max_characters=self.max_characters,
@@ -321,7 +355,7 @@ class UnstructuredUnifiedLoader:
                 new_after_n_chars=self.max_characters,
             )
             
-            log.debug(f"Created {len(chunks)} chunks")
+            log.debug(f"Created {len(chunks)} chunks using chunk_elements")
             return chunks
             
         except Exception as e:
@@ -356,6 +390,7 @@ class UnstructuredUnifiedLoader:
                     "total_chunks": total_chunks,
                     "processing_engine": "unstructured",
                     "strategy": self.strategy,
+                    "chunking_strategy": self.chunking_strategy,
                     "cleaning_level": self.cleaning_level,
                 })
                 
@@ -403,7 +438,10 @@ def create_unstructured_loader(
         include_metadata=config.get("UNSTRUCTURED_INCLUDE_METADATA", True),
         clean_text=config.get("UNSTRUCTURED_CLEAN_TEXT", True),
         chunk_by_semantic=config.get("UNSTRUCTURED_SEMANTIC_CHUNKING", True),
+        chunking_strategy=config.get("UNSTRUCTURED_CHUNKING_STRATEGY", "by_title"),  # Default to by_title for better structure preservation
         max_characters=config.get("CHUNK_SIZE", 1000),
         chunk_overlap=config.get("CHUNK_OVERLAP", 200),
         cleaning_level=config.get("UNSTRUCTURED_CLEANING_LEVEL", "minimal"),  # Default to minimal for performance
+        infer_table_structure=config.get("UNSTRUCTURED_INFER_TABLE_STRUCTURE", False),  # Disable by default for performance
+        extract_images_in_pdf=config.get("UNSTRUCTURED_EXTRACT_IMAGES_IN_PDF", False),  # Disable by default for performance
     )
