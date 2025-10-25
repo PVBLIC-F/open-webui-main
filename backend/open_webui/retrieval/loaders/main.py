@@ -258,11 +258,15 @@ class Loader:
         return UnstructuredUnifiedLoader(
             file_path=file_path,
             strategy=self.kwargs.get("UNSTRUCTURED_STRATEGY", "fast"),
+            include_metadata=self.kwargs.get("UNSTRUCTURED_INCLUDE_METADATA", True),
             clean_text=self.kwargs.get("UNSTRUCTURED_CLEAN_TEXT", True),
             chunk_by_semantic=self.kwargs.get("UNSTRUCTURED_SEMANTIC_CHUNKING", True),
+            chunking_strategy=self.kwargs.get("UNSTRUCTURED_CHUNKING_STRATEGY", "by_title"),
             max_characters=self.kwargs.get("CHUNK_SIZE", 1000),
             chunk_overlap=self.kwargs.get("CHUNK_OVERLAP", 200),
             cleaning_level=self.kwargs.get("UNSTRUCTURED_CLEANING_LEVEL", "minimal"),
+            infer_table_structure=self.kwargs.get("UNSTRUCTURED_INFER_TABLE_STRUCTURE", False),
+            extract_images_in_pdf=self.kwargs.get("UNSTRUCTURED_EXTRACT_IMAGES_IN_PDF", False),
         )
 
     def _get_loader(self, filename: str, file_content_type: str, file_path: str):
