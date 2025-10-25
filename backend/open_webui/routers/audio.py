@@ -600,14 +600,50 @@ def transcription_handler(request, file_path, metadata):
             beam_size=5,
             vad_filter=request.app.state.config.WHISPER_VAD_FILTER,
             language=languages[0],
+            word_timestamps=True,  # Enable word-level timestamps
         )
         log.info(
             "Detected language '%s' with probability %f"
             % (info.language, info.language_probability)
         )
 
-        transcript = "".join([segment.text for segment in list(segments)])
-        data = {"text": transcript.strip()}
+        # Collect segments with timestamps for enrichment
+        segments_list = []
+        transcript_parts = []
+        
+        for segment in segments:
+            segment_data = {
+                "id": segment.id,
+                "start": segment.start,
+                "end": segment.end,
+                "text": segment.text,
+                "words": []
+            }
+            
+            # Capture word-level timestamps if available
+            if hasattr(segment, 'words') and segment.words:
+                segment_data["words"] = [
+                    {
+                        "word": word.word,
+                        "start": word.start,
+                        "end": word.end,
+                        "probability": word.probability
+                    }
+                    for word in segment.words
+                ]
+            
+            segments_list.append(segment_data)
+            transcript_parts.append(segment.text)
+        
+        transcript = "".join(transcript_parts)
+        
+        data = {
+            "text": transcript.strip(),
+            "segments": segments_list,  # Include segment data with timestamps
+            "language": info.language,
+            "language_probability": info.language_probability,
+            "duration": segments_list[-1]["end"] if segments_list else 0
+        }
 
         # save the transcript to a json file
         transcript_file = f"{file_dir}/{id}.json"
@@ -1081,8 +1117,42 @@ def transcribe(request: Request, file_path: str, metadata: Optional[dict] = None
                 except Exception:
                     pass
 
+    # Merge results from all chunks
+    combined_text = " ".join([result["text"] for result in results])
+    
+    # Merge segments with time offset for chunks
+    combined_segments = []
+    time_offset = 0
+    
+    for result in results:
+        if "segments" in result:
+            for segment in result["segments"]:
+                adjusted_segment = {
+                    **segment,
+                    "start": segment["start"] + time_offset,
+                    "end": segment["end"] + time_offset,
+                }
+                # Adjust word timestamps if present
+                if "words" in adjusted_segment and adjusted_segment["words"]:
+                    adjusted_segment["words"] = [
+                        {
+                            **word,
+                            "start": word["start"] + time_offset,
+                            "end": word["end"] + time_offset,
+                        }
+                        for word in adjusted_segment["words"]
+                    ]
+                combined_segments.append(adjusted_segment)
+            
+            # Update time offset for next chunk
+            if result["segments"]:
+                time_offset = result["segments"][-1]["end"] + time_offset
+    
     return {
-        "text": " ".join([result["text"] for result in results]),
+        "text": combined_text,
+        "segments": combined_segments,  # Include enriched segment data
+        "language": results[0].get("language") if results else None,
+        "duration": time_offset if combined_segments else 0,
     }
 
 
