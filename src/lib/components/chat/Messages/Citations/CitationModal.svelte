@@ -195,7 +195,7 @@
 										controls
 										preload="metadata"
 										class="w-full"
-										src={document.metadata.audio_segment_url}
+										src={`${WEBUI_API_BASE_URL}${document.metadata.audio_segment_url}`}
 									>
 										Your browser does not support audio playback.
 									</audio>
