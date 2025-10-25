@@ -4,6 +4,7 @@ import mimetypes
 import os
 import shutil
 import asyncio
+import time
 
 import re
 import uuid
@@ -1634,14 +1635,39 @@ def process_file(
 
                 text_content = form_data.content
             elif form_data.collection_name:
-                # Check if the file has already been processed and save the content
+                # Check if the file has already been processed and reuse vectors
                 # Usage: /knowledge/{id}/file/add, /knowledge/{id}/file/update
+                log.info(f"Checking if file {file.id} already processed in collection file-{file.id}")
+                
+                # Query with retry to handle Pinecone's eventual consistency
+                # After upsert, vectors may not be immediately queryable (1-10s delay)
+                max_retries = 3
+                retry_delay = 2  # seconds
+                result = None
+                
+                for attempt in range(max_retries):
+                    try:
+                        result = VECTOR_DB_CLIENT.query(
+                            collection_name=f"file-{file.id}", 
+                            filter={"file_id": file.id}
+                        )
+                        
+                        # Check if result has vectors (safely check nested structure)
+                        if result is not None and result.ids and len(result.ids) > 0 and len(result.ids[0]) > 0:
+                            log.info(f"Found {len(result.ids[0])} existing vectors for file {file.id} on attempt {attempt + 1}")
+                            break
+                        
+                        if attempt < max_retries - 1:
+                            log.warning(f"No vectors found yet for file {file.id}, retrying in {retry_delay}s (attempt {attempt + 1}/{max_retries})")
+                            time.sleep(retry_delay)
+                    except Exception as e:
+                        log.error(f"Error querying collection file-{file.id}: {e}")
+                        if attempt < max_retries - 1:
+                            time.sleep(retry_delay)
 
-                result = VECTOR_DB_CLIENT.query(
-                    collection_name=f"file-{file.id}", filter={"file_id": file.id}
-                )
-
-                if result is not None and len(result.ids[0]) > 0:
+                # Check if we successfully found vectors
+                if result is not None and result.ids and len(result.ids) > 0 and len(result.ids[0]) > 0:
+                    log.info(f"Reusing {len(result.ids[0])} existing vectors for file {file.id}")
                     docs = [
                         Document(
                             page_content=result.documents[0][idx],
@@ -1654,6 +1680,7 @@ def process_file(
                         for idx, id in enumerate(result.ids[0])
                     ]
                 else:
+                    log.warning(f"No existing vectors found for file {file.id} after {max_retries} retries, falling back to content field")
                     docs = [
                         Document(
                             page_content=file.data.get("content", ""),
