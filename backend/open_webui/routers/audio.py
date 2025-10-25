@@ -1499,10 +1499,10 @@ async def get_voices(request: Request, user=Depends(get_verified_user)):
 @router.get("/files/{file_id}/segment")
 async def get_audio_segment(
     file_id: str,
+    background_tasks: BackgroundTasks,
+    user=Depends(get_verified_user),
     start: float = Query(..., description="Start timestamp in seconds"),
     end: float = Query(..., description="End timestamp in seconds"),
-    background_tasks: BackgroundTasks = Depends(),
-    user=Depends(get_verified_user),
 ):
     """
     Extract and stream a specific audio segment from a file based on timestamps.
@@ -1603,6 +1603,9 @@ async def get_audio_segment(
             }
         )
         
+    except HTTPException:
+        # Re-raise HTTP exceptions (400, 403, 404) without modification
+        raise
     except subprocess.CalledProcessError as e:
         log.error(f"ffmpeg extraction failed: {e.stderr}")
         raise HTTPException(
