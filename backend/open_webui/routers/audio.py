@@ -81,9 +81,15 @@ from pydub.utils import mediainfo
 
 def is_audio_conversion_required(file_path):
     """
-    Check if the given audio file needs conversion to mp3.
+    Check if the given audio/video file needs conversion to mp3.
+    Note: Video files are automatically handled - ffmpeg extracts the audio track.
     """
-    SUPPORTED_FORMATS = {"flac", "m4a", "mp3", "mp4", "mpeg", "wav", "webm"}
+    SUPPORTED_FORMATS = {
+        # Audio formats
+        "flac", "m4a", "mp3", "mpeg", "wav", "webm", "aac", "ogg", "opus",
+        # Video formats (audio track will be extracted)
+        "mp4", "avi", "mov", "mkv", "wmv", "flv", "m4v"
+    }
 
     if not os.path.isfile(file_path):
         log.error(f"File not found: {file_path}")
@@ -1161,7 +1167,10 @@ def transcription(
             stt_supported_content_types
             if stt_supported_content_types
             and any(t.strip() for t in stt_supported_content_types)
-            else ["audio/*", "video/webm"]
+            else [
+                "audio/*",  # All audio formats
+                "video/*",  # All video formats (expanded from webm only)
+            ]
         )
     ):
         raise HTTPException(
