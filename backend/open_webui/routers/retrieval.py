@@ -1570,7 +1570,7 @@ def save_docs_to_vector_db(
             "total_chunks", "page_number", "processing_engine", "strategy", 
             "chunking_strategy", "cleaning_level", "element_type", "source", "languages", "last_modified",
             # Enrichment fields for audio/video
-            "timestamp_start", "timestamp_end", "duration",
+            "timestamp_start", "timestamp_end", "duration", "audio_segment_url",
             "topics", "entities_people", "keywords", "key_concepts",
             "transcript_language", "transcript_duration"
         ]
@@ -1861,6 +1861,15 @@ def process_file(
                         enriched_metadata["timestamp_end"] = timestamp_data["timestamp_end"]
                     if timestamp_data.get("duration") is not None:
                         enriched_metadata["duration"] = timestamp_data["duration"]
+                    
+                    # Add audio segment URL for playback if timestamps available
+                    if (timestamp_data.get("timestamp_start") is not None and 
+                        timestamp_data.get("timestamp_end") is not None):
+                        enriched_metadata["audio_segment_url"] = (
+                            f"/api/v1/audio/files/{file.id}/segment"
+                            f"?start={timestamp_data['timestamp_start']}"
+                            f"&end={timestamp_data['timestamp_end']}"
+                        )
                     
                     # Add transcript metadata only if available
                     if transcript_language is not None:
