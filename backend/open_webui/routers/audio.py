@@ -658,6 +658,8 @@ def transcription_handler(request, file_path, metadata):
             for language in languages:
                 payload = {
                     "model": request.app.state.config.STT_MODEL,
+                    "response_format": "verbose_json",  # Request detailed response with timestamps
+                    "timestamp_granularities[]": "segment",  # Request segment-level timestamps
                 }
 
                 if language:
@@ -677,7 +679,44 @@ def transcription_handler(request, file_path, metadata):
                     break
 
             r.raise_for_status()
-            data = r.json()
+            response = r.json()
+            
+            # Parse verbose_json response to extract text and segments
+            # Format: {text, language, duration, segments: [{id, start, end, text}]}
+            transcript_text = response.get("text", "")
+            segments_list = []
+            
+            # Extract segments if available (OpenAI/Groq verbose_json format)
+            if "segments" in response:
+                for segment in response["segments"]:
+                    segment_data = {
+                        "id": segment.get("id", len(segments_list)),
+                        "start": segment.get("start", 0),
+                        "end": segment.get("end", 0),
+                        "text": segment.get("text", ""),
+                        "words": []  # OpenAI/Groq may include words if word_granularity requested
+                    }
+                    
+                    # Include word-level timestamps if available
+                    if "words" in segment:
+                        segment_data["words"] = [
+                            {
+                                "word": word.get("word", ""),
+                                "start": word.get("start", 0),
+                                "end": word.get("end", 0),
+                            }
+                            for word in segment["words"]
+                        ]
+                    
+                    segments_list.append(segment_data)
+            
+            # Build standardized response matching faster-whisper format
+            data = {
+                "text": transcript_text.strip(),
+                "segments": segments_list,
+                "language": response.get("language"),
+                "duration": segments_list[-1]["end"] if segments_list else 0
+            }
 
             # save the transcript to a json file
             transcript_file = f"{file_dir}/{id}.json"
