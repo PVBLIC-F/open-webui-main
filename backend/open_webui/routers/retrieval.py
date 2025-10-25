@@ -5,13 +5,6 @@ import os
 import shutil
 import asyncio
 import time
-import re
-import unicodedata
-from html import unescape, parser
-from urllib.parse import unquote
-import numpy as np
-from markdown import Markdown
-from io import StringIO
 
 import re
 import uuid
@@ -127,489 +120,123 @@ log.setLevel(SRC_LOG_LEVELS["RAG"])
 ##########################################
 
 
-class TextCleaner:
-    """Centralized text cleaning utilities for improving vector database quality"""
-
-    @staticmethod
-    def _extract_latex(text: str) -> tuple[str, dict]:
-        """Extract LaTeX expressions to protect them during cleaning"""
-        latex_map = {}
-        counter = 0
-
-        # Patterns for LaTeX: $...$ or $$...$$ or \[...\] or \(...\)
-        patterns = [
-            (r"\$\$(.+?)\$\$", "$$LATEX_{}$$"),  # Display math
-            (r"\$(.+?)\$", "$LATEX_{}$"),  # Inline math
-            (r"\\\[(.+?)\\\]", "\\[LATEX_{}\\]"),  # Display math
-            (r"\\\((.+?)\\\)", "\\(LATEX_{}\\)"),  # Inline math
-        ]
-
-        for pattern, placeholder_template in patterns:
-            matches = re.finditer(pattern, text, re.DOTALL)
-            for match in matches:
-                placeholder = placeholder_template.format(counter)
-                latex_map[placeholder] = match.group(0)
-                text = text.replace(match.group(0), placeholder, 1)
-                counter += 1
-
-        return text, latex_map
-
-    @staticmethod
-    def _restore_latex(text: str, latex_map: dict) -> str:
-        """Restore LaTeX expressions after cleaning"""
-        for placeholder, original in latex_map.items():
-            text = text.replace(placeholder, original)
-        return text
-
-    @staticmethod
-    def clean_text(text) -> str:
-        """Clean text by properly handling escape sequences and special characters"""
-        if not text:
-            return ""
-
-        # Convert to string if needed
-        if isinstance(text, (list, tuple)):
-            text = "\n".join(str(item) for item in text)
-
-        # Handle quoted JSON strings
-        if isinstance(text, str) and text.startswith('"') and text.endswith('"'):
-            try:
-                parsed_text = json.loads(f"{text}")
-                if isinstance(parsed_text, str):
-                    text = parsed_text
-            except:
-                text = text[1:-1]
-
-        if isinstance(text, str):
-            # Protect LaTeX expressions before cleaning
-            text, latex_map = TextCleaner._extract_latex(text)
-
-            try:
-                # Handle HTML entities and URL encoding
-                text = unescape(text)
-                text = unquote(text)
-                text = unicodedata.normalize("NFKC", text)
-
-                # Remove control characters but keep newlines and tabs
-                control_chars = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]")
-                text = control_chars.sub("", text)
-            except:
-                pass
-
-            # Handle escape sequences (but not in LaTeX)
-            text = text.replace("\\n\\n", "\n\n")
-            text = text.replace("\\n", "\n")
-            text = text.replace("\\t", "\t")
-            text = text.replace("\\r", "")
-            text = text.replace('\\"', '"')
-            text = text.replace("\\'", "'")
-
-            # Restore LaTeX before normalizing double backslashes
-            text = TextCleaner._restore_latex(text, latex_map)
-
-            # Normalize whitespace
-            try:
-                text = re.sub(r" {2,}", " ", text)
-                text = re.sub(r"\n{3,}", "\n\n", text)
-                lines = text.split("\n")
-                lines = [line.strip() for line in lines]
-                text = "\n".join(lines)
-            except:
-                pass
-
-        return text.strip() if isinstance(text, str) else ""
-
-    @staticmethod
-    def clean_malformed_latex(text: str) -> str:
-        """
-        Remove or clean LaTeX expressions from OCR output.
-        For vector search, plain text is more useful than LaTeX math notation.
-        """
-        if not text:
-            return ""
-
-        def process_latex(match):
-            full_match = match.group(0)
-            latex_content = match.group(1)
-
-            # Check if LaTeX contains backslashed commands or special chars
-            has_commands = bool(re.search(r"\\[a-zA-Z]+", latex_content))
-            has_escaped_chars = bool(re.search(r"\\\$|\\\{|\\\}", latex_content))
-
-            # If it has LaTeX commands or escaped chars, extract plain text
-            if has_commands or has_escaped_chars:
-                # Remove LaTeX commands: \mathbf{, \text{, etc.
-                cleaned = re.sub(r"\\[a-zA-Z]+\*?\{?", "", latex_content)
-                # Remove braces
-                cleaned = re.sub(r"[{}]", "", cleaned)
-                # Convert \$ to $
-                cleaned = re.sub(r"\\\$", "$", cleaned)
-                # Remove remaining backslashes
-                cleaned = re.sub(r"\\+", "", cleaned)
-                # Normalize spaces
-                cleaned = re.sub(r"\s+", " ", cleaned).strip()
-
-                # Return cleaned text without $ wrappers
-                return cleaned if cleaned else ""
-
-            # Simple math expression without commands - keep it
-            return full_match
-
-        # Clean inline math $...$
-        text = re.sub(r"\$([^\$]+?)\$", process_latex, text)
-
-        # Remove display math $$...$$  entirely (usually malformed from OCR)
-        text = re.sub(r"\$\$[^\$]+?\$\$", "", text)
-
-        # Clean up leftover LaTeX fragments
-        text = re.sub(r"\}+\$", "", text)  # Remove }$
-        text = re.sub(r"\$\{+", "", text)  # Remove ${
-        text = re.sub(r"^\$|\$$", "", text)  # Remove standalone $ at start/end
-
-        # Clean double backslash sequences (common in OCR output)
-        text = re.sub(r"\\\\\$", "$", text)  # \\$ → $
-        text = re.sub(r"\\\\%", "%", text)  # \\% → %
-        text = re.sub(r"\\\\", "", text)  # Remove remaining \\
-
-        # Clean subscript notation from OCR (CO2_2 → CO2)
-        text = re.sub(r"([A-Z]+\d)_\d+", r"\1", text)  # CO2_2 → CO2
-
-        return text
-
-    @staticmethod
-    def markdown_to_plain_text(md_text: str) -> str:
-        """
-        Convert markdown to clean plain text using proper markdown parser.
-        This is the robust solution for handling OCR markdown output.
-        """
-        if not md_text:
-            return ""
-
-        try:
-            # Create HTML stripper
-            class HTMLStripper(parser.HTMLParser):
-                def __init__(self):
-                    super().__init__()
-                    self.reset()
-                    self.strict = False
-                    self.convert_charrefs = True
-                    self.text = StringIO()
-
-                def handle_data(self, d):
-                    self.text.write(d)
-
-                def handle_starttag(self, tag, attrs):
-                    if tag in [
-                        "br",
-                        "p",
-                        "div",
-                        "h1",
-                        "h2",
-                        "h3",
-                        "h4",
-                        "h5",
-                        "h6",
-                        "li",
-                    ]:
-                        self.text.write("\n")
-
-                def handle_endtag(self, tag):
-                    if tag in ["p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "li"]:
-                        self.text.write("\n")
-
-                def get_text(self):
-                    return self.text.getvalue()
-
-            # Convert markdown to HTML
-            md = Markdown(extensions=["extra", "nl2br"])
-            html = md.convert(md_text)
-
-            # Strip HTML tags to get plain text
-            stripper = HTMLStripper()
-            stripper.feed(html)
-            text = stripper.get_text()
-
-            # Clean malformed LaTeX that survived markdown conversion
-            text = TextCleaner.clean_malformed_latex(text)
-
-            # Final cleanup
-            text = re.sub(r"\n\s*\n\s*\n+", "\n\n", text)  # Max 2 newlines
-            text = re.sub(r" {2,}", " ", text)  # Multiple spaces
-            text = text.strip()
-
-            return text
-
-        except Exception as e:
-            log.error(f"Error converting markdown to plain text: {e}")
-            # Fallback to basic cleaning
-            return TextCleaner._basic_markdown_clean(md_text)
-
-    @staticmethod
-    def _basic_markdown_clean(text: str) -> str:
-        """Fallback: Basic markdown cleaning if parser fails"""
-        # Remove images
-        text = re.sub(r"!\[[^\]]*\]\([^\)]*\)", "", text)
-        # Remove image filenames
-        text = re.sub(
-            r"\b[\w\-]+\.(jpe?g|png|gif|webp)\b\s*-?\s*", "", text, flags=re.IGNORECASE
-        )
-        # Remove table markers
-        text = re.sub(r"\|[\s\-:]+\|+", "", text)
-        text = re.sub(r"^\s*\|+\s*$", "", text, flags=re.MULTILINE)
-        # Remove headers
-        text = re.sub(r"^#+\s+", "", text, flags=re.MULTILINE)
-        # Clean whitespace
-        text = re.sub(r"\n\s*\n\s*\n+", "\n\n", text)
-        return text.strip()
-
-    @staticmethod
-    def clean_markdown_artifacts(text: str) -> str:
-        """
-        Clean markdown using proper parser for robust handling.
-        Converts markdown to plain text, preserving content but removing formatting.
-        """
-        return TextCleaner.markdown_to_plain_text(text)
-
-    @staticmethod
-    def clean_for_vector_db(text) -> str:
-        """
-        Final cleaning for vector database storage.
-        Note: This is called AFTER chunking for final polishing only.
-        Main cleaning happens before chunking.
-        """
-        if not text:
-            return ""
-
-        # Remove zero-width characters and other problematic Unicode
-        text = re.sub(r"[\x00-\x1F\x7F-\x9F\u200B-\u200D\uFEFF]", "", text)
-
-        # Final whitespace normalization (aggressive single-space)
-        text = re.sub(r"\s+", " ", text).strip()
-
-        # Ensure valid UTF-8
-        text = text.encode("utf-8", "ignore").decode("utf-8")
-
-        # Prevent excessively long chunks (safety check)
-        max_length = 10000
-        if len(text) > max_length:
-            text = text[:max_length] + "..."
-
-        return text
-
-
-class HierarchicalChunker:
+def extract_topics_and_entities(text: str, use_llm: bool = False) -> dict:
     """
-    Creates hierarchical parent-child chunks for better retrieval.
-    Child chunks are small and precise for retrieval.
-    Parent chunks are large and provide full context for generation.
+    Extract topics, entities, and keywords from text for enrichment.
+    
+    Args:
+        text: Text to analyze
+        use_llm: If True, use LLM for extraction (more accurate but slower)
+        
+    Returns:
+        Dictionary with topics, entities, keywords, and key concepts
     """
-
-    @staticmethod
-    def create_hierarchical_chunks(
-        docs: list[Document],
-        parent_splitter,
-        child_splitter,
-        min_parent_size: int = 800,
-    ) -> list[Document]:
-        """
-        Split documents into parent chunks, then split each parent into child chunks.
-        Each child maintains a reference to its parent content.
-
-        If parent chunk is too small (< min_parent_size), skip hierarchical splitting
-        and treat it as a regular chunk to avoid parent=child duplicates.
-        """
-        hierarchical_docs = []
-
-        for doc in docs:
-            # Step 1: Create parent chunks (large, for context)
-            parent_chunks = parent_splitter.split_documents([doc])
-
-            # Step 2: For each parent, create child chunks (small, for retrieval)
-            for parent_idx, parent_chunk in enumerate(parent_chunks):
-                parent_content = parent_chunk.page_content
-
-                # Skip hierarchical splitting if parent is too small
-                # (would result in parent ≈ child, wasting storage)
-                if len(parent_content) < min_parent_size:
-                    # Treat as regular chunk (no hierarchy)
-                    regular_doc = Document(
-                        page_content=parent_content,
-                        metadata={
-                            **doc.metadata,
-                            **parent_chunk.metadata,
-                            "is_hierarchical": False,
-                        },
-                    )
-                    hierarchical_docs.append(regular_doc)
-                    continue
-
-                parent_id = f"{doc.metadata.get('file_id', 'unknown')}_{parent_idx}"
-
-                # Split parent into children
-                child_chunks = child_splitter.split_text(parent_content)
-
-                # Only create hierarchy if we got multiple children
-                if len(child_chunks) == 1:
-                    # Parent didn't split, treat as regular chunk
-                    regular_doc = Document(
-                        page_content=parent_content,
-                        metadata={
-                            **doc.metadata,
-                            **parent_chunk.metadata,
-                            "is_hierarchical": False,
-                        },
-                    )
-                    hierarchical_docs.append(regular_doc)
-                else:
-                    # Create child documents with parent reference
-                    for child_idx, child_content in enumerate(child_chunks):
-                        child_doc = Document(
-                            page_content=child_content,
-                            metadata={
-                                **doc.metadata,
-                                **parent_chunk.metadata,
-                                "parent_id": parent_id,
-                                "parent_content": parent_content,  # Store full parent for context
-                                "child_index": child_idx,
-                                "is_hierarchical": True,
-                            },
-                        )
-                        hierarchical_docs.append(child_doc)
-
-        log.info(
-            f"Created {len(hierarchical_docs)} chunks from {len(docs)} documents (hierarchical where beneficial)"
-        )
-        return hierarchical_docs
+    if not text or len(text.strip()) < 10:
+        return {
+            "topics": [],
+            "entities": {"people": [], "organizations": [], "locations": [], "concepts": []},
+            "keywords": [],
+            "key_concepts": []
+        }
+    
+    # Simple extraction using regex and pattern matching (fast, no external deps)
+    # Can be enhanced with spaCy, NLTK, or LLM calls for better accuracy
+    
+    # Extract potential topics (capitalized phrases)
+    topics = list(set(re.findall(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b', text)))
+    
+    # Extract potential names (2-3 capitalized words)
+    people = list(set(re.findall(r'\b[A-Z][a-z]+\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\b', text)))
+    
+    # Extract keywords (words longer than 5 chars, frequent)
+    words = re.findall(r'\b[a-z]{6,}\b', text.lower())
+    word_freq = {}
+    for word in words:
+        word_freq[word] = word_freq.get(word, 0) + 1
+    
+    # Get top keywords by frequency
+    keywords = sorted(word_freq.items(), key=lambda x: x[1], reverse=True)[:10]
+    keywords = [word for word, freq in keywords if freq > 1]
+    
+    # Extract sentences that seem like key concepts
+    sentences = re.split(r'[.!?]+', text)
+    key_concepts = []
+    for sentence in sentences:
+        sentence = sentence.strip()
+        if len(sentence) > 20 and len(sentence) < 150:
+            # Look for definitional or explanatory sentences
+            if any(word in sentence.lower() for word in [' is ', ' are ', ' means ', ' refers to ', ' defined as ']):
+                key_concepts.append(sentence)
+        if len(key_concepts) >= 3:
+            break
+    
+    return {
+        "topics": topics[:5],  # Top 5 topics
+        "entities": {
+            "people": people[:5],  # Top 5 people
+            "organizations": [],  # Can be enhanced with NER
+            "locations": [],  # Can be enhanced with NER
+            "concepts": []  # Can be enhanced with topic modeling
+        },
+        "keywords": keywords,
+        "key_concepts": key_concepts
+    }
 
 
-class SemanticTextSplitter:
+def align_chunk_with_timestamps(chunk_text: str, segments: list, chunk_start_char: int, full_text: str) -> dict:
     """
-    Split text based on semantic similarity using embeddings.
-    Detects topic boundaries by measuring similarity between text segments.
+    Find the timestamps that align with a text chunk from the full transcript.
+    
+    Args:
+        chunk_text: The chunked text
+        segments: List of segments with timestamps from Whisper
+        chunk_start_char: Character position where this chunk starts in full transcript
+        full_text: The complete transcript text
+        
+    Returns:
+        Dictionary with timestamp_start, timestamp_end, and matching segments
     """
-
-    @staticmethod
-    def split_into_sentences(text: str) -> list[str]:
-        """Split text into sentences using regex for better boundary detection"""
-        # Pattern for sentence boundaries (periods, exclamation, question marks)
-        # Handles common abbreviations and edge cases
-        sentence_pattern = r"(?<!\w\.\w.)(?<![A-Z][a-z]\.)(?<=\.|\?|!)\s"
-        sentences = re.split(sentence_pattern, text)
-        # Clean and filter empty sentences
-        sentences = [s.strip() for s in sentences if s.strip()]
-        return sentences
-
-    @staticmethod
-    def cosine_similarity(vec1: np.ndarray, vec2: np.ndarray) -> float:
-        """Calculate cosine similarity between two vectors"""
-        if len(vec1) == 0 or len(vec2) == 0:
-            return 0.0
-        dot_product = np.dot(vec1, vec2)
-        norm_a = np.linalg.norm(vec1)
-        norm_b = np.linalg.norm(vec2)
-        if norm_a == 0 or norm_b == 0:
-            return 0.0
-        return float(dot_product / (norm_a * norm_b))
-
-    @staticmethod
-    def split_text_semantically(
-        text: str,
-        embedding_function,
-        similarity_threshold: float = 0.75,
-        min_chunk_size: int = 300,
-        max_chunk_size: int = 2000,
-    ) -> list[str]:
-        """
-        Split text by semantic similarity.
-
-        Args:
-            text: Text to split
-            embedding_function: Function that generates embeddings for text
-            similarity_threshold: Similarity below this triggers a new chunk (0-1)
-            min_chunk_size: Minimum characters per chunk
-            max_chunk_size: Maximum characters per chunk
-
-        Returns:
-            List of semantically coherent text chunks
-        """
-        sentences = SemanticTextSplitter.split_into_sentences(text)
-
-        if len(sentences) <= 1:
-            return [text]
-
-        try:
-            # Generate embeddings for each sentence
-            embeddings = []
-            for sentence in sentences:
-                if len(sentence.strip()) > 10:  # Skip very short sentences
-                    try:
-                        emb = embedding_function(sentence)
-                        if isinstance(emb, list):
-                            emb = np.array(emb)
-                        embeddings.append(emb)
-                    except Exception as e:
-                        log.debug(f"Error generating embedding for sentence: {e}")
-                        embeddings.append(None)
-                else:
-                    embeddings.append(None)
-
-            # Build chunks based on semantic similarity
-            chunks = []
-            current_chunk = [sentences[0]]
-            current_length = len(sentences[0])
-
-            for i in range(1, len(sentences)):
-                if embeddings[i - 1] is None or embeddings[i] is None:
-                    # No embedding, use size-based chunking
-                    if current_length + len(sentences[i]) <= max_chunk_size:
-                        current_chunk.append(sentences[i])
-                        current_length += len(sentences[i])
-                    else:
-                        if current_length >= min_chunk_size:
-                            chunks.append(" ".join(current_chunk))
-                            current_chunk = [sentences[i]]
-                            current_length = len(sentences[i])
-                        else:
-                            current_chunk.append(sentences[i])
-                            current_length += len(sentences[i])
-                    continue
-
-                # Calculate semantic similarity
-                similarity = SemanticTextSplitter.cosine_similarity(
-                    embeddings[i - 1], embeddings[i]
-                )
-
-                # Check if we should start a new chunk
-                topic_boundary = similarity < similarity_threshold
-                size_exceeded = current_length + len(sentences[i]) > max_chunk_size
-                meets_min_size = current_length >= min_chunk_size
-
-                if (topic_boundary and meets_min_size) or size_exceeded:
-                    # Start new chunk
-                    chunks.append(" ".join(current_chunk))
-                    current_chunk = [sentences[i]]
-                    current_length = len(sentences[i])
-                else:
-                    # Continue current chunk
-                    current_chunk.append(sentences[i])
-                    current_length += len(sentences[i])
-
-            # Add the last chunk
-            if current_chunk:
-                chunks.append(" ".join(current_chunk))
-
-            log.debug(
-                f"Semantic splitting: {len(sentences)} sentences → {len(chunks)} chunks"
-            )
-            return chunks
-
-        except Exception as e:
-            log.error(f"Error in semantic splitting: {e}")
-            # Fallback to simple character-based splitting
-            return [
-                text[i : i + max_chunk_size]
-                for i in range(0, len(text), max_chunk_size)
-            ]
+    if not segments or not chunk_text:
+        return {
+            "timestamp_start": None,
+            "timestamp_end": None,
+            "segment_ids": [],
+            "duration": None
+        }
+    
+    # Find which segments overlap with this chunk based on text matching
+    chunk_words = set(chunk_text.lower().split())
+    chunk_length = len(chunk_text)
+    chunk_end_char = chunk_start_char + chunk_length
+    
+    matching_segments = []
+    current_char_pos = 0
+    
+    for segment in segments:
+        segment_text = segment.get("text", "")
+        segment_start_char = current_char_pos
+        segment_end_char = current_char_pos + len(segment_text)
+        
+        # Check if this segment overlaps with the chunk
+        if not (segment_end_char < chunk_start_char or segment_start_char > chunk_end_char):
+            matching_segments.append(segment)
+        
+        current_char_pos = segment_end_char + 1  # +1 for space between segments
+    
+    if matching_segments:
+        return {
+            "timestamp_start": round(matching_segments[0]["start"], 2),
+            "timestamp_end": round(matching_segments[-1]["end"], 2),
+            "segment_ids": [seg.get("id", i) for i, seg in enumerate(matching_segments)],
+            "duration": round(matching_segments[-1]["end"] - matching_segments[0]["start"], 2)
+        }
+    
+    return {
+        "timestamp_start": None,
+        "timestamp_end": None,
+        "segment_ids": [],
+        "duration": None
+    }
 
 
 def get_ef(
@@ -1834,14 +1461,6 @@ def save_docs_to_vector_db(
                     filename = metadata.get("name", "Unknown file")
                     raise ValueError(f"File '{filename}' with identical content already exists in this knowledge base. To replace it, please delete the existing file first or use the overwrite option.")
 
-    # Clean text content before processing (preserved from main branch)
-    log.debug("Cleaning document text content")
-    for doc in docs:
-        doc.page_content = TextCleaner.clean_text(doc.page_content)
-        # Clean markdown artifacts early (before chunking)
-        doc.page_content = TextCleaner.clean_markdown_artifacts(doc.page_content)
-
-    # Apply text splitting based on configuration
     if split:
         if request.app.state.config.TEXT_SPLITTER in ["", "unstructured"]:
             # Unstructured.io handles chunking internally, no additional splitting needed
@@ -1849,7 +1468,6 @@ def save_docs_to_vector_db(
             # docs are already chunked by UnstructuredUnifiedLoader
         elif request.app.state.config.TEXT_SPLITTER in ["character"]:
             text_splitter = RecursiveCharacterTextSplitter(
-                separators=["\n\n", "\n", ".", "!", "?", ",", " ", ""],
                 chunk_size=request.app.state.config.CHUNK_SIZE,
                 chunk_overlap=request.app.state.config.CHUNK_OVERLAP,
                 add_start_index=True,
@@ -1890,7 +1508,6 @@ def save_docs_to_vector_db(
             for doc in docs:
                 md_header_splits = markdown_splitter.split_text(doc.page_content)
                 text_splitter = RecursiveCharacterTextSplitter(
-                    separators=["\n\n", "\n", ".", "!", "?", ",", " ", ""],
                     chunk_size=request.app.state.config.CHUNK_SIZE,
                     chunk_overlap=request.app.state.config.CHUNK_OVERLAP,
                     add_start_index=True,
@@ -1918,23 +1535,12 @@ def save_docs_to_vector_db(
         else:
             raise ValueError(ERROR_MESSAGES.DEFAULT("Invalid text splitter"))
 
-    # Filter out empty documents and validate content
+     # Filter out empty documents and validate content
     docs = [doc for doc in docs if doc.page_content and doc.page_content.strip()]
     
     if len(docs) == 0:
         log.warning(f"No valid content found in documents for collection {collection_name}")
         raise ValueError(ERROR_MESSAGES.EMPTY_CONTENT)
-
-    # Clean documents for vector database storage
-    log.debug("Cleaning documents for vector database storage")
-    for doc in docs:
-        doc.page_content = TextCleaner.clean_for_vector_db(doc.page_content)
-
-        # Also clean parent_content if hierarchical chunking is enabled
-        if doc.metadata.get("is_hierarchical") and "parent_content" in doc.metadata:
-            doc.metadata["parent_content"] = TextCleaner.clean_for_vector_db(
-                doc.metadata["parent_content"]
-            )
 
     texts = [doc.page_content for doc in docs]
     
@@ -2054,25 +1660,6 @@ def save_docs_to_vector_db(
         
         log.info(f"embeddings generated {len(embeddings)} for {len(texts)} items")
 
-        # Handle case where embedding generation partially failed
-        if len(embeddings) != len(texts):
-            log.error(
-                f"Embedding count mismatch: {len(embeddings)} embeddings for {len(texts)} texts"
-            )
-            if len(embeddings) < len(texts):
-                # Only process texts that have embeddings
-                log.warning(
-                    f"Dropping {len(texts) - len(embeddings)} texts without embeddings"
-                )
-                texts = texts[: len(embeddings)]
-                metadatas = metadatas[: len(embeddings)]
-            elif len(embeddings) > len(texts):
-                # Truncate embeddings to match texts (shouldn't happen, but be safe)
-                log.warning(
-                    f"Truncating {len(embeddings) - len(texts)} extra embeddings"
-                )
-                embeddings = embeddings[: len(texts)]
-
         items = [
             {
                 "id": str(uuid.uuid4()),
@@ -2146,9 +1733,10 @@ def process_file(
                     pass
 
                 # Create single document with full transcript
+                full_transcript = form_data.content.replace("<br/>", "\n")
                 docs = [
                     Document(
-                        page_content=form_data.content.replace("<br/>", "\n"),
+                        page_content=full_transcript,
                         metadata={
                             **file.meta,
                             "name": file.filename,
@@ -2158,6 +1746,11 @@ def process_file(
                         },
                     )
                 ]
+                
+                # Get transcript segments from file metadata (if available)
+                transcript_segments = file.meta.get("transcript_segments", [])
+                transcript_duration = file.meta.get("transcript_duration")
+                transcript_language = file.meta.get("transcript_language")
                 
                 # Manually chunk audio/video transcripts since they bypass the Loader
                 # For unstructured TEXT_SPLITTER, force character splitting since 
@@ -2213,6 +1806,51 @@ def process_file(
                     )
                     docs = text_splitter.split_documents(docs)
                     log.info(f"Split audio/video transcript into {len(docs)} chunks using fallback character splitter")
+                
+                # Enrich each chunk with timestamps and topics/entities
+                enriched_docs = []
+                for idx, doc in enumerate(docs):
+                    chunk_start_char = doc.metadata.get("start_index", 0)
+                    
+                    # Extract topics and entities for this chunk
+                    enrichment = extract_topics_and_entities(doc.page_content)
+                    
+                    # Align chunk with timestamps from Whisper segments
+                    timestamp_data = {}
+                    if transcript_segments:
+                        timestamp_data = align_chunk_with_timestamps(
+                            doc.page_content,
+                            transcript_segments,
+                            chunk_start_char,
+                            full_transcript
+                        )
+                    
+                    # Create enriched document with all metadata
+                    enriched_doc = Document(
+                        page_content=doc.page_content,
+                        metadata={
+                            **doc.metadata,
+                            # Timestamp metadata
+                            "timestamp_start": timestamp_data.get("timestamp_start"),
+                            "timestamp_end": timestamp_data.get("timestamp_end"),
+                            "duration": timestamp_data.get("duration"),
+                            # Topic/Entity metadata
+                            "topics": enrichment.get("topics", []),
+                            "entities_people": enrichment.get("entities", {}).get("people", []),
+                            "keywords": enrichment.get("keywords", []),
+                            "key_concepts": enrichment.get("key_concepts", []),
+                            # Chunk position metadata
+                            "chunk_index": idx,
+                            "total_chunks": len(docs),
+                            # Transcript metadata
+                            "transcript_language": transcript_language,
+                            "transcript_duration": transcript_duration,
+                        }
+                    )
+                    enriched_docs.append(enriched_doc)
+                
+                docs = enriched_docs
+                log.info(f"Enriched {len(docs)} chunks with timestamps and topics/entities")
 
                 text_content = form_data.content
             elif form_data.collection_name:
