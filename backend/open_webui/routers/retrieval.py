@@ -120,6 +120,125 @@ log.setLevel(SRC_LOG_LEVELS["RAG"])
 ##########################################
 
 
+def extract_topics_and_entities(text: str, use_llm: bool = False) -> dict:
+    """
+    Extract topics, entities, and keywords from text for enrichment.
+    
+    Args:
+        text: Text to analyze
+        use_llm: If True, use LLM for extraction (more accurate but slower)
+        
+    Returns:
+        Dictionary with topics, entities, keywords, and key concepts
+    """
+    if not text or len(text.strip()) < 10:
+        return {
+            "topics": [],
+            "entities": {"people": [], "organizations": [], "locations": [], "concepts": []},
+            "keywords": [],
+            "key_concepts": []
+        }
+    
+    # Simple extraction using regex and pattern matching (fast, no external deps)
+    # Can be enhanced with spaCy, NLTK, or LLM calls for better accuracy
+    
+    # Extract potential topics (capitalized phrases)
+    topics = list(set(re.findall(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b', text)))
+    
+    # Extract potential names (2-3 capitalized words)
+    people = list(set(re.findall(r'\b[A-Z][a-z]+\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\b', text)))
+    
+    # Extract keywords (words longer than 5 chars, frequent)
+    words = re.findall(r'\b[a-z]{6,}\b', text.lower())
+    word_freq = {}
+    for word in words:
+        word_freq[word] = word_freq.get(word, 0) + 1
+    
+    # Get top keywords by frequency
+    keywords = sorted(word_freq.items(), key=lambda x: x[1], reverse=True)[:10]
+    keywords = [word for word, freq in keywords if freq > 1]
+    
+    # Extract sentences that seem like key concepts
+    sentences = re.split(r'[.!?]+', text)
+    key_concepts = []
+    for sentence in sentences:
+        sentence = sentence.strip()
+        if len(sentence) > 20 and len(sentence) < 150:
+            # Look for definitional or explanatory sentences
+            if any(word in sentence.lower() for word in [' is ', ' are ', ' means ', ' refers to ', ' defined as ']):
+                key_concepts.append(sentence)
+        if len(key_concepts) >= 3:
+            break
+    
+    return {
+        "topics": topics[:5],  # Top 5 topics
+        "entities": {
+            "people": people[:5],  # Top 5 people
+            "organizations": [],  # Can be enhanced with NER
+            "locations": [],  # Can be enhanced with NER
+            "concepts": []  # Can be enhanced with topic modeling
+        },
+        "keywords": keywords,
+        "key_concepts": key_concepts
+    }
+
+
+def align_chunk_with_timestamps(chunk_text: str, segments: list, chunk_start_char: int, full_text: str) -> dict:
+    """
+    Find the timestamps that align with a text chunk from the full transcript.
+    
+    Args:
+        chunk_text: The chunked text
+        segments: List of segments with timestamps from Whisper
+        chunk_start_char: Character position where this chunk starts in full transcript
+        full_text: The complete transcript text
+        
+    Returns:
+        Dictionary with timestamp_start, timestamp_end, and matching segments
+    """
+    if not segments or not chunk_text:
+        return {
+            "timestamp_start": None,
+            "timestamp_end": None,
+            "segment_ids": [],
+            "duration": None
+        }
+    
+    # Find which segments overlap with this chunk based on text matching
+    chunk_words = set(chunk_text.lower().split())
+    chunk_length = len(chunk_text)
+    chunk_end_char = chunk_start_char + chunk_length
+    
+    matching_segments = []
+    current_char_pos = 0
+    
+    for segment in segments:
+        segment_text = segment.get("text", "")
+        segment_start_char = current_char_pos
+        segment_end_char = current_char_pos + len(segment_text)
+        
+        # Check if this segment overlaps with the chunk
+        if not (segment_end_char < chunk_start_char or segment_start_char > chunk_end_char):
+            matching_segments.append(segment)
+        
+        current_char_pos = segment_end_char + 1  # +1 for space between segments
+    
+    if matching_segments:
+        return {
+            "timestamp_start": round(matching_segments[0]["start"], 2),
+            "timestamp_end": round(matching_segments[-1]["end"], 2),
+            "segment_ids": [seg.get("id", i) for i, seg in enumerate(matching_segments)],
+            "duration": round(matching_segments[-1]["end"] - matching_segments[0]["start"], 2)
+        }
+    
+    return {
+        "timestamp_start": None,
+        "timestamp_end": None,
+        "segment_ids": [],
+        "duration": None
+    }
+
+
 def get_ef(
     engine: str,
     embedding_model: str,
@@ -1623,9 +1742,10 @@ def process_file(
                     pass
 
                 # Create single document with full transcript
+                full_transcript = form_data.content.replace("<br/>", "\n")
                 docs = [
                     Document(
-                        page_content=form_data.content.replace("<br/>", "\n"),
+                        page_content=full_transcript,
                         metadata={
                             **file.meta,
                             "name": file.filename,
@@ -1635,6 +1755,11 @@ def process_file(
                         },
                     )
                 ]
+                
+                # Get transcript segments from file metadata (if available)
+                transcript_segments = file.meta.get("transcript_segments", [])
+                transcript_duration = file.meta.get("transcript_duration")
+                transcript_language = file.meta.get("transcript_language")
                 
                 # Manually chunk audio/video transcripts since they bypass the Loader
                 # For unstructured TEXT_SPLITTER, force character splitting since 
@@ -1690,6 +1815,51 @@ def process_file(
                     )
                     docs = text_splitter.split_documents(docs)
                     log.info(f"Split audio/video transcript into {len(docs)} chunks using fallback character splitter")
+                
+                # Enrich each chunk with timestamps and topics/entities
+                enriched_docs = []
+                for idx, doc in enumerate(docs):
+                    chunk_start_char = doc.metadata.get("start_index", 0)
+                    
+                    # Extract topics and entities for this chunk
+                    enrichment = extract_topics_and_entities(doc.page_content)
+                    
+                    # Align chunk with timestamps from Whisper segments
+                    timestamp_data = {}
+                    if transcript_segments:
+                        timestamp_data = align_chunk_with_timestamps(
+                            doc.page_content,
+                            transcript_segments,
+                            chunk_start_char,
+                            full_transcript
+                        )
+                    
+                    # Create enriched document with all metadata
+                    enriched_doc = Document(
+                        page_content=doc.page_content,
+                        metadata={
+                            **doc.metadata,
+                            # Timestamp metadata
+                            "timestamp_start": timestamp_data.get("timestamp_start"),
+                            "timestamp_end": timestamp_data.get("timestamp_end"),
+                            "duration": timestamp_data.get("duration"),
+                            # Topic/Entity metadata
+                            "topics": enrichment.get("topics", []),
+                            "entities_people": enrichment.get("entities", {}).get("people", []),
+                            "keywords": enrichment.get("keywords", []),
+                            "key_concepts": enrichment.get("key_concepts", []),
+                            # Chunk position metadata
+                            "chunk_index": idx,
+                            "total_chunks": len(docs),
+                            # Transcript metadata
+                            "transcript_language": transcript_language,
+                            "transcript_duration": transcript_duration,
+                        }
+                    )
+                    enriched_docs.append(enriched_doc)
+                
+                docs = enriched_docs
+                log.info(f"Enriched {len(docs)} chunks with timestamps and topics/entities")
 
                 text_content = form_data.content
             elif form_data.collection_name:
