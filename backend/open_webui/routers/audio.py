@@ -1592,12 +1592,13 @@ async def get_audio_segment(
         
         background_tasks.add_task(cleanup)
         
-        # Return audio file as streaming response
+        # Return audio file as streaming response with range request support
         return FileResponse(
             output_path,
             media_type="audio/mpeg",
             filename=output_filename,
             headers={
+                "Accept-Ranges": "bytes",  # Enable HTTP range requests for streaming
                 "Cache-Control": "public, max-age=3600",  # Cache for 1 hour
                 "Content-Disposition": f'inline; filename="{output_filename}"'
             }
