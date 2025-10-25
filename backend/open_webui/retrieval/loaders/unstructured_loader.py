@@ -383,6 +383,13 @@ class UnstructuredUnifiedLoader:
                 if hasattr(chunk, 'metadata') and chunk.metadata:
                     metadata = chunk.metadata.to_dict()
                 
+                # Extract element type if available (Title, NarrativeText, ListItem, etc.)
+                element_type = None
+                if hasattr(chunk, 'category'):
+                    element_type = chunk.category
+                elif 'category' in metadata:
+                    element_type = metadata.get('category')
+                
                 # Add additional metadata (optimized for performance)
                 metadata.update({
                     "source": self.file_path,
@@ -393,6 +400,10 @@ class UnstructuredUnifiedLoader:
                     "chunking_strategy": self.chunking_strategy,
                     "cleaning_level": self.cleaning_level,
                 })
+                
+                # Add element type if available
+                if element_type:
+                    metadata["element_type"] = element_type
                 
                 # Remove large/unnecessary fields to improve performance
                 fields_to_remove = [

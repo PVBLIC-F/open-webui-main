@@ -1448,7 +1448,7 @@ def save_docs_to_vector_db(
         essential_fields = [
             "file_id", "filename", "filetype", "hash", "created_by", "chunk_index", 
             "total_chunks", "page_number", "processing_engine", "strategy", 
-            "chunking_strategy", "cleaning_level", "source", "languages", "last_modified"
+            "chunking_strategy", "cleaning_level", "element_type", "source", "languages", "last_modified"
         ]
         
         for field in essential_fields:
