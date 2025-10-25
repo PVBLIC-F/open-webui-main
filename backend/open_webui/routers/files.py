@@ -107,6 +107,16 @@ def process_uploaded_file(request, file, file_path, file_item, file_metadata, us
                 file_path = Storage.get_file(file_path)
                 result = transcribe(request, file_path, file_metadata)
 
+                # Store enriched transcript data (segments, timestamps) in file metadata
+                Files.update_file_metadata_by_id(
+                    file_item.id,
+                    {
+                        "transcript_segments": result.get("segments", []),
+                        "transcript_language": result.get("language"),
+                        "transcript_duration": result.get("duration"),
+                    }
+                )
+
                 process_file(
                     request,
                     ProcessFileForm(
