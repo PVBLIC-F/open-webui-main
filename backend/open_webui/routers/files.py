@@ -98,7 +98,10 @@ def process_uploaded_file(request, file, file_path, file_item, file_metadata, us
                     stt_supported_content_types
                     if stt_supported_content_types
                     and any(t.strip() for t in stt_supported_content_types)
-                    else ["audio/*", "video/webm"]
+                    else [
+                        "audio/*",  # All audio formats
+                        "video/*",  # All video formats (expanded from webm only)
+                    ]
                 )
             ):
                 file_path = Storage.get_file(file_path)
