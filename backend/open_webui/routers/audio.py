@@ -1722,17 +1722,14 @@ async def get_video_segment(
             file_age = time.time() - os.path.getmtime(output_path)
             if file_age < 3600:  # 1 hour cache
                 log.debug(f"Using cached video segment: {output_filename}")
-                with open(output_path, "rb") as f:
-                    content = f.read()
                 
-                return Response(
-                    content=content,
+                return FileResponse(
+                    path=output_path,
                     media_type="video/mp4",
+                    filename=output_filename,
                     headers={
                         "Accept-Ranges": "bytes",
                         "Cache-Control": "public, max-age=3600",
-                        "Content-Disposition": f'inline; filename="{output_filename}"',
-                        "Content-Length": str(len(content)),
                         "X-Cache": "HIT"
                     }
                 )
@@ -1819,21 +1816,18 @@ async def get_video_segment(
                 detail="Failed to create video segment"
             )
         
-        # Read file content (keep cached file for future requests)
-        with open(output_path, "rb") as f:
-            content = f.read()
+        # Get file size for headers
+        file_size = os.path.getsize(output_path)
+        log.debug(f"Created and cached video segment: {output_filename} ({file_size} bytes)")
         
-        log.debug(f"Created and cached video segment: {output_filename} ({len(content)} bytes)")
-        
-        # Return video content as streaming response
-        return Response(
-            content=content,
+        # Return video as streaming FileResponse (no memory loading)
+        return FileResponse(
+            path=output_path,
             media_type="video/mp4",
+            filename=output_filename,
             headers={
                 "Accept-Ranges": "bytes",
                 "Cache-Control": "public, max-age=3600",
-                "Content-Disposition": f'inline; filename="{output_filename}"',
-                "Content-Length": str(len(content)),
                 "X-Cache": "MISS"
             }
         )
