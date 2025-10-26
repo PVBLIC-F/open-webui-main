@@ -2,6 +2,7 @@ import hashlib
 import json
 import logging
 import os
+import time
 import uuid
 import html
 import subprocess
@@ -1548,32 +1549,72 @@ async def get_audio_segment(
                 detail="Original file not found on storage"
             )
         
-        # Create temporary output file
-        output_filename = f"segment_{file_id}_{int(start)}_{int(end)}.mp3"
+        # Create temporary output file with cache key
+        cache_key = f"{file_id}_{int(start)}_{int(end)}"
+        output_filename = f"segment_{cache_key}.mp3"
         output_path = os.path.join(tempfile.gettempdir(), output_filename)
         
-        # Extract audio segment using ffmpeg
-        # -ss: start time, -to: end time
-        # -c:a libmp3lame: encode to MP3
-        # -b:a 128k: 128kbps bitrate for good quality/size balance
+        # Check if cached version exists and is recent (within 1 hour)
+        if os.path.exists(output_path):
+            file_age = time.time() - os.path.getmtime(output_path)
+            if file_age < 3600:  # 1 hour cache
+                log.debug(f"Using cached audio segment: {output_filename}")
+                with open(output_path, "rb") as f:
+                    content = f.read()
+                
+                return Response(
+                    content=content,
+                    media_type="audio/mpeg",
+                    headers={
+                        "Accept-Ranges": "bytes",
+                        "Cache-Control": "public, max-age=3600",
+                        "Content-Disposition": f'inline; filename="{output_filename}"',
+                        "Content-Length": str(len(content)),
+                        "X-Cache": "HIT"
+                    }
+                )
+        
+        # Extract audio segment using ffmpeg with optimized parameters
+        # -ss BEFORE -i: input seeking (much faster - seeks before decoding)
+        # -to: end time
+        # -c:a copy: copy codec without re-encoding (fastest, if possible)
         # -y: overwrite output file if exists
         cmd = [
             "ffmpeg",
+            "-ss", str(start),  # Seek BEFORE input for speed
             "-i", file_path,
-            "-ss", str(start),
-            "-to", str(end),
-            "-c:a", "libmp3lame",
-            "-b:a", "128k",
+            "-to", str(end - start),  # Duration from start (after input seek)
+            "-c:a", "copy",  # Try codec copy first (no re-encoding)
             "-y",
             output_path
         ]
         
+        # Try codec copy first (fastest)
         result = subprocess.run(
             cmd,
-            check=True,
             capture_output=True,
             text=True
         )
+        
+        # If codec copy failed, fallback to re-encoding with optimized settings
+        if result.returncode != 0 or not os.path.exists(output_path):
+            log.debug(f"Codec copy failed, falling back to re-encoding: {result.stderr[:200]}")
+            cmd = [
+                "ffmpeg",
+                "-ss", str(start),  # Seek BEFORE input (fast)
+                "-i", file_path,
+                "-to", str(end - start),
+                "-c:a", "libmp3lame",
+                "-q:a", "4",  # Variable quality (faster than constant bitrate)
+                "-y",
+                output_path
+            ]
+            result = subprocess.run(
+                cmd,
+                check=True,
+                capture_output=True,
+                text=True
+            )
         
         # Verify output file was created
         if not os.path.exists(output_path):
@@ -1582,20 +1623,11 @@ async def get_audio_segment(
                 detail="Failed to create audio segment"
             )
         
-        # Read file content and schedule cleanup
+        # Read file content (keep cached file for future requests)
         with open(output_path, "rb") as f:
             content = f.read()
         
-        # Schedule cleanup of temporary file after response is sent
-        def cleanup():
-            try:
-                if os.path.exists(output_path):
-                    os.remove(output_path)
-                    log.debug(f"Cleaned up temporary file: {output_path}")
-            except Exception as e:
-                log.warning(f"Failed to cleanup temporary file {output_path}: {e}")
-        
-        background_tasks.add_task(cleanup)
+        log.debug(f"Created and cached audio segment: {output_filename} ({len(content)} bytes)")
         
         # Return audio content as streaming response with range request support
         return Response(
@@ -1605,7 +1637,8 @@ async def get_audio_segment(
                 "Accept-Ranges": "bytes",  # Enable HTTP range requests for streaming
                 "Cache-Control": "public, max-age=3600",  # Cache for 1 hour
                 "Content-Disposition": f'inline; filename="{output_filename}"',
-                "Content-Length": str(len(content))
+                "Content-Length": str(len(content)),
+                "X-Cache": "MISS"  # First time generation
             }
         )
         
