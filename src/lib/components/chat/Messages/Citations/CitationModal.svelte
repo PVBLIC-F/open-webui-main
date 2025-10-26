@@ -27,13 +27,22 @@
 	}
 
 	function getRelevanceColor(percentage: number) {
-		if (percentage >= 80)
+		// Lower percentage = higher relevance (inverted scale)
+		if (percentage <= 20)
 			return 'bg-green-200 dark:bg-green-800 text-green-800 dark:text-green-200';
-		if (percentage >= 60)
+		if (percentage <= 40)
 			return 'bg-yellow-200 dark:bg-yellow-800 text-yellow-800 dark:text-yellow-200';
-		if (percentage >= 40)
+		if (percentage <= 60)
 			return 'bg-orange-200 dark:bg-orange-800 text-orange-800 dark:text-orange-200';
 		return 'bg-red-200 dark:bg-red-800 text-red-800 dark:text-red-200';
+	}
+	
+	function getRelevanceLabel(percentage: number) {
+		// Lower percentage = higher relevance
+		if (percentage <= 20) return 'Highly Relevant';
+		if (percentage <= 40) return 'Relevant';
+		if (percentage <= 60) return 'Moderately Relevant';
+		return 'Low Relevance';
 	}
 
 	$: if (citation) {
@@ -161,7 +170,7 @@
 								{#if showRelevance && document.distance !== undefined}
 									<Tooltip
 										className="w-fit"
-										content={$i18n.t('Relevance')}
+										content="Relevance score: Lower percentage = more relevant to your query"
 										placement="top-start"
 										tippyOptions={{ duration: [500, 0] }}
 									>
@@ -171,9 +180,10 @@
 
 												{#if typeof percentage === 'number'}
 													<span
-														class={`px-1 rounded-sm font-medium ${getRelevanceColor(percentage)}`}
+														class={`px-2 py-0.5 rounded-md font-medium text-xs flex items-center gap-1.5 ${getRelevanceColor(percentage)}`}
 													>
-														{percentage.toFixed(2)}%
+														<span>{getRelevanceLabel(percentage)}</span>
+														<span class="opacity-75">({percentage.toFixed(1)}%)</span>
 													</span>
 												{/if}
 											{:else if typeof document?.distance === 'number'}
