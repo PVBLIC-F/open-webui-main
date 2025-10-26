@@ -2177,6 +2177,9 @@ def process_file(
                             },
                         )
                     ]
+                    # IMPORTANT: Clear form_data.content so should_split=True later
+                    # This ensures the fallback content gets chunked properly
+                    form_data.content = None
 
                 text_content = file.data.get("content", "")
             else:
