@@ -349,8 +349,8 @@ def _generate_potential_questions(text: str) -> list:
     for sentence in sentences_subset:
         sentence_lower = sentence.lower()
         if not any(word in sentence_lower for word in [' is ', ' are ', ' means ', ' refers to ']):
-            continue
-            
+                    continue
+
         # Try to extract subject (the thing being defined)
         match = re.search(r'^((?:a|an|the)?\s*[A-Z][^,]+?)\s+(?:is|are|means|refers to)\s+', sentence, re.IGNORECASE)
         if match:
@@ -1956,7 +1956,9 @@ def process_file(
             if collection_name is None:
                 collection_name = f"file-{file.id}"
 
-            if form_data.content:
+            # When adding to knowledge base, reuse existing file-{id} vectors (same as text files)
+            # Only process content if: (1) content exists AND (2) NOT adding to knowledge base
+            if form_data.content and not form_data.collection_name:
                 # Update the content in the file
                 # Usage: /files/{file_id}/data/content/update, /files/ (audio file upload pipeline)
                 # Note: Audio/video transcripts come through this path and need chunking
@@ -2141,7 +2143,7 @@ def process_file(
                 
                 for attempt in range(max_retries):
                     try:
-                        result = VECTOR_DB_CLIENT.query(
+                result = VECTOR_DB_CLIENT.query(
                             collection_name=f"file-{file.id}", 
                             filter={"file_id": file.id}
                         )
