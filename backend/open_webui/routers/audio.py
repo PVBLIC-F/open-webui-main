@@ -1657,3 +1657,174 @@ async def get_audio_segment(
             status_code=500,
             detail=f"Error processing audio segment: {str(e)}"
         )
+
+
+@router.get("/video/files/{file_id}/segment")
+async def get_video_segment(
+    file_id: str,
+    background_tasks: BackgroundTasks,
+    user=Depends(get_verified_user),
+    start: float = Query(..., description="Start timestamp in seconds"),
+    end: float = Query(..., description="End timestamp in seconds"),
+):
+    """
+    Extract and stream a video segment from a video file.
+    
+    This endpoint extracts a specific time range from a video file and returns it
+    as a streamable MP4 video. Supports caching for improved performance.
+    
+    Args:
+        file_id: ID of the video file
+        start: Start timestamp in seconds
+        end: End timestamp in seconds
+        
+    Returns:
+        Streamable MP4 video file of the requested segment
+    """
+    try:
+        # Validate timestamps
+        if start < 0 or end <= start:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid timestamp range. End must be greater than start, and both must be non-negative."
+            )
+        
+        # Get file and verify access
+        file = Files.get_file_by_id(file_id)
+        if not file:
+            raise HTTPException(
+                status_code=404,
+                detail="File not found"
+            )
+        
+        # Check user has access to this file
+        if file.user_id != user.id and user.role != "admin":
+            raise HTTPException(
+                status_code=403,
+                detail="Access denied"
+            )
+        
+        # Get original file path
+        file_path = Storage.get_file(file.path)
+        if not os.path.exists(file_path):
+            raise HTTPException(
+                status_code=404,
+                detail="Original file not found on storage"
+            )
+        
+        # Create temporary output file with cache key
+        cache_key = f"{file_id}_{int(start)}_{int(end)}"
+        output_filename = f"video_segment_{cache_key}.mp4"
+        output_path = os.path.join(tempfile.gettempdir(), output_filename)
+        
+        # Check if cached version exists and is recent (within 1 hour)
+        if os.path.exists(output_path):
+            file_age = time.time() - os.path.getmtime(output_path)
+            if file_age < 3600:  # 1 hour cache
+                log.debug(f"Using cached video segment: {output_filename}")
+                with open(output_path, "rb") as f:
+                    content = f.read()
+                
+                return Response(
+                    content=content,
+                    media_type="video/mp4",
+                    headers={
+                        "Accept-Ranges": "bytes",
+                        "Cache-Control": "public, max-age=3600",
+                        "Content-Disposition": f'inline; filename="{output_filename}"',
+                        "Content-Length": str(len(content)),
+                        "X-Cache": "HIT"
+                    }
+                )
+        
+        # Extract video segment using ffmpeg with optimized parameters
+        # -ss BEFORE -i: input seeking (much faster - seeks before decoding)
+        # -to: duration from start
+        # -c:v copy: copy video codec without re-encoding (fastest)
+        # -c:a aac: re-encode audio to AAC for MP4 compatibility
+        # -movflags +faststart: optimize for streaming
+        # -y: overwrite output file if exists
+        cmd = [
+            "ffmpeg",
+            "-ss", str(start),  # Seek BEFORE input for speed
+            "-i", file_path,
+            "-to", str(end - start),  # Duration from start
+            "-c:v", "copy",  # Copy video stream (no re-encoding, fast)
+            "-c:a", "aac",  # Re-encode audio to AAC for MP4
+            "-b:a", "128k",  # Audio bitrate
+            "-movflags", "+faststart",  # Optimize for streaming
+            "-y",
+            output_path
+        ]
+        
+        # Try video extraction
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True
+        )
+        
+        # If codec copy failed, fallback to re-encoding
+        if result.returncode != 0 or not os.path.exists(output_path):
+            log.debug(f"Video codec copy failed, falling back to re-encoding: {result.stderr[:200]}")
+            cmd = [
+                "ffmpeg",
+                "-ss", str(start),
+                "-i", file_path,
+                "-to", str(end - start),
+                "-c:v", "libx264",  # Re-encode video with H.264
+                "-preset", "ultrafast",  # Fastest encoding preset
+                "-crf", "23",  # Constant quality (lower = better, 23 is good)
+                "-c:a", "aac",
+                "-b:a", "128k",
+                "-movflags", "+faststart",
+                "-y",
+                output_path
+            ]
+            result = subprocess.run(
+                cmd,
+                check=True,
+                capture_output=True,
+                text=True
+            )
+        
+        # Verify output file was created
+        if not os.path.exists(output_path):
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to create video segment"
+            )
+        
+        # Read file content (keep cached file for future requests)
+        with open(output_path, "rb") as f:
+            content = f.read()
+        
+        log.debug(f"Created and cached video segment: {output_filename} ({len(content)} bytes)")
+        
+        # Return video content as streaming response
+        return Response(
+            content=content,
+            media_type="video/mp4",
+            headers={
+                "Accept-Ranges": "bytes",
+                "Cache-Control": "public, max-age=3600",
+                "Content-Disposition": f'inline; filename="{output_filename}"',
+                "Content-Length": str(len(content)),
+                "X-Cache": "MISS"
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except subprocess.CalledProcessError as e:
+        log.error(f"ffmpeg video extraction failed: {e.stderr}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Video extraction failed: {e.stderr[:200]}"
+        )
+    except Exception as e:
+        log.exception(f"Error extracting video segment: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error processing video segment: {str(e)}"
+        )
