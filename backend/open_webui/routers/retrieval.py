@@ -186,14 +186,14 @@ def extract_topics_and_entities(text: str, use_llm: bool = False) -> dict:
 def align_chunk_with_timestamps(chunk_text: str, segments: list, chunk_start_char: int, full_text: str) -> dict:
     """
     Find the timestamps that align with a text chunk from the full transcript.
-    
-    Args:
+
+        Args:
         chunk_text: The chunked text
         segments: List of segments with timestamps from Whisper
         chunk_start_char: Character position where this chunk starts in full transcript
         full_text: The complete transcript text
-        
-    Returns:
+
+        Returns:
         Dictionary with timestamp_start, timestamp_end, and matching segments
     """
     if not segments or not chunk_text:
@@ -1544,7 +1544,7 @@ def save_docs_to_vector_db(
         else:
             raise ValueError(ERROR_MESSAGES.DEFAULT("Invalid text splitter"))
 
-     # Filter out empty documents and validate content
+    # Filter out empty documents and validate content
     docs = [doc for doc in docs if doc.page_content and doc.page_content.strip()]
     
     if len(docs) == 0:
@@ -1900,7 +1900,7 @@ def process_file(
                 
                 for attempt in range(max_retries):
                     try:
-                        result = VECTOR_DB_CLIENT.query(
+                result = VECTOR_DB_CLIENT.query(
                             collection_name=f"file-{file.id}", 
                             filter={"file_id": file.id}
                         )
