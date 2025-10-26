@@ -8,6 +8,9 @@
 	import Textarea from '$lib/components/common/Textarea.svelte';
 
 	const i18n = getContext('i18n');
+	
+	// Audio blob URLs for authenticated requests
+	let audioBlobUrls = {};
 
 	export let show = false;
 	export let citation;
@@ -54,6 +57,36 @@
 			return decodeURIComponent(str);
 		} catch (e) {
 			return str;
+		}
+	};
+	
+	// Fetch audio with authentication and create blob URL
+	const loadAudioBlob = async (audioUrl: string) => {
+		if (audioBlobUrls[audioUrl]) {
+			return audioBlobUrls[audioUrl];
+		}
+		
+		try {
+			const token = localStorage.getItem('token');
+			const response = await fetch(`${WEBUI_BASE_URL}${audioUrl}`, {
+				method: 'GET',
+				headers: {
+					'Authorization': `Bearer ${token}`
+				},
+				credentials: 'include'
+			});
+			
+			if (!response.ok) {
+				throw new Error(`Failed to load audio: ${response.statusText}`);
+			}
+			
+			const blob = await response.blob();
+			const blobUrl = URL.createObjectURL(blob);
+			audioBlobUrls[audioUrl] = blobUrl;
+			return blobUrl;
+		} catch (error) {
+			console.error('Error loading audio:', error);
+			return null;
 		}
 	};
 </script>
@@ -191,14 +224,26 @@
 											</span>
 										{/if}
 									</div>
-									<audio
-										controls
-										preload="metadata"
-										class="w-full"
-										src={`${WEBUI_BASE_URL}${document.metadata.audio_segment_url}`}
-									>
-										Your browser does not support audio playback.
-									</audio>
+									{#await loadAudioBlob(document.metadata.audio_segment_url)}
+										<div class="flex items-center justify-center py-4 text-gray-500">
+											<span class="text-sm">Loading audio...</span>
+										</div>
+									{:then blobUrl}
+										{#if blobUrl}
+											<audio
+												controls
+												preload="metadata"
+												class="w-full"
+												src={blobUrl}
+											>
+												Your browser does not support audio playback.
+											</audio>
+										{:else}
+											<div class="text-sm text-red-500">Failed to load audio</div>
+										{/if}
+									{:catch error}
+										<div class="text-sm text-red-500">Error: {error.message}</div>
+									{/await}
 								</div>
 								<!-- Text content below audio -->
 								<pre class="text-sm dark:text-gray-400 whitespace-pre-line mt-2">
