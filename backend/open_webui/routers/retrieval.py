@@ -120,67 +120,274 @@ log.setLevel(SRC_LOG_LEVELS["RAG"])
 ##########################################
 
 
-def extract_topics_and_entities(text: str, use_llm: bool = False) -> dict:
+def extract_enhanced_metadata(text: str, use_llm: bool = False) -> dict:
     """
-    Extract topics, entities, and keywords from text for enrichment.
+    Extract comprehensive metadata from text for improved RAG retrieval.
+    
+    High-Impact Features:
+    1. Chunk Summary & Title (helps users understand relevance)
+    2. Enhanced Entity Extraction (people, orgs, locations)
+    3. Question Generation (improves question-based retrieval)
     
     Args:
         text: Text to analyze
         use_llm: If True, use LLM for extraction (more accurate but slower)
         
     Returns:
-        Dictionary with topics, entities, keywords, and key concepts
+        Dictionary with summary, title, topics, entities, keywords, questions
     """
     if not text or len(text.strip()) < 10:
         return {
+            "chunk_summary": "",
+            "chunk_title": "",
             "topics": [],
-            "entities": {"people": [], "organizations": [], "locations": [], "concepts": []},
+            "entities_people": [],
+            "entities_organizations": [],
+            "entities_locations": [],
             "keywords": [],
-            "key_concepts": []
+            "potential_questions": []
         }
     
-    # Simple extraction using regex and pattern matching (fast, no external deps)
-    # Can be enhanced with spaCy, NLTK, or LLM calls for better accuracy
+    # Compile regex patterns once (performance optimization)
+    # These are stateless and can be reused
+    text_length = len(text)
     
-    # Extract potential topics (capitalized phrases)
-    topics = list(set(re.findall(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b', text)))
+    # === FEATURE 1: CHUNK SUMMARY & TITLE ===
+    chunk_summary, chunk_title = _generate_summary_and_title(text)
     
-    # Extract potential names (2-3 capitalized words)
-    people = list(set(re.findall(r'\b[A-Z][a-z]+\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\b', text)))
+    # === FEATURE 2: ENHANCED ENTITY EXTRACTION ===
+    entities = _extract_enhanced_entities(text)
+    
+    # === FEATURE 3: QUESTION GENERATION ===
+    questions = _generate_potential_questions(text)
     
     # Extract keywords (words longer than 5 chars, frequent)
+    # Performance: Use Counter for better performance than manual dict
+    from collections import Counter
     words = re.findall(r'\b[a-z]{6,}\b', text.lower())
-    word_freq = {}
-    for word in words:
-        word_freq[word] = word_freq.get(word, 0) + 1
+    word_freq = Counter(words)
     
-    # Get top keywords by frequency
-    keywords = sorted(word_freq.items(), key=lambda x: x[1], reverse=True)[:10]
-    keywords = [word for word, freq in keywords if freq > 1]
+    # Get top keywords by frequency (minimum 2 occurrences)
+    keywords = [word for word, freq in word_freq.most_common(10) if freq > 1]
     
-    # Extract sentences that seem like key concepts
-    sentences = re.split(r'[.!?]+', text)
-    key_concepts = []
-    for sentence in sentences:
-        sentence = sentence.strip()
-        if len(sentence) > 20 and len(sentence) < 150:
-            # Look for definitional or explanatory sentences
-            if any(word in sentence.lower() for word in [' is ', ' are ', ' means ', ' refers to ', ' defined as ']):
-                key_concepts.append(sentence)
-        if len(key_concepts) >= 3:
-            break
+    # Extract potential topics (capitalized phrases) - limit search for performance
+    topics_set = set(re.findall(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b', text))
+    topics = sorted(topics_set)[:5]  # Sort for consistency
     
     return {
-        "topics": topics[:5],  # Top 5 topics
-        "entities": {
-            "people": people[:5],  # Top 5 people
-            "organizations": [],  # Can be enhanced with NER
-            "locations": [],  # Can be enhanced with NER
-            "concepts": []  # Can be enhanced with topic modeling
-        },
+        "chunk_summary": chunk_summary,
+        "chunk_title": chunk_title,
+        "topics": topics,
+        "entities_people": entities["people"][:5],
+        "entities_organizations": entities["organizations"][:5],
+        "entities_locations": entities["locations"][:5],
         "keywords": keywords,
-        "key_concepts": key_concepts
+        "potential_questions": questions
     }
+
+
+def _generate_summary_and_title(text: str) -> tuple:
+    """
+    Generate a concise summary and title for a text chunk.
+    Uses extractive summarization (first + important sentences).
+    
+    Returns:
+        Tuple of (summary, title)
+    """
+    sentences = re.split(r'[.!?]+', text)
+    sentences = [s.strip() for s in sentences if len(s.strip()) > 20]
+    
+    if not sentences:
+        return "", ""
+    
+    # Title: Extract from first sentence or use key phrases
+    first_sentence = sentences[0]
+    title_words = first_sentence.split()[:8]  # First 8 words
+    title = " ".join(title_words)
+    if len(first_sentence) > len(title):
+        title += "..."
+    
+    # Summary: Use first sentence + most informative sentence
+    summary = sentences[0]
+    
+    # Find sentence with most keywords/numbers (likely most informative)
+    if len(sentences) > 1:
+        scored_sentences = []
+        for sent in sentences[1:4]:  # Check next 3 sentences
+            # Score based on: numbers, question words, key phrases
+            score = 0
+            score += len(re.findall(r'\d+', sent)) * 2  # Numbers are informative
+            score += len(re.findall(r'\b[A-Z][a-z]+\b', sent))  # Proper nouns
+            if any(word in sent.lower() for word in ['important', 'key', 'main', 'significant', 'shows', 'found']):
+                score += 3
+            scored_sentences.append((score, sent))
+        
+        if scored_sentences:
+            scored_sentences.sort(reverse=True, key=lambda x: x[0])
+            best_sentence = scored_sentences[0][1]
+            if best_sentence != summary:
+                summary = f"{summary}. {best_sentence}"
+    
+    # Limit summary length
+    if len(summary) > 250:
+        summary = summary[:247] + "..."
+    
+    return summary, title
+
+
+def _extract_enhanced_entities(text: str) -> dict:
+    """
+    Enhanced entity extraction using multiple patterns and heuristics.
+    Extracts: people, organizations, locations.
+    
+    Returns:
+        Dictionary with lists of entities by type
+    """
+    # ===== PEOPLE EXTRACTION =====
+    people = set()
+    
+    # Pattern 1: Full names (First Last, First Middle Last)
+    people.update(re.findall(r'\b[A-Z][a-z]+\s+(?:[A-Z][a-z]+\s+)?[A-Z][a-z]+\b', text))
+    
+    # Pattern 2: Names with titles (Dr., Mr., Ms., Prof., etc.)
+    people.update(re.findall(r'\b(?:Dr|Mr|Ms|Mrs|Prof|Professor|Rev)\.?\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\b', text))
+    
+    # ===== ORGANIZATION EXTRACTION =====
+    organizations = set()
+    
+    # Pattern 1: Organizations with explicit keywords (combined into single regex for performance)
+    org_suffix = r'(?:Inc|Corp|Corporation|Company|LLC|Ltd|Institute|Foundation|Organization|Association|University|College|Agency|Department|Bureau|Commission|Council|Center|Centre|Group|Team|Network|Alliance|Coalition|Initiative|Project|Program)'
+    organizations.update(re.findall(rf'\b(?:The\s+)?[A-Z][A-Za-z\s&]+{org_suffix}\b', text))
+    
+    # Pattern 2: All-caps acronyms (3-6 letters, likely organizations)
+    common_words = {'US', 'UK', 'EU', 'UN', 'OK', 'PDF', 'CEO', 'CFO', 'CTO', 'AI', 'IT', 'HR', 'FAQ', 'DIY'}
+    acronyms = [a for a in re.findall(r'\b[A-Z]{3,6}\b', text) if a not in common_words]
+    organizations.update(acronyms)
+    
+    # Pattern 3: Media organizations
+    media_suffix = r'(?:Media|News|Press|Journal|Times|Post|Tribune|Herald|Gazette|Network|Channel|Radio|TV|Broadcasting)'
+    organizations.update(re.findall(rf'\b[A-Z][A-Za-z\s]+{media_suffix}\b', text))
+    
+    # ===== LOCATION EXTRACTION =====
+    locations = set()
+    
+    # Pattern 1: City, State/Country patterns
+    locations.update(re.findall(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*,\s+[A-Z]{2}\b', text))  # City, ST
+    locations.update(re.findall(r'\b[A-Z][a-z]+,\s+[A-Z][a-z]+\b', text))  # City, Country
+    
+    # Pattern 2: Preposition + location (in/at/from/to Location)
+    prep_locations = re.findall(r'\b(?:in|at|from|to)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b', text)
+    locations.update([loc for loc in prep_locations if len(loc) > 2])
+    
+    # Pattern 3: Geographic keywords
+    geo_suffix = r'(?:City|County|State|Province|Region|District|Area|Zone|Bay|Valley|Mountain|River|Lake|Ocean|Sea|Island|Peninsula)'
+    locations.update(re.findall(rf'\b[A-Z][a-z]+\s+{geo_suffix}\b', text))
+    
+    # ===== CLEANUP & FILTERING =====
+    # Remove people names that appear in organizations (keep most specific)
+    people_clean = [p for p in people if not any(p in org for org in organizations)]
+    
+    # Filter by minimum length and convert to sorted lists for consistency
+    return {
+        "people": sorted([p.strip() for p in people_clean if len(p.strip()) > 2]),
+        "organizations": sorted([o.strip() for o in organizations if len(o.strip()) > 2]),
+        "locations": sorted([loc.strip() for loc in locations if len(loc.strip()) > 2])
+    }
+
+
+def _generate_potential_questions(text: str) -> list:
+    """
+    Generate potential questions that this text chunk could answer.
+    Uses pattern matching and heuristics for 6 question types.
+    
+    Returns:
+        List of up to 5 unique questions
+    """
+    questions = []
+    
+    # Extract and filter sentences once for reuse
+    sentences = [s.strip() for s in re.split(r'[.!?]+', text) if len(s.strip()) > 10]
+    
+    if not sentences:
+        return []
+    
+    # Pattern 1: Extract explicit questions from text
+    explicit_questions = re.findall(r'[A-Z][^.!?]*\?', text)
+    questions.extend(explicit_questions[:3])
+    
+    # Limit sentence processing to first 5 for performance
+    sentences_subset = sentences[:5]
+    
+    # Pattern 2: Generate questions from statements with numbers/statistics
+    for sentence in sentences_subset:
+        numbers = re.findall(r'\d+(?:\.\d+)?%?', sentence)
+        if not numbers:
+            continue
+            
+        for num in numbers[:2]:  # Limit to 2 numbers per sentence
+            words = sentence.split()
+            # Find word index containing the number
+            num_idx = next((i for i, w in enumerate(words) if num in w), None)
+            if num_idx is not None:
+                # Extract context (3 words before and after)
+                context_start = max(0, num_idx - 3)
+                context_end = min(len(words), num_idx + 4)
+                context = " ".join(words[context_start:context_end])
+                
+                question_type = "What percentage" if '%' in num else "What are the numbers related to"
+                questions.append(f"{question_type} {context.lower()}?")
+    
+    # Pattern 3: Generate "What is..." questions for definitions
+    for sentence in sentences_subset:
+        if not any(word in sentence.lower() for word in [' is ', ' are ', ' means ']):
+            continue
+            
+        match = re.search(r'^([^,]+?)\s+(?:is|are|means)\s+', sentence)
+        if match:
+            subject = match.group(1).strip()
+            # Check if subject is a proper noun and reasonable length
+            if len(subject) < 50 and subject[0].isupper():
+                questions.append(f"What is {subject}?")
+    
+    # Pattern 4: Generate "Who..." questions for people mentions
+    people_names = re.findall(r'\b[A-Z][a-z]+\s+[A-Z][a-z]+\b', text)[:2]
+    for name in people_names:
+        # Find action verb following the name
+        match = re.search(rf'{re.escape(name)}\s+([a-z]+(?:\s+[a-z]+){{0,4}})', text)
+        if match:
+            questions.append(f"Who {match.group(1)}?")
+    
+    # Pattern 5: Generate "How..." questions for process/method descriptions
+    how_keywords = ['how', 'process', 'method', 'way', 'approach', 'technique']
+    for sentence in sentences_subset:
+        if any(word in sentence.lower() for word in how_keywords):
+            verbs = re.findall(r'\b(?:to\s+)?([a-z]+(?:ing|ed)?)\b', sentence.lower())
+            if verbs:
+                questions.append(f"How to {verbs[0]}?")
+                break  # Only one "how" question needed
+    
+    # Pattern 6: Generate "Why..." questions for causal/explanatory statements
+    causal_keywords = ['because', 'since', 'reason', 'cause', 'due to', 'result']
+    for sentence in sentences_subset:
+        if any(word in sentence.lower() for word in causal_keywords):
+            topic = " ".join(sentence.split()[:10])
+            if len(topic) > 10:
+                questions.append(f"Why {topic.lower()}?")
+                break  # Only one "why" question needed
+    
+    # Deduplicate while preserving order and limit to 5 questions
+    seen = set()
+    unique_questions = []
+    for q in questions:
+        q_clean = q.strip()
+        q_normalized = q_clean.lower()
+        if q_normalized not in seen and 10 < len(q_clean) < 150:
+            seen.add(q_normalized)
+            unique_questions.append(q_clean)
+            if len(unique_questions) >= 5:
+                break
+    
+    return unique_questions
 
 
 def align_chunk_with_timestamps(chunk_text: str, segments: list, chunk_start_char: int, full_text: str) -> dict:
@@ -1569,9 +1776,12 @@ def save_docs_to_vector_db(
             "file_id", "filename", "filetype", "hash", "created_by", "chunk_index", 
             "total_chunks", "page_number", "processing_engine", "strategy", 
             "chunking_strategy", "cleaning_level", "element_type", "source", "languages", "last_modified",
-            # Enrichment fields for audio/video
+            # High-Impact Enrichment Fields
+            "chunk_summary", "chunk_title", "potential_questions",
+            # Enhanced Entity Extraction
+            "topics", "entities_people", "entities_organizations", "entities_locations", "keywords",
+            # Audio/Video Timestamp Fields
             "timestamp_start", "timestamp_end", "duration", "audio_segment_url",
-            "topics", "entities_people", "keywords", "key_concepts",
             "transcript_language", "transcript_duration"
         ]
         
@@ -1827,8 +2037,8 @@ def process_file(
                 for idx, doc in enumerate(docs):
                     chunk_start_char = doc.metadata.get("start_index", 0)
                     
-                    # Extract topics and entities for this chunk
-                    enrichment = extract_topics_and_entities(doc.page_content)
+                    # Extract enhanced metadata (summary, title, entities, questions)
+                    enrichment = extract_enhanced_metadata(doc.page_content)
                     
                     # Align chunk with timestamps from Whisper segments
                     timestamp_data = {}
@@ -1844,11 +2054,16 @@ def process_file(
                     # Build metadata dict, only including non-None values
                     enriched_metadata = {
                         **doc.metadata,
-                        # Topic/Entity metadata (always include, even if empty lists)
+                        # High-Impact Features
+                        "chunk_summary": enrichment.get("chunk_summary", ""),
+                        "chunk_title": enrichment.get("chunk_title", ""),
+                        "potential_questions": enrichment.get("potential_questions", []),
+                        # Enhanced Entity Extraction
                         "topics": enrichment.get("topics", []),
-                        "entities_people": enrichment.get("entities", {}).get("people", []),
+                        "entities_people": enrichment.get("entities_people", []),
+                        "entities_organizations": enrichment.get("entities_organizations", []),
+                        "entities_locations": enrichment.get("entities_locations", []),
                         "keywords": enrichment.get("keywords", []),
-                        "key_concepts": enrichment.get("key_concepts", []),
                         # Chunk position metadata
                         "chunk_index": idx,
                         "total_chunks": len(docs),
