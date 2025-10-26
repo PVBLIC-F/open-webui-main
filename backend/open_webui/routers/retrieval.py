@@ -311,9 +311,17 @@ def _generate_potential_questions(text: str) -> list:
     if not sentences:
         return []
     
-    # Pattern 1: Extract explicit questions from text
+    # Pattern 1: Extract explicit questions from text (only if they're not rhetorical)
+    # Filter out rhetorical questions like "guess what?", "you know what?", "right?"
+    rhetorical_patterns = [
+        r'guess what\?', r'you know what\?', r'know what\?', r'right\?', 
+        r'okay\?', r'yeah\?', r'see\?', r'get it\?'
+    ]
     explicit_questions = re.findall(r'[A-Z][^.!?]*\?', text)
-    questions.extend(explicit_questions[:3])
+    for q in explicit_questions[:3]:
+        # Skip if it's a rhetorical question or too short
+        if len(q) > 15 and not any(re.search(pattern, q, re.IGNORECASE) for pattern in rhetorical_patterns):
+            questions.append(q)
     
     # Limit sentence processing to first 5 for performance
     sentences_subset = sentences[:5]
@@ -339,14 +347,20 @@ def _generate_potential_questions(text: str) -> list:
     
     # Pattern 3: Generate "What is..." questions for definitions
     for sentence in sentences_subset:
-        if not any(word in sentence.lower() for word in [' is ', ' are ', ' means ']):
+        sentence_lower = sentence.lower()
+        if not any(word in sentence_lower for word in [' is ', ' are ', ' means ', ' refers to ']):
             continue
             
-        match = re.search(r'^([^,]+?)\s+(?:is|are|means)\s+', sentence)
+        # Try to extract subject (the thing being defined)
+        match = re.search(r'^((?:a|an|the)?\s*[A-Z][^,]+?)\s+(?:is|are|means|refers to)\s+', sentence, re.IGNORECASE)
         if match:
             subject = match.group(1).strip()
-            # Check if subject is a proper noun and reasonable length
-            if len(subject) < 50 and subject[0].isupper():
+            # Clean up articles and check length
+            subject = re.sub(r'^(a|an|the)\s+', '', subject, flags=re.IGNORECASE).strip()
+            # Check if subject is reasonable (proper noun or important term)
+            if 3 < len(subject) < 50 and (subject[0].isupper() or any(word in subject.lower() for word in ['approach', 'method', 'process', 'system', 'model'])):
+                # Capitalize first letter for consistency
+                subject = subject[0].upper() + subject[1:]
                 questions.append(f"What is {subject}?")
     
     # Pattern 4: Generate "Who..." questions for people mentions
