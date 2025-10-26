@@ -100,7 +100,7 @@
 	};
 </script>
 
-<Modal size="lg" bind:show>
+<Modal size="xl" bind:show>
 	<div>
 		<div class=" flex justify-between dark:text-gray-300 px-4.5 pt-3 pb-2">
 			<div class=" text-lg font-medium self-center flex items-center">
@@ -146,7 +146,7 @@
 
 		<div class="flex flex-col md:flex-row w-full px-5 pb-5 md:space-x-4">
 			<div
-				class="flex flex-col w-full dark:text-gray-200 overflow-y-scroll max-h-[22rem] scrollbar-thin gap-1"
+				class="flex flex-col w-full dark:text-gray-200 overflow-y-scroll max-h-[36rem] scrollbar-thin gap-1"
 			>
 				{#each mergedDocuments as document, documentIdx}
 					<div class="flex flex-col w-full gap-2">
@@ -256,7 +256,7 @@
 												<video
 													controls
 													preload="metadata"
-													class="w-full max-h-96 rounded"
+													class="w-full max-h-[32rem] rounded"
 													style="max-width: 100%; object-fit: contain;"
 													src={videoBlobUrl}
 												>
