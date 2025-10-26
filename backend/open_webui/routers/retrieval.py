@@ -2143,7 +2143,7 @@ def process_file(
                 
                 for attempt in range(max_retries):
                     try:
-                result = VECTOR_DB_CLIENT.query(
+                        result = VECTOR_DB_CLIENT.query(
                             collection_name=f"file-{file.id}", 
                             filter={"file_id": file.id}
                         )
