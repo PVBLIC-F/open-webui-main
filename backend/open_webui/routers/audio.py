@@ -31,6 +31,7 @@ from fastapi import (
     APIRouter,
     Query,
     BackgroundTasks,
+    Response,
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -1581,6 +1582,10 @@ async def get_audio_segment(
                 detail="Failed to create audio segment"
             )
         
+        # Read file content and schedule cleanup
+        with open(output_path, "rb") as f:
+            content = f.read()
+        
         # Schedule cleanup of temporary file after response is sent
         def cleanup():
             try:
@@ -1592,15 +1597,15 @@ async def get_audio_segment(
         
         background_tasks.add_task(cleanup)
         
-        # Return audio file as streaming response with range request support
-        return FileResponse(
-            output_path,
+        # Return audio content as streaming response with range request support
+        return Response(
+            content=content,
             media_type="audio/mpeg",
-            filename=output_filename,
             headers={
                 "Accept-Ranges": "bytes",  # Enable HTTP range requests for streaming
                 "Cache-Control": "public, max-age=3600",  # Cache for 1 hour
-                "Content-Disposition": f'inline; filename="{output_filename}"'
+                "Content-Disposition": f'inline; filename="{output_filename}"',
+                "Content-Length": str(len(content))
             }
         )
         
