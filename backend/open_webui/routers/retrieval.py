@@ -2134,9 +2134,9 @@ def process_file(
                 log.info(f"Checking if file {file.id} already processed in collection file-{file.id}")
                 
                 # Query with retry to handle Pinecone's eventual consistency
-                # After upsert, vectors may not be immediately queryable (1-10s delay)
-                max_retries = 3
-                retry_delay = 2  # seconds
+                # After upsert, vectors may not be immediately queryable (1-15s delay)
+                max_retries = 6
+                retry_delay = 3  # seconds
                 result = None
                 
                 for attempt in range(max_retries):
