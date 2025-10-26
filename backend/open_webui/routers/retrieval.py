@@ -2316,7 +2316,7 @@ def process_file(
                             "hash": hash,
                         },
                         add=(True if form_data.collection_name else False),
-                        overwrite=True,  # Allow overwriting for better user experience
+                        overwrite=False,  # Don't overwrite - add to existing collection (critical for knowledge bases)
                         split=should_split,  # Skip splitting for transcripts (already chunked)
                         user=user,
                     )
