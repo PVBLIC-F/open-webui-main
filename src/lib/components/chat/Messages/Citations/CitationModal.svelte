@@ -60,15 +60,15 @@
 		}
 	};
 	
-	// Fetch audio with authentication and create blob URL
-	const loadAudioBlob = async (audioUrl: string) => {
-		if (audioBlobUrls[audioUrl]) {
-			return audioBlobUrls[audioUrl];
+	// Fetch media (audio/video) with authentication and create blob URL
+	const loadMediaBlob = async (mediaUrl: string) => {
+		if (audioBlobUrls[mediaUrl]) {
+			return audioBlobUrls[mediaUrl];
 		}
 		
 		try {
 			const token = localStorage.getItem('token');
-			const response = await fetch(`${WEBUI_BASE_URL}${audioUrl}`, {
+			const response = await fetch(`${WEBUI_BASE_URL}${mediaUrl}`, {
 				method: 'GET',
 				headers: {
 					'Authorization': `Bearer ${token}`
@@ -77,15 +77,15 @@
 			});
 			
 			if (!response.ok) {
-				throw new Error(`Failed to load audio: ${response.statusText}`);
+				throw new Error(`Failed to load media: ${response.statusText}`);
 			}
 			
 			const blob = await response.blob();
 			const blobUrl = URL.createObjectURL(blob);
-			audioBlobUrls[audioUrl] = blobUrl;
+			audioBlobUrls[mediaUrl] = blobUrl;
 			return blobUrl;
 		} catch (error) {
-			console.error('Error loading audio:', error);
+			console.error('Error loading media:', error);
 			return null;
 		}
 	};
@@ -193,8 +193,8 @@
 								{/if}
 							</div>
 
-							{#if document.metadata?.audio_segment_url}
-								<!-- Audio segment player for multimedia content -->
+							{#if document.metadata?.video_segment_url || document.metadata?.audio_segment_url}
+								<!-- Video/Audio segment player for multimedia content -->
 								<div class="flex flex-col gap-2 p-3 bg-gray-50 dark:bg-gray-850 rounded-lg">
 									<div class="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-400">
 										<svg
@@ -205,11 +205,21 @@
 											stroke="currentColor"
 											class="size-4"
 										>
-											<path
-												stroke-linecap="round"
-												stroke-linejoin="round"
-												d="M19.114 5.636a9 9 0 0 1 0 12.728M16.463 8.288a5.25 5.25 0 0 1 0 7.424M6.75 8.25l4.72-4.72a.75.75 0 0 1 1.28.53v15.88a.75.75 0 0 1-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.009 9.009 0 0 1 2.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75Z"
-											/>
+											{#if document.metadata?.video_segment_url}
+												<!-- Video icon -->
+												<path
+													stroke-linecap="round"
+													stroke-linejoin="round"
+													d="m15.75 10.5 4.72-4.72a.75.75 0 0 1 1.28.53v11.38a.75.75 0 0 1-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25h-9A2.25 2.25 0 0 0 2.25 7.5v9a2.25 2.25 0 0 0 2.25 2.25Z"
+												/>
+											{:else}
+												<!-- Audio icon -->
+												<path
+													stroke-linecap="round"
+													stroke-linejoin="round"
+													d="M19.114 5.636a9 9 0 0 1 0 12.728M16.463 8.288a5.25 5.25 0 0 1 0 7.424M6.75 8.25l4.72-4.72a.75.75 0 0 1 1.28.53v15.88a.75.75 0 0 1-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.009 9.009 0 0 1 2.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75Z"
+												/>
+											{/if}
 										</svg>
 										{#if document.metadata?.timestamp_start !== undefined && document.metadata?.timestamp_end !== undefined}
 											<span>
@@ -224,28 +234,90 @@
 											</span>
 										{/if}
 									</div>
-									{#await loadAudioBlob(document.metadata.audio_segment_url)}
-										<div class="flex items-center justify-center py-4 text-gray-500">
-											<span class="text-sm">Loading audio...</span>
-										</div>
-									{:then blobUrl}
-										{#if blobUrl}
-											<audio
-												controls
-												preload="metadata"
-												class="w-full"
-												src={blobUrl}
-											>
-												Your browser does not support audio playback.
-											</audio>
-										{:else}
-											<div class="text-sm text-red-500">Failed to load audio</div>
-										{/if}
-									{:catch error}
-										<div class="text-sm text-red-500">Error: {error.message}</div>
-									{/await}
+									
+									{#if document.metadata?.video_segment_url}
+										<!-- Video player (with audio fallback) -->
+										{#await loadMediaBlob(document.metadata.video_segment_url)}
+											<div class="flex items-center justify-center py-4 text-gray-500">
+												<span class="text-sm">Loading video...</span>
+											</div>
+										{:then videoBlobUrl}
+											{#if videoBlobUrl}
+												<video
+													controls
+													preload="metadata"
+													class="w-full rounded"
+													src={videoBlobUrl}
+												>
+													Your browser does not support video playback.
+												</video>
+											{:else if document.metadata?.audio_segment_url}
+												<!-- Fallback to audio if video fails -->
+												{#await loadMediaBlob(document.metadata.audio_segment_url)}
+													<div class="flex items-center justify-center py-4 text-gray-500">
+														<span class="text-sm">Loading audio fallback...</span>
+													</div>
+												{:then audioBlobUrl}
+													{#if audioBlobUrl}
+														<audio controls preload="metadata" class="w-full" src={audioBlobUrl}>
+															Your browser does not support audio playback.
+														</audio>
+													{:else}
+														<div class="text-sm text-red-500">Failed to load media</div>
+													{/if}
+												{:catch}
+													<div class="text-sm text-red-500">Failed to load media</div>
+												{/await}
+											{:else}
+												<div class="text-sm text-red-500">Failed to load video</div>
+											{/if}
+										{:catch error}
+											<!-- Fallback to audio on error -->
+											{#if document.metadata?.audio_segment_url}
+												{#await loadMediaBlob(document.metadata.audio_segment_url)}
+													<div class="flex items-center justify-center py-4 text-gray-500">
+														<span class="text-sm">Loading audio fallback...</span>
+													</div>
+												{:then audioBlobUrl}
+													{#if audioBlobUrl}
+														<audio controls preload="metadata" class="w-full" src={audioBlobUrl}>
+															Your browser does not support audio playback.
+														</audio>
+													{:else}
+														<div class="text-sm text-red-500">Error: {error.message}</div>
+													{/if}
+												{:catch}
+													<div class="text-sm text-red-500">Error: {error.message}</div>
+												{/await}
+											{:else}
+												<div class="text-sm text-red-500">Error: {error.message}</div>
+											{/if}
+										{/await}
+									{:else}
+										<!-- Audio-only player -->
+										{#await loadMediaBlob(document.metadata.audio_segment_url)}
+											<div class="flex items-center justify-center py-4 text-gray-500">
+												<span class="text-sm">Loading audio...</span>
+											</div>
+										{:then blobUrl}
+											{#if blobUrl}
+												<audio
+													controls
+													preload="metadata"
+													class="w-full"
+													src={blobUrl}
+												>
+													Your browser does not support audio playback.
+												</audio>
+											{:else}
+												<div class="text-sm text-red-500">Failed to load audio</div>
+											{/if}
+										{:catch error}
+											<div class="text-sm text-red-500">Error: {error.message}</div>
+										{/await}
+									{/if}
 								</div>
-								<!-- Text content below audio -->
+								<!-- Text content below media -->
 								<pre class="text-sm dark:text-gray-400 whitespace-pre-line mt-2">
                 {document.document}
               </pre>

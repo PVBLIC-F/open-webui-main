@@ -1795,7 +1795,7 @@ def save_docs_to_vector_db(
             # Enhanced Entity Extraction
             "topics", "entities_people", "entities_organizations", "entities_locations", "keywords",
             # Audio/Video Timestamp Fields
-            "timestamp_start", "timestamp_end", "duration", "audio_segment_url",
+            "timestamp_start", "timestamp_end", "duration", "audio_segment_url", "video_segment_url",
             "transcript_language", "transcript_duration"
         ]
         
@@ -2091,9 +2091,21 @@ def process_file(
                     if timestamp_data.get("duration") is not None:
                         enriched_metadata["duration"] = timestamp_data["duration"]
                     
-                    # Add audio segment URL for playback if timestamps available
+                    # Add media segment URLs for playback if timestamps available
                     if (timestamp_data.get("timestamp_start") is not None and 
                         timestamp_data.get("timestamp_end") is not None):
+                        # Check if source is video or audio
+                        is_video = file.meta.get("content_type", "").startswith("video/")
+                        
+                        if is_video:
+                            # For video files, provide both video and audio URLs
+                            enriched_metadata["video_segment_url"] = (
+                                f"/api/v1/audio/video/files/{file.id}/segment"
+                                f"?start={timestamp_data['timestamp_start']}"
+                                f"&end={timestamp_data['timestamp_end']}"
+                            )
+                        
+                        # Always provide audio URL (works for both audio and video files)
                         enriched_metadata["audio_segment_url"] = (
                             f"/api/v1/audio/files/{file.id}/segment"
                             f"?start={timestamp_data['timestamp_start']}"
