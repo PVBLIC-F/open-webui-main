@@ -246,7 +246,8 @@
 												<video
 													controls
 													preload="metadata"
-													class="w-full rounded"
+													class="w-full max-h-96 rounded"
+													style="max-width: 100%; object-fit: contain;"
 													src={videoBlobUrl}
 												>
 													Your browser does not support video playback.

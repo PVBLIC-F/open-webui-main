@@ -1741,8 +1741,9 @@ async def get_video_segment(
         # -ss BEFORE -i: input seeking (much faster - seeks before decoding)
         # -to: duration from start
         # -c:v copy: copy video codec without re-encoding (fastest)
-        # -c:a aac: re-encode audio to AAC for MP4 compatibility
-        # -movflags +faststart: optimize for streaming
+        # -c:a copy: copy audio codec (no re-encoding, fastest)
+        # -movflags +frag_keyframe+empty_moov: optimize for streaming (no faststart needed)
+        # -threads 0: use all available CPU cores
         # -y: overwrite output file if exists
         cmd = [
             "ffmpeg",
@@ -1750,9 +1751,9 @@ async def get_video_segment(
             "-i", file_path,
             "-to", str(end - start),  # Duration from start
             "-c:v", "copy",  # Copy video stream (no re-encoding, fast)
-            "-c:a", "aac",  # Re-encode audio to AAC for MP4
-            "-b:a", "128k",  # Audio bitrate
-            "-movflags", "+faststart",  # Optimize for streaming
+            "-c:a", "copy",  # Copy audio stream (no re-encoding, fastest)
+            "-movflags", "+frag_keyframe+empty_moov+default_base_moof",  # Fragment MP4 for streaming
+            "-threads", "0",  # Use all CPU cores
             "-y",
             output_path
         ]
@@ -1764,29 +1765,52 @@ async def get_video_segment(
             text=True
         )
         
-        # If codec copy failed, fallback to re-encoding
+        # If codec copy failed, fallback to AAC audio (video copy)
         if result.returncode != 0 or not os.path.exists(output_path):
-            log.debug(f"Video codec copy failed, falling back to re-encoding: {result.stderr[:200]}")
+            log.debug(f"Video/audio codec copy failed, trying video copy with AAC audio: {result.stderr[:200]}")
             cmd = [
                 "ffmpeg",
                 "-ss", str(start),
                 "-i", file_path,
                 "-to", str(end - start),
-                "-c:v", "libx264",  # Re-encode video with H.264
-                "-preset", "ultrafast",  # Fastest encoding preset
-                "-crf", "23",  # Constant quality (lower = better, 23 is good)
-                "-c:a", "aac",
-                "-b:a", "128k",
-                "-movflags", "+faststart",
+                "-c:v", "copy",  # Keep video copy
+                "-c:a", "aac",  # Re-encode audio to AAC for compatibility
+                "-b:a", "192k",  # High quality audio
+                "-movflags", "+frag_keyframe+empty_moov+default_base_moof",
+                "-threads", "0",
                 "-y",
                 output_path
             ]
             result = subprocess.run(
                 cmd,
-                check=True,
                 capture_output=True,
                 text=True
             )
+            
+            # If that still failed, do full re-encode as last resort
+            if result.returncode != 0 or not os.path.exists(output_path):
+                log.debug(f"Video copy with AAC failed, falling back to full re-encode: {result.stderr[:200]}")
+                cmd = [
+                    "ffmpeg",
+                    "-ss", str(start),
+                    "-i", file_path,
+                    "-to", str(end - start),
+                    "-c:v", "libx264",  # Re-encode video with H.264
+                    "-preset", "veryfast",  # Fast encoding
+                    "-crf", "23",  # Good quality
+                    "-c:a", "aac",
+                    "-b:a", "192k",
+                    "-movflags", "+frag_keyframe+empty_moov+default_base_moof",
+                    "-threads", "0",
+                    "-y",
+                    output_path
+                ]
+                result = subprocess.run(
+                    cmd,
+                    check=True,
+                    capture_output=True,
+                    text=True
+                )
         
         # Verify output file was created
         if not os.path.exists(output_path):
