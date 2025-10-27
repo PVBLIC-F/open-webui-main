@@ -170,9 +170,57 @@ def extract_enhanced_metadata(text: str, use_llm: bool = False) -> dict:
     # Get top keywords by frequency (minimum 2 occurrences)
     keywords = [word for word, freq in word_freq.most_common(10) if freq > 1]
     
-    # Extract potential topics (capitalized phrases) - limit search for performance
-    topics_set = set(re.findall(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b', text))
-    topics = sorted(topics_set)[:5]  # Sort for consistency
+    # Extract potential topics (capitalized phrases) with comprehensive stopword filtering
+    # Comprehensive English stopwords that should never be topics
+    STOPWORDS = {
+        # Articles & Demonstratives
+        'A', 'An', 'The', 'This', 'That', 'These', 'Those',
+        # Pronouns
+        'I', 'You', 'He', 'She', 'It', 'We', 'They', 'Me', 'Him', 'Her', 'Us', 'Them',
+        'My', 'Your', 'His', 'Her', 'Its', 'Our', 'Their', 'Mine', 'Yours', 'Hers', 'Ours', 'Theirs',
+        'Myself', 'Yourself', 'Himself', 'Herself', 'Itself', 'Ourselves', 'Yourselves', 'Themselves',
+        # Conjunctions
+        'And', 'But', 'Or', 'Nor', 'For', 'Yet', 'So', 'Because', 'Since', 'Unless', 'Although', 'Though',
+        # Prepositions
+        'In', 'On', 'At', 'To', 'For', 'Of', 'From', 'By', 'With', 'About', 'Against', 'Between',
+        'Into', 'Through', 'During', 'Before', 'After', 'Above', 'Below', 'Up', 'Down', 'Out', 'Off',
+        'Over', 'Under', 'Again', 'Further', 'Then', 'Once', 'Here', 'There', 'Where', 'When',
+        # Common Verbs
+        'Am', 'Is', 'Are', 'Was', 'Were', 'Be', 'Been', 'Being', 'Have', 'Has', 'Had', 'Having',
+        'Do', 'Does', 'Did', 'Doing', 'Will', 'Would', 'Should', 'Could', 'Might', 'May', 'Can', 'Must',
+        'Shall', 'Get', 'Gets', 'Got', 'Getting', 'Make', 'Makes', 'Made', 'Making', 'Go', 'Goes', 'Went',
+        # Interrogatives
+        'Who', 'What', 'Which', 'When', 'Where', 'Why', 'How', 'Whose', 'Whom',
+        # Quantifiers & Adjectives  
+        'All', 'Any', 'Both', 'Each', 'Few', 'More', 'Most', 'Other', 'Some', 'Such', 'No',
+        'Only', 'Own', 'Same', 'Than', 'Too', 'Very', 'Just', 'Now', 'Even', 'Also', 'Well',
+        'Many', 'Much', 'Every', 'Another', 'Still', 'Back', 'New', 'Old', 'Good', 'Bad', 'Great',
+        # Negations & Modals
+        'Not', 'Never', 'Nothing', 'Nobody', 'None', 'Neither', 'Nowhere',
+        # Common sentence starters
+        'If', 'Whether', 'As', 'Like', 'Unlike'
+    }
+    
+    # Extract all capitalized phrases
+    topics_raw = re.findall(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b', text)
+    
+    # Apply comprehensive filtering
+    topics_filtered = []
+    for topic in topics_raw:
+        # Skip if it's in stopwords
+        if topic in STOPWORDS:
+            continue
+        # Skip very short words (likely not meaningful topics)
+        if len(topic) <= 2:
+            continue
+        # Skip if it's a single letter followed by lowercase (e.g., "A" or "I")
+        if len(topic) == 1:
+            continue
+        # Add to filtered list
+        topics_filtered.append(topic)
+    
+    # Remove duplicates, sort for consistency, limit to top 5
+    topics = sorted(set(topics_filtered))[:5]
     
     return {
         "chunk_summary": chunk_summary,
