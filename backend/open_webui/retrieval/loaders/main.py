@@ -264,7 +264,7 @@ class Loader:
             chunking_strategy=self.kwargs.get("UNSTRUCTURED_CHUNKING_STRATEGY", "by_title"),
             max_characters=self.kwargs.get("CHUNK_SIZE", 1000),
             chunk_overlap=self.kwargs.get("CHUNK_OVERLAP", 200),
-            cleaning_level=self.kwargs.get("UNSTRUCTURED_CLEANING_LEVEL", "minimal"),
+            cleaning_level=self.kwargs.get("UNSTRUCTURED_CLEANING_LEVEL", "standard"),
             infer_table_structure=self.kwargs.get("UNSTRUCTURED_INFER_TABLE_STRUCTURE", False),
             extract_images_in_pdf=self.kwargs.get("UNSTRUCTURED_EXTRACT_IMAGES_IN_PDF", False),
         )
