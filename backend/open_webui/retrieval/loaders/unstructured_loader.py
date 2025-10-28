@@ -56,7 +56,7 @@ class UnstructuredUnifiedLoader:
     def __init__(
         self,
         file_path: str,
-        strategy: str = "fast",  # Changed from "hi_res" for better performance
+        strategy: str = "hi_res",  # Default to hi_res for better element classification
         include_metadata: bool = True,
         clean_text: bool = True,
         chunk_by_semantic: bool = True,
@@ -233,17 +233,19 @@ class UnstructuredUnifiedLoader:
     def _get_optimal_strategy(self, file_ext: str) -> str:
         """
         Select optimal processing strategy based on file type and size.
-        Prioritizes speed over quality for better user experience.
+        Uses hi_res for PDFs to get better element classification (Headers, Footers, etc.)
         """
         file_size = os.path.getsize(self.file_path)
         
-        # PDFs: Use fast strategy for better performance
-        # hi_res is very slow and resource intensive
+        # PDFs: Use hi_res strategy for better element classification
+        # hi_res uses detectron2 for layout analysis, identifying Headers/Footers properly
         if file_ext == ".pdf":
-            # Only use hi_res for small PDFs if explicitly set in self.strategy
-            if self.strategy == "hi_res" and file_size < 5_000_000:  # < 5MB
-                return "hi_res"
-            return "fast"
+            # Use fast strategy only for very large PDFs (>20MB) for performance
+            if file_size > 20_000_000 and self.strategy != "hi_res":
+                log.info(f"PDF is large ({file_size / 1_000_000:.1f}MB), using 'fast' strategy for performance")
+                return "fast"
+            # Default to hi_res for better quality
+            return "hi_res"
         
         # Office documents work well with fast strategy
         elif file_ext in [".docx", ".pptx", ".xlsx", ".doc", ".ppt", ".xls"]:
@@ -572,7 +574,7 @@ def create_unstructured_loader(
     """
     return UnstructuredUnifiedLoader(
         file_path=file_path,
-        strategy=config.get("UNSTRUCTURED_STRATEGY", "fast"),  # Default to fast for performance
+        strategy=config.get("UNSTRUCTURED_STRATEGY", "hi_res"),  # Default to hi_res for better quality
         include_metadata=config.get("UNSTRUCTURED_INCLUDE_METADATA", True),
         clean_text=config.get("UNSTRUCTURED_CLEAN_TEXT", True),
         chunk_by_semantic=config.get("UNSTRUCTURED_SEMANTIC_CHUNKING", True),
