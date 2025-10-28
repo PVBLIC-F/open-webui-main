@@ -257,7 +257,7 @@ class Loader:
         """Helper method to create UnstructuredUnifiedLoader with consistent configuration"""
         return UnstructuredUnifiedLoader(
             file_path=file_path,
-            strategy=self.kwargs.get("UNSTRUCTURED_STRATEGY", "fast"),
+            strategy=self.kwargs.get("UNSTRUCTURED_STRATEGY", "hi_res"),
             include_metadata=self.kwargs.get("UNSTRUCTURED_INCLUDE_METADATA", True),
             clean_text=self.kwargs.get("UNSTRUCTURED_CLEAN_TEXT", True),
             chunk_by_semantic=self.kwargs.get("UNSTRUCTURED_SEMANTIC_CHUNKING", True),
