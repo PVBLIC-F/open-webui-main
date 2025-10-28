@@ -354,9 +354,10 @@ class UnstructuredUnifiedLoader:
         return False
     
     def _minimal_cleaning(self, text: str) -> str:
-        """Minimal cleaning - just essential whitespace fixes"""
+        """Minimal cleaning - just essential whitespace fixes and artifact removal"""
         text = clean_extra_whitespace(text)
         text = clean_trailing_punctuation(text)
+        text = self._remove_artifacts(text)
         return text.strip()
     
     def _standard_cleaning(self, text: str) -> str:
@@ -366,6 +367,7 @@ class UnstructuredUnifiedLoader:
         text = clean_bullets(text)
         text = clean_ordered_bullets(text)
         text = clean_trailing_punctuation(text)
+        text = self._remove_artifacts(text)
         return text.strip()
     
     def _aggressive_cleaning(self, text: str) -> str:
@@ -376,6 +378,50 @@ class UnstructuredUnifiedLoader:
         text = clean_ordered_bullets(text)
         text = clean_trailing_punctuation(text)
         text = clean_non_ascii_chars(text)
+        text = self._remove_artifacts(text)
+        return text.strip()
+    
+    def _remove_artifacts(self, text: str) -> str:
+        """Remove OCR artifacts, repeated names, and trailing noise from text"""
+        # Remove common OCR artifacts at the end of text
+        # Pattern: repeated words/names (e.g., "sa akib khansa akib khan")
+        lines = text.split('\n')
+        cleaned_lines = []
+        
+        for line in lines:
+            line_stripped = line.strip()
+            
+            # Skip empty lines
+            if not line_stripped:
+                cleaned_lines.append(line)
+                continue
+            
+            # Check if line is a repeated word pattern (OCR artifact)
+            words = line_stripped.split()
+            if len(words) <= 8:  # Short lines only
+                # Count word frequency
+                word_counts = {}
+                for word in words:
+                    word_lower = word.lower()
+                    word_counts[word_lower] = word_counts.get(word_lower, 0) + 1
+                
+                # If any word appears 3+ times in short line, it's likely an artifact
+                if any(count >= 3 for count in word_counts.values()):
+                    continue  # Skip this line
+            
+            # Check if line looks like a footer/header
+            if re.match(r'^\d{4}\s+(annual report|report)', line_stripped.lower()):
+                continue
+            if re.match(r'^page\s+\d+', line_stripped.lower()):
+                continue
+            if re.match(r'^\d{1,4}$', line_stripped):
+                continue
+            
+            cleaned_lines.append(line)
+        
+        # Rejoin and clean up excessive whitespace
+        text = '\n'.join(cleaned_lines)
+        text = re.sub(r'\n{3,}', '\n\n', text)  # Max 2 consecutive newlines
         return text.strip()
     
     def _chunk_semantically(self, elements):
