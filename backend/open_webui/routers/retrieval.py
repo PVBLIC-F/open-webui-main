@@ -2257,7 +2257,7 @@ def process_file(
                         CHUNK_OVERLAP=request.app.state.config.CHUNK_OVERLAP,
                         UNSTRUCTURED_STRATEGY=getattr(request.app.state.config, "UNSTRUCTURED_STRATEGY", "fast"),
                         UNSTRUCTURED_CHUNKING_STRATEGY=getattr(request.app.state.config, "UNSTRUCTURED_CHUNKING_STRATEGY", "by_title"),
-                        UNSTRUCTURED_CLEANING_LEVEL=getattr(request.app.state.config, "UNSTRUCTURED_CLEANING_LEVEL", "minimal"),
+                        UNSTRUCTURED_CLEANING_LEVEL=getattr(request.app.state.config, "UNSTRUCTURED_CLEANING_LEVEL", "standard"),
                         UNSTRUCTURED_INCLUDE_METADATA=getattr(request.app.state.config, "UNSTRUCTURED_INCLUDE_METADATA", True),
                         UNSTRUCTURED_CLEAN_TEXT=getattr(request.app.state.config, "UNSTRUCTURED_CLEAN_TEXT", True),
                         UNSTRUCTURED_SEMANTIC_CHUNKING=getattr(request.app.state.config, "UNSTRUCTURED_SEMANTIC_CHUNKING", True),
