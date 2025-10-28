@@ -441,6 +441,16 @@ class UnstructuredUnifiedLoader:
         # Rejoin and clean up excessive whitespace
         text = '\n'.join(cleaned_lines)
         text = re.sub(r'\n{3,}', '\n\n', text)  # Max 2 consecutive newlines
+        
+        # Remove trailing artifacts (coordinates, timestamps, incomplete text)
+        # Pattern: "text ending with h.08" or "text .123" or "text x.y"
+        text = re.sub(r'\s+[a-z]\.[\d.]+["\']?$', '', text)  # Matches: " h.08" or " x.123"
+        text = re.sub(r'\s+\.[\d.]+["\']?$', '', text)  # Matches: " .08" or " .123"
+        
+        # Remove incomplete sentences at the end (single letter or very short fragment)
+        # Pattern: ending with " word h" or " we h" (looks like truncated sentence)
+        text = re.sub(r'\s+\w{1,2}\s+[a-z]$', '.', text)  # "we h" → "."
+        
         return text.strip()
     
     def _chunk_semantically(self, elements):
