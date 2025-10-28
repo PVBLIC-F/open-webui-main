@@ -63,7 +63,7 @@ class UnstructuredUnifiedLoader:
         chunking_strategy: str = "by_title",  # "by_title" or "basic" - by_title preserves document structure better
         max_characters: int = 1000,
         chunk_overlap: int = 200,
-        cleaning_level: str = "minimal",  # Changed from "standard" for better performance
+        cleaning_level: str = "standard",  # Standard cleaning for better text quality
         infer_table_structure: bool = False,  # Now configurable instead of always False
         extract_images_in_pdf: bool = False,  # Now configurable
         **kwargs
@@ -143,13 +143,30 @@ class UnstructuredUnifiedLoader:
             # Log processing results
             log.info(f"Successfully partitioned document: {len(elements)} elements extracted")
             
-            # Filter out empty elements and validate content
+            # Filter out empty elements, headers, footers, and page numbers
             valid_elements = []
             for element in elements:
+                # Check if element has text content
+                has_text = False
                 if hasattr(element, 'text') and element.text and element.text.strip():
-                    valid_elements.append(element)
+                    has_text = True
                 elif hasattr(element, 'content') and element.content and element.content.strip():
-                    valid_elements.append(element)
+                    has_text = True
+                
+                if not has_text:
+                    continue
+                
+                # Filter out unwanted element types
+                element_category = None
+                if hasattr(element, 'category'):
+                    element_category = element.category
+                
+                # Skip headers, footers, and page numbers
+                if element_category in ['Header', 'Footer', 'PageNumber', 'PageBreak']:
+                    log.debug(f"Skipping {element_category} element")
+                    continue
+                
+                valid_elements.append(element)
             
             if len(valid_elements) == 0 and len(elements) > 0:
                 log.warning(f"All {len(elements)} extracted elements were empty for {self.file_path}")
@@ -562,7 +579,7 @@ def create_unstructured_loader(
         chunking_strategy=config.get("UNSTRUCTURED_CHUNKING_STRATEGY", "by_title"),  # Default to by_title for better structure preservation
         max_characters=config.get("CHUNK_SIZE", 1000),
         chunk_overlap=config.get("CHUNK_OVERLAP", 200),
-        cleaning_level=config.get("UNSTRUCTURED_CLEANING_LEVEL", "minimal"),  # Default to minimal for performance
+        cleaning_level=config.get("UNSTRUCTURED_CLEANING_LEVEL", "standard"),  # Default to standard for better quality
         infer_table_structure=config.get("UNSTRUCTURED_INFER_TABLE_STRUCTURE", False),  # Disable by default for performance
         extract_images_in_pdf=config.get("UNSTRUCTURED_EXTRACT_IMAGES_IN_PDF", False),  # Disable by default for performance
     )
