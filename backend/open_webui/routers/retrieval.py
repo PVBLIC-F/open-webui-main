@@ -2023,11 +2023,14 @@ def process_file(
 
                 # Create single document with full transcript
                 full_transcript = form_data.content.replace("<br/>", "\n")
+                # Filter out potentially contaminated file-specific URLs from metadata
+                filtered_meta = {k: v for k, v in file.meta.items() 
+                               if k not in ["video_segment_url", "audio_segment_url"]}
                 docs = [
                     Document(
                         page_content=full_transcript,
                         metadata={
-                            **file.meta,
+                            **filtered_meta,
                             "name": file.filename,
                             "created_by": file.user_id,
                             "file_id": file.id,
@@ -2212,24 +2215,58 @@ def process_file(
                 # Check if we successfully found vectors
                 if result is not None and result.ids and len(result.ids) > 0 and len(result.ids[0]) > 0:
                     log.info(f"Reusing {len(result.ids[0])} existing vectors for file {file.id}")
-                    docs = [
-                        Document(
+                    docs = []
+                    for idx, id in enumerate(result.ids[0]):
+                        existing_metadata = result.metadatas[0][idx]
+                        
+                        # Filter out file-specific URLs that might be from other files
+                        # and regenerate them with the correct file ID
+                        filtered_metadata = {k: v for k, v in existing_metadata.items() 
+                                           if k not in ["video_segment_url", "audio_segment_url"]}
+                        
+                        # Regenerate segment URLs if timestamps are available
+                        if "timestamp_start" in filtered_metadata and "timestamp_end" in filtered_metadata:
+                            # Check if source is video or audio
+                            is_video = file.meta.get("content_type", "").startswith("video/")
+                            
+                            if is_video:
+                                # For video files, provide both video and audio URLs
+                                filtered_metadata["video_segment_url"] = (
+                                    f"/api/v1/audio/video/files/{file.id}/segment"
+                                    f"?start={filtered_metadata['timestamp_start']}"
+                                    f"&end={filtered_metadata['timestamp_end']}"
+                                )
+                            
+                            # Always provide audio URL (works for both audio and video files)
+                            filtered_metadata["audio_segment_url"] = (
+                                f"/api/v1/audio/files/{file.id}/segment"
+                                f"?start={filtered_metadata['timestamp_start']}"
+                                f"&end={filtered_metadata['timestamp_end']}"
+                            )
+                        
+                        doc = Document(
                             page_content=result.documents[0][idx],
                             metadata={
-                                **result.metadatas[0][idx],
+                                **filtered_metadata,
+                                # Ensure correct file metadata
+                                "file_id": file.id,
+                                "name": file.filename,
+                                "source": file.filename,
                                 # Update collection_name to the knowledge base collection
                                 "collection_name": collection_name,
                             },
                         )
-                        for idx, id in enumerate(result.ids[0])
-                    ]
+                        docs.append(doc)
                 else:
                     log.warning(f"No existing vectors found for file {file.id} after {max_retries} retries, falling back to content field")
+                    # Filter out potentially contaminated file-specific URLs from metadata
+                    filtered_meta = {k: v for k, v in file.meta.items() 
+                                   if k not in ["video_segment_url", "audio_segment_url"]}
                     docs = [
                         Document(
                             page_content=file.data.get("content", ""),
                             metadata={
-                                **file.meta,
+                                **filtered_meta,
                                 "name": file.filename,
                                 "created_by": file.user_id,
                                 "file_id": file.id,
