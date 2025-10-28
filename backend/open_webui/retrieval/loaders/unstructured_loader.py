@@ -15,6 +15,7 @@ Features:
 from typing import List, Optional, Dict, Any
 import logging
 import os
+import re
 from pathlib import Path
 
 from langchain_core.documents import Document
@@ -243,7 +244,7 @@ class UnstructuredUnifiedLoader:
         return "fast"
     
     def _clean_elements(self, elements):
-        """Apply comprehensive text cleaning to elements"""
+        """Apply comprehensive text cleaning to elements and filter unwanted content"""
         # Skip cleaning entirely if level is "none" for maximum speed
         if self.cleaning_level == "none":
             return elements
@@ -269,6 +270,11 @@ class UnstructuredUnifiedLoader:
                 if not text or len(text.strip()) < 2:
                     continue
                 
+                # Filter out common header/footer/page number patterns
+                if self._is_header_footer_or_noise(text):
+                    log.debug(f"Skipping header/footer/noise: {text[:50]}...")
+                    continue
+                
                 # Apply cleaning based on level
                 try:
                     if self.cleaning_level == "minimal":
@@ -280,6 +286,10 @@ class UnstructuredUnifiedLoader:
                 except Exception as clean_err:
                     log.warning(f"Error in cleaning function for element {i}: {clean_err}")
                     # Continue with uncleaned text rather than failing
+                
+                # Final check: skip if text became empty or too short after cleaning
+                if not text or len(text.strip()) < 10:
+                    continue
                 
                 # Update element text if it has a text attribute
                 if hasattr(element, 'text'):
@@ -296,6 +306,52 @@ class UnstructuredUnifiedLoader:
         
         log.debug(f"Cleaned {len(cleaned_elements)} elements from {len(elements)} total")
         return cleaned_elements
+    
+    def _is_header_footer_or_noise(self, text: str) -> bool:
+        """Detect and filter out headers, footers, page numbers, and OCR noise"""
+        text_lower = text.lower().strip()
+        text_stripped = text.strip()
+        
+        # Skip very short text that's likely noise
+        if len(text_stripped) < 10:
+            return True
+        
+        # Check for page numbers (standalone numbers or "Page X" patterns)
+        import re
+        if re.match(r'^[\s\n]*\d{1,4}[\s\n]*$', text_stripped):
+            return True
+        if re.match(r'^[\s\n]*(page|pg\.?)\s*\d{1,4}[\s\n]*$', text_lower):
+            return True
+        
+        # Check for common footer patterns
+        footer_patterns = [
+            r'^\d{4}\s+(annual report|report)',  # "2024 ANNUAL REPORT"
+            r'^(confidential|proprietary|copyright|©)',
+            r'^\s*(page|pg\.?)\s+\d+\s+of\s+\d+',
+            r'^\s*\d+\s*/\s*\d+\s*$',  # "23 / 45" or "23/45"
+        ]
+        for pattern in footer_patterns:
+            if re.match(pattern, text_lower):
+                return True
+        
+        # Check for repeated characters/names (OCR artifacts like "sa akib khansa akib khan")
+        # If same word appears 3+ times in a short text, it's likely noise
+        words = text_stripped.split()
+        if len(words) <= 10:  # Only check short text
+            word_counts = {}
+            for word in words:
+                word_lower = word.lower()
+                word_counts[word_lower] = word_counts.get(word_lower, 0) + 1
+            # If any word repeats 3+ times in short text, skip
+            if any(count >= 3 for count in word_counts.values()):
+                return True
+        
+        # Check for header patterns (all caps short lines)
+        if len(text_stripped) < 100 and text_stripped.isupper():
+            # Skip short all-caps lines (likely headers)
+            return True
+        
+        return False
     
     def _minimal_cleaning(self, text: str) -> str:
         """Minimal cleaning - just essential whitespace fixes"""
@@ -376,6 +432,14 @@ class UnstructuredUnifiedLoader:
                 
                 # Skip empty content
                 if not content or not content.strip():
+                    continue
+                
+                # Normalize newlines and clean up extra whitespace
+                content = re.sub(r'\n{3,}', '\n\n', content)  # Reduce excessive newlines
+                content = content.strip()
+                
+                # Skip if content is too short after normalization
+                if len(content) < 10:
                     continue
                 
                 # Extract metadata
