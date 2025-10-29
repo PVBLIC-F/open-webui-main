@@ -2012,14 +2012,18 @@ def process_file(
                 # Note: Audio/video transcripts come through this path and need chunking
                 # Unlike file-based processing, transcripts don't go through Loader/Unstructured
 
-                try:
-                    # /files/{file_id}/data/content/update
-                    VECTOR_DB_CLIENT.delete_collection(
-                        collection_name=f"file-{file.id}"
-                    )
-                except:
-                    # Audio file upload pipeline
-                    pass
+                # Only delete existing collection if it exists (for updates)
+                # For new uploads, the collection won't exist yet
+                if VECTOR_DB_CLIENT.has_collection(collection_name=f"file-{file.id}"):
+                    try:
+                        # This is an update operation - delete the old collection
+                        log.info(f"Updating existing collection for file {file.id}")
+                        VECTOR_DB_CLIENT.delete_collection(
+                            collection_name=f"file-{file.id}"
+                        )
+                    except Exception as e:
+                        log.warning(f"Failed to delete existing collection for file {file.id}: {e}")
+                        # Continue processing even if deletion fails
 
                 # Create single document with full transcript
                 full_transcript = form_data.content.replace("<br/>", "\n")
