@@ -179,8 +179,21 @@ class PineconeClient(VectorDBBase):
             if "text" in item:
                 metadata["text"] = item["text"]
 
-            # Always add collection_name to metadata for filtering
+            # CRITICAL: Always add collection_name to metadata for filtering
+            # This MUST be set correctly for proper isolation
             metadata["collection_name"] = collection_name_with_prefix
+            
+            # Extract file_id from collection name if it's a file collection
+            if collection_name_with_prefix.startswith(f"{self.collection_prefix}_file-"):
+                # Extract the file ID from the collection name
+                file_id_from_collection = collection_name_with_prefix.replace(f"{self.collection_prefix}_file-", "")
+                
+                # Verify consistency: if metadata has file_id, it must match
+                if "file_id" in metadata and metadata["file_id"] != file_id_from_collection:
+                    log.error(f"FILE ID MISMATCH! Metadata file_id: {metadata.get('file_id')}, Collection file_id: {file_id_from_collection}")
+                    log.error(f"This will cause cross-contamination! Full collection name: {collection_name_with_prefix}")
+                    # Force correct file_id to prevent contamination
+                    metadata["file_id"] = file_id_from_collection
 
             point = {
                 "id": item["id"],
@@ -473,9 +486,15 @@ class PineconeClient(VectorDBBase):
             zero_vector = [0.0] * self.dimension
 
             # Combine user filter with collection_name
+            # CRITICAL: Ensure collection_name filter is ALWAYS present to prevent cross-contamination
             pinecone_filter = {"collection_name": collection_name_with_prefix}
             if filter:
-                pinecone_filter.update(filter)
+                # Never allow overriding the collection_name filter
+                for key, value in filter.items():
+                    if key != "collection_name":
+                        pinecone_filter[key] = value
+                    else:
+                        log.warning(f"Attempted to override collection_name filter! Ignoring.")
 
             # Perform metadata-only query
             query_response = self.index.query(
