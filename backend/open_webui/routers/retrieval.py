@@ -2417,15 +2417,25 @@ def process_file(
                     # Text files will have split=True (default) since they're chunked by Loader
                     should_split = not form_data.content  # Don't split if content provided (already chunked)
                     
+                    # CRITICAL: Ensure each file's metadata includes its unique file_id
+                    # This is essential for Pinecone which uses metadata filtering for collections
+                    file_metadata = {
+                        "file_id": file.id,
+                        "name": file.filename,
+                        "hash": hash,
+                    }
+                    
+                    # Double-check file_id is in all document metadata
+                    for doc in docs:
+                        if "file_id" not in doc.metadata or doc.metadata["file_id"] != file.id:
+                            log.warning(f"Correcting file_id in document metadata. Was: {doc.metadata.get('file_id')}, Should be: {file.id}")
+                            doc.metadata["file_id"] = file.id
+                    
                     result = save_docs_to_vector_db(
                         request,
                         docs=docs,
                         collection_name=collection_name,
-                        metadata={
-                            "file_id": file.id,
-                            "name": file.filename,
-                            "hash": hash,
-                        },
+                        metadata=file_metadata,
                         add=(True if form_data.collection_name else False),
                         overwrite=False,  # Don't overwrite - add to existing collection (critical for knowledge bases)
                         split=should_split,  # Skip splitting for transcripts (already chunked)
