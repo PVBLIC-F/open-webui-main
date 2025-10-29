@@ -1957,7 +1957,11 @@ def save_docs_to_vector_db(
             for idx, text in enumerate(texts)
         ]
 
-        log.info(f"adding to collection {collection_name}")
+        # Log detailed information about what's being saved
+        log.info(f"Adding {len(items)} items to collection {collection_name}")
+        if items and "file_id" in metadatas[0]:
+            log.info(f"File ID in metadata: {metadatas[0].get('file_id')}")
+            log.info(f"File name in metadata: {metadatas[0].get('name', 'Unknown')}")
         
         # Process in batches for better performance (especially for large documents)
         batch_size = 100  # Optimal batch size for most vector databases
@@ -1991,6 +1995,8 @@ def process_file(
     form_data: ProcessFileForm,
     user=Depends(get_verified_user),
 ):
+    log.info(f"Processing file: file_id={form_data.file_id}, has_content={bool(form_data.content)}, collection_name={form_data.collection_name}")
+    
     if user.role == "admin":
         file = Files.get_file_by_id(form_data.file_id)
     else:
@@ -2003,6 +2009,20 @@ def process_file(
 
             if collection_name is None:
                 collection_name = f"file-{file.id}"
+            
+            # CRITICAL: Ensure file.id is unique and correct
+            if not file.id or len(file.id) < 10:
+                log.error(f"Invalid file ID: {file.id} for file {file.filename}")
+                raise ValueError(f"Invalid file ID: {file.id}")
+            
+            log.info(f"File {file.id} ({file.filename}) will be saved to collection: {collection_name}")
+            
+            # Double-check that we're not accidentally using the wrong collection
+            if form_data.content and not form_data.collection_name:
+                expected_collection = f"file-{file.id}"
+                if collection_name != expected_collection:
+                    log.error(f"Collection name mismatch! Expected: {expected_collection}, Got: {collection_name}")
+                    raise ValueError(f"Collection name mismatch for file {file.id}")
 
             # When adding to knowledge base, reuse existing file-{id} vectors (same as text files)
             # Only process content if: (1) content exists AND (2) NOT adding to knowledge base
