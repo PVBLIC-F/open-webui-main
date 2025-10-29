@@ -307,6 +307,13 @@ class PineconeClient(VectorDBBase):
         collection_name_with_prefix = self._get_collection_name_with_prefix(
             collection_name
         )
+        
+        # Log detailed information about what's being upserted
+        log.info(f"Upserting {len(items)} items to Pinecone collection: {collection_name} (with prefix: {collection_name_with_prefix})")
+        if items and items[0].get("metadata"):
+            sample_metadata = items[0]["metadata"]
+            log.info(f"Sample metadata - file_id: {sample_metadata.get('file_id')}, name: {sample_metadata.get('name')}")
+        
         points = self._create_points(items, collection_name_with_prefix)
 
         # Parallelize batch upserts for performance
