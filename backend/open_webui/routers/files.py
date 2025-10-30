@@ -615,7 +615,12 @@ async def get_file_content_by_id(
 
 
 @router.get("/{id}/video")
-async def stream_video_by_id(id: str, request: Request, user=Depends(get_verified_user)):
+async def stream_video_by_id(
+    id: str,
+    request: Request,
+    user=Depends(get_verified_user),
+    background_tasks: BackgroundTasks = None,
+):
     file = Files.get_file_by_id(id)
 
     if not file:
@@ -664,49 +669,51 @@ async def stream_video_by_id(id: str, request: Request, user=Depends(get_verifie
                 cache_path.stat().st_mtime < src_path.stat().st_mtime
             )
 
-            if remux_needed:
-                cmd = [
-                    "ffmpeg",
-                    "-y",
-                    "-i",
-                    str(src_path),
-                    "-c",
-                    "copy",
-                    "-movflags",
-                    "+faststart",
-                    str(cache_path),
-                ]
-                result = subprocess.run(
-                    cmd, capture_output=True, text=True
-                )
+            if remux_needed and background_tasks is not None:
+                # Schedule background remux; do not block the current request
+                def remux_to_faststart(src: Path, dst: Path):
+                    try:
+                        cmd = [
+                            "ffmpeg",
+                            "-y",
+                            "-i",
+                            str(src),
+                            "-c",
+                            "copy",
+                            "-movflags",
+                            "+faststart",
+                            str(dst),
+                        ]
+                        result = subprocess.run(cmd, capture_output=True, text=True)
+                        if result.returncode != 0 or (not dst.exists()):
+                            # Fallback to re-encode (fast)
+                            cmd = [
+                                "ffmpeg",
+                                "-y",
+                                "-i",
+                                str(src),
+                                "-c:v",
+                                "libx264",
+                                "-preset",
+                                "veryfast",
+                                "-tune",
+                                "fastdecode",
+                                "-c:a",
+                                "aac",
+                                "-movflags",
+                                "+faststart",
+                                str(dst),
+                            ]
+                            subprocess.run(cmd, check=True)
+                    except Exception:
+                        pass
 
-                if result.returncode != 0 or (not cache_path.exists()):
-                    # Fallback to re-encode (fast)
-                    cmd = [
-                        "ffmpeg",
-                        "-y",
-                        "-i",
-                        str(src_path),
-                        "-c:v",
-                        "libx264",
-                        "-preset",
-                        "veryfast",
-                        "-tune",
-                        "fastdecode",
-                        "-c:a",
-                        "aac",
-                        "-movflags",
-                        "+faststart",
-                        str(cache_path),
-                    ]
-                    subprocess.run(cmd, check=True)
+                background_tasks.add_task(remux_to_faststart, src_path, cache_path)
 
             if cache_path.exists():
                 stream_path = cache_path
-                # default content type for remuxed stream
                 content_type = "video/mp4"
     except Exception:
-        # On any ffmpeg issues, fall back to original file
         stream_path = src_path
 
     file_size = stream_path.stat().st_size
