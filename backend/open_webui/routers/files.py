@@ -22,6 +22,8 @@ from fastapi import (
 )
 
 from fastapi.responses import FileResponse, StreamingResponse
+import tempfile
+import subprocess
 from open_webui.constants import ERROR_MESSAGES
 from open_webui.env import SRC_LOG_LEVELS
 from open_webui.retrieval.vector.factory import VECTOR_DB_CLIENT
@@ -606,6 +608,171 @@ async def get_file_content_by_id(
             detail=ERROR_MESSAGES.NOT_FOUND,
         )
 
+
+############################
+# Stream Original Video With Range
+############################
+
+
+@router.get("/{id}/video")
+async def stream_video_by_id(id: str, request: Request, user=Depends(get_verified_user)):
+    file = Files.get_file_by_id(id)
+
+    if not file:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=ERROR_MESSAGES.NOT_FOUND,
+        )
+
+    if not (
+        file.user_id == user.id
+        or user.role == "admin"
+        or has_access_to_file(id, "read", user)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=ERROR_MESSAGES.NOT_FOUND,
+        )
+
+    # Resolve original file path
+    if not file.path:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=ERROR_MESSAGES.NOT_FOUND,
+        )
+
+    src_path = Storage.get_file(file.path)
+    src_path = Path(src_path)
+    if not src_path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=ERROR_MESSAGES.NOT_FOUND,
+        )
+
+    # Prepare a cached, web-optimized MP4 if applicable (moov atom at start)
+    # We only remux MP4/MOV inputs; otherwise, we stream the original file
+    content_type = file.meta.get("content_type") if file.meta else None
+    stream_path = src_path
+    try:
+        ext_lower = src_path.suffix.lower()
+        if ext_lower in (".mp4", ".mov"):
+            cache_name = f"stream_{id}.mp4"
+            cache_path = Path(tempfile.gettempdir()) / cache_name
+
+            # Remux if cache is missing or source is newer
+            remux_needed = (not cache_path.exists()) or (
+                cache_path.stat().st_mtime < src_path.stat().st_mtime
+            )
+
+            if remux_needed:
+                cmd = [
+                    "ffmpeg",
+                    "-y",
+                    "-i",
+                    str(src_path),
+                    "-c",
+                    "copy",
+                    "-movflags",
+                    "+faststart",
+                    str(cache_path),
+                ]
+                result = subprocess.run(
+                    cmd, capture_output=True, text=True
+                )
+
+                if result.returncode != 0 or (not cache_path.exists()):
+                    # Fallback to re-encode (fast)
+                    cmd = [
+                        "ffmpeg",
+                        "-y",
+                        "-i",
+                        str(src_path),
+                        "-c:v",
+                        "libx264",
+                        "-preset",
+                        "veryfast",
+                        "-tune",
+                        "fastdecode",
+                        "-c:a",
+                        "aac",
+                        "-movflags",
+                        "+faststart",
+                        str(cache_path),
+                    ]
+                    subprocess.run(cmd, check=True)
+
+            if cache_path.exists():
+                stream_path = cache_path
+                # default content type for remuxed stream
+                content_type = "video/mp4"
+    except Exception:
+        # On any ffmpeg issues, fall back to original file
+        stream_path = src_path
+
+    file_size = stream_path.stat().st_size
+    range_header = request.headers.get("range") or request.headers.get("Range")
+
+    def file_chunk(start: int, end: int, path: Path, chunk_size: int = 1024 * 1024):
+        with open(path, "rb") as f:
+            f.seek(start)
+            bytes_remaining = end - start + 1
+            while bytes_remaining > 0:
+                read_size = min(chunk_size, bytes_remaining)
+                data = f.read(read_size)
+                if not data:
+                    break
+                bytes_remaining -= len(data)
+                yield data
+
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "public, max-age=86400",
+    }
+
+    # Content-Type fallback
+    if not content_type:
+        # naive fallback based on extension
+        content_type = "video/mp4" if stream_path.suffix.lower() in (".mp4", ".mov") else "application/octet-stream"
+
+    if range_header:
+        try:
+            # Example: Range: bytes=0-1023
+            units, _, range_spec = range_header.partition("=")
+            if units.strip().lower() != "bytes" or not range_spec:
+                raise ValueError("invalid range")
+
+            start_str, _, end_str = range_spec.partition("-")
+            start = int(start_str) if start_str else 0
+            end = int(end_str) if end_str else (file_size - 1)
+            if start < 0 or end >= file_size or start > end:
+                raise ValueError("invalid range bounds")
+
+            headers.update(
+                {
+                    "Content-Range": f"bytes {start}-{end}/{file_size}",
+                    "Content-Length": str(end - start + 1),
+                    "Content-Type": content_type,
+                }
+            )
+
+            return StreamingResponse(
+                file_chunk(start, end, stream_path),
+                status_code=206,
+                headers=headers,
+                media_type=content_type,
+            )
+        except Exception:
+            # If range parsing fails, fall through to full response
+            pass
+
+    # Full file response
+    headers.update({"Content-Length": str(file_size), "Content-Type": content_type})
+    return StreamingResponse(
+        file_chunk(0, file_size - 1, stream_path),
+        status_code=200,
+        headers=headers,
+        media_type=content_type,
+    )
 
 @router.get("/{id}/content/html")
 async def get_html_file_content_by_id(id: str, user=Depends(get_verified_user)):

@@ -69,7 +69,7 @@
 		}
 	};
 	
-	// Fetch media (audio/video) with authentication and create blob URL
+    // Fetch media (audio/video) with authentication and create blob URL
 	const loadMediaBlob = async (mediaUrl: string) => {
 		if (audioBlobUrls[mediaUrl]) {
 			return audioBlobUrls[mediaUrl];
@@ -97,7 +97,18 @@
 			console.error('Error loading media:', error);
 			return null;
 		}
-	};
+    };
+
+    // Programmatic seek for full video playback
+    function onVideoMeta(e: Event, start?: number) {
+        const el = e.currentTarget as HTMLVideoElement;
+        if (!el || start == null) return;
+        try {
+            el.currentTime = start;
+            // Attempt autoplay (will be ignored if not allowed)
+            el.play().catch(() => {});
+        } catch (_) {}
+    }
 </script>
 
 <Modal size="xl" bind:show>
@@ -245,65 +256,42 @@
 										{/if}
 									</div>
 									
-									{#if document.metadata?.video_segment_url}
-										<!-- Video player (with audio fallback) -->
-										{#await loadMediaBlob(document.metadata.video_segment_url)}
-											<div class="flex items-center justify-center py-4 text-gray-500">
-												<span class="text-sm">Loading video...</span>
-											</div>
-										{:then videoBlobUrl}
-											{#if videoBlobUrl}
-												<video
-													controls
-													preload="metadata"
-													class="w-full max-h-[32rem] rounded"
-													style="max-width: 100%; object-fit: contain;"
-													src={videoBlobUrl}
-												>
-													Your browser does not support video playback.
-												</video>
-											{:else if document.metadata?.audio_segment_url}
-												<!-- Fallback to audio if video fails -->
-												{#await loadMediaBlob(document.metadata.audio_segment_url)}
-													<div class="flex items-center justify-center py-4 text-gray-500">
-														<span class="text-sm">Loading audio fallback...</span>
-													</div>
-												{:then audioBlobUrl}
-													{#if audioBlobUrl}
-														<audio controls preload="metadata" class="w-full" src={audioBlobUrl}>
-															Your browser does not support audio playback.
-														</audio>
-													{:else}
-														<div class="text-sm text-red-500">Failed to load media</div>
-													{/if}
-												{:catch}
-													<div class="text-sm text-red-500">Failed to load media</div>
-												{/await}
-											{:else}
-												<div class="text-sm text-red-500">Failed to load video</div>
-											{/if}
-										{:catch error}
-											<!-- Fallback to audio on error -->
-											{#if document.metadata?.audio_segment_url}
-												{#await loadMediaBlob(document.metadata.audio_segment_url)}
-													<div class="flex items-center justify-center py-4 text-gray-500">
-														<span class="text-sm">Loading audio fallback...</span>
-													</div>
-												{:then audioBlobUrl}
-													{#if audioBlobUrl}
-														<audio controls preload="metadata" class="w-full" src={audioBlobUrl}>
-															Your browser does not support audio playback.
-														</audio>
-													{:else}
-														<div class="text-sm text-red-500">Error: {error.message}</div>
-													{/if}
-												{:catch}
-													<div class="text-sm text-red-500">Error: {error.message}</div>
-												{/await}
-											{:else}
-												<div class="text-sm text-red-500">Error: {error.message}</div>
-											{/if}
-										{/await}
+                            {#if document.metadata?.video_url}
+                                <!-- Stream full video and seek to start timestamp -->
+                                <video
+                                    controls
+                                    preload="metadata"
+                                    class="w-full max-h-[32rem] rounded"
+                                    style="max-width: 100%; object-fit: contain;"
+                                    src={`${WEBUI_BASE_URL}${document.metadata.video_url}`}
+                                    on:loadedmetadata={(e) => onVideoMeta(e, document.metadata?.timestamp_start)}
+                                    playsinline
+                                >
+                                    Your browser does not support video playback.
+                                </video>
+                            {:else if document.metadata?.video_segment_url}
+                                <!-- Legacy segment fallback -->
+                                {#await loadMediaBlob(document.metadata.video_segment_url)}
+                                    <div class="flex items-center justify-center py-4 text-gray-500">
+                                        <span class="text-sm">Loading video...</span>
+                                    </div>
+                                {:then videoBlobUrl}
+                                    {#if videoBlobUrl}
+                                        <video
+                                            controls
+                                            preload="metadata"
+                                            class="w-full max-h-[32rem] rounded"
+                                            style="max-width: 100%; object-fit: contain;"
+                                            src={videoBlobUrl}
+                                        >
+                                            Your browser does not support video playback.
+                                        </video>
+                                    {:else}
+                                        <div class="text-sm text-red-500">Failed to load video</div>
+                                    {/if}
+                                {:catch}
+                                    <div class="text-sm text-red-500">Failed to load video</div>
+                                {/await}
 									{:else}
 										<!-- Audio-only player -->
 										{#await loadMediaBlob(document.metadata.audio_segment_url)}
