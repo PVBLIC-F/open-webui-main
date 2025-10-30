@@ -2168,14 +2168,15 @@ def process_file(
                     if timestamp_data.get("duration") is not None:
                         enriched_metadata["duration"] = timestamp_data["duration"]
                     
-                    # Add media segment URLs for playback if timestamps available
+                    # Add media URLs for playback
                     if (timestamp_data.get("timestamp_start") is not None and 
                         timestamp_data.get("timestamp_end") is not None):
                         # Check if source is video or audio
                         is_video = file.meta.get("content_type", "").startswith("video/")
                         
                         if is_video:
-                            # For video files, provide both video and audio URLs
+                            # For video files, provide both full video URL and audio URL/segment
+                            enriched_metadata["video_url"] = f"/api/v1/files/{file.id}/video"
                             enriched_metadata["video_segment_url"] = (
                                 f"/api/v1/audio/video/files/{file.id}/segment"
                                 f"?start={timestamp_data['timestamp_start']}"
@@ -2248,13 +2249,14 @@ def process_file(
                         filtered_metadata = {k: v for k, v in existing_metadata.items() 
                                            if k not in ["video_segment_url", "audio_segment_url"]}
                         
-                        # Regenerate segment URLs if timestamps are available
+                        # Regenerate URLs if timestamps are available
                         if "timestamp_start" in filtered_metadata and "timestamp_end" in filtered_metadata:
                             # Check if source is video or audio
                             is_video = file.meta.get("content_type", "").startswith("video/")
                             
                             if is_video:
-                                # For video files, provide both video and audio URLs
+                                # For video files, provide both full video URL and audio URL/segment
+                                filtered_metadata["video_url"] = f"/api/v1/files/{file.id}/video"
                                 filtered_metadata["video_segment_url"] = (
                                     f"/api/v1/audio/video/files/{file.id}/segment"
                                     f"?start={filtered_metadata['timestamp_start']}"
@@ -2286,6 +2288,9 @@ def process_file(
                     # Filter out potentially contaminated file-specific URLs from metadata
                     filtered_meta = {k: v for k, v in file.meta.items() 
                                    if k not in ["video_segment_url", "audio_segment_url"]}
+                    # If this is a video, include the full video URL for client-side seeking
+                    if file.meta.get("content_type", "").startswith("video/"):
+                        filtered_meta["video_url"] = f"/api/v1/files/{file.id}/video"
                     docs = [
                         Document(
                             page_content=file.data.get("content", ""),
