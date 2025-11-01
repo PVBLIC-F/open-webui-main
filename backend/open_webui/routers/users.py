@@ -723,6 +723,13 @@ async def force_gmail_sync(user_id: str, request: Request, user=Depends(get_admi
             detail="User has not connected their Google account"
         )
     
+    # Validate that token exists and has required fields
+    if not oauth_session.token or not oauth_session.token.get("access_token"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="OAuth session is missing access token"
+        )
+    
     # Reset sync status to force full sync
     sync_status = gmail_sync_status.get_sync_status(user_id)
     if sync_status:
@@ -735,13 +742,8 @@ async def force_gmail_sync(user_id: str, request: Request, user=Depends(get_admi
         )
         log.info(f"Reset Gmail sync status for user {user_id} - will do full sync")
     
-    # Prepare OAuth token
-    oauth_token = {
-        "access_token": oauth_session.access_token,
-        "refresh_token": oauth_session.refresh_token,
-        "token_type": "Bearer",
-        "expires_in": 3600,
-    }
+    # Prepare OAuth token from session (token is a dict with access_token, refresh_token, etc.)
+    oauth_token = oauth_session.token
     
     # Trigger sync immediately in background
     try:
