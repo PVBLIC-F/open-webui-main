@@ -4,13 +4,7 @@ import mimetypes
 import os
 import shutil
 import asyncio
-import re
-import unicodedata
-from html import unescape, parser
-from urllib.parse import unquote
-import numpy as np
-from markdown import Markdown
-from io import StringIO
+import time
 
 import re
 import uuid
@@ -126,705 +120,392 @@ log.setLevel(SRC_LOG_LEVELS["RAG"])
 ##########################################
 
 
-class TextCleaner:
-    """Centralized text cleaning utilities for improving vector database quality"""
-
-    @staticmethod
-    def _extract_latex(text: str) -> tuple[str, dict]:
-        """Extract LaTeX expressions to protect them during cleaning"""
-        latex_map = {}
-        counter = 0
-
-        # Patterns for LaTeX: $...$ or $$...$$ or \[...\] or \(...\)
-        patterns = [
-            (r"\$\$(.+?)\$\$", "$$LATEX_{}$$"),  # Display math
-            (r"\$(.+?)\$", "$LATEX_{}$"),  # Inline math
-            (r"\\\[(.+?)\\\]", "\\[LATEX_{}\\]"),  # Display math
-            (r"\\\((.+?)\\\)", "\\(LATEX_{}\\)"),  # Inline math
-        ]
-
-        for pattern, placeholder_template in patterns:
-            matches = re.finditer(pattern, text, re.DOTALL)
-            for match in matches:
-                placeholder = placeholder_template.format(counter)
-                latex_map[placeholder] = match.group(0)
-                text = text.replace(match.group(0), placeholder, 1)
-                counter += 1
-
-        return text, latex_map
-
-    @staticmethod
-    def _restore_latex(text: str, latex_map: dict) -> str:
-        """Restore LaTeX expressions after cleaning"""
-        for placeholder, original in latex_map.items():
-            text = text.replace(placeholder, original)
-        return text
-
-    @staticmethod
-    def clean_text(text) -> str:
-        """Clean text by properly handling escape sequences and special characters"""
-        if not text:
-            return ""
-
-        # Convert to string if needed
-        if isinstance(text, (list, tuple)):
-            text = "\n".join(str(item) for item in text)
-
-        # Handle quoted JSON strings
-        if isinstance(text, str) and text.startswith('"') and text.endswith('"'):
-            try:
-                parsed_text = json.loads(f"{text}")
-                if isinstance(parsed_text, str):
-                    text = parsed_text
-            except:
-                text = text[1:-1]
-
-        if isinstance(text, str):
-            # Protect LaTeX expressions before cleaning
-            text, latex_map = TextCleaner._extract_latex(text)
-
-            try:
-                # Handle HTML entities and URL encoding
-                text = unescape(text)
-                text = unquote(text)
-                text = unicodedata.normalize("NFKC", text)
-
-                # Remove control characters but keep newlines and tabs
-                control_chars = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]")
-                text = control_chars.sub("", text)
-            except:
-                pass
-
-            # Handle escape sequences (but not in LaTeX)
-            text = text.replace("\\n\\n", "\n\n")
-            text = text.replace("\\n", "\n")
-            text = text.replace("\\t", "\t")
-            text = text.replace("\\r", "")
-            text = text.replace('\\"', '"')
-            text = text.replace("\\'", "'")
-
-            # Restore LaTeX before normalizing double backslashes
-            text = TextCleaner._restore_latex(text, latex_map)
-
-            # Normalize whitespace
-            try:
-                text = re.sub(r" {2,}", " ", text)
-                text = re.sub(r"\n{3,}", "\n\n", text)
-                lines = text.split("\n")
-                lines = [line.strip() for line in lines]
-                text = "\n".join(lines)
-            except:
-                pass
-
-        return text.strip() if isinstance(text, str) else ""
-
-    @staticmethod
-    def clean_malformed_latex(text: str) -> str:
-        """
-        Remove or clean LaTeX expressions from OCR output.
-        For vector search, plain text is more useful than LaTeX math notation.
-        """
-        if not text:
-            return ""
-
-        def process_latex(match):
-            full_match = match.group(0)
-            latex_content = match.group(1)
-
-            # Check if LaTeX contains backslashed commands or special chars
-            has_commands = bool(re.search(r"\\[a-zA-Z]+", latex_content))
-            has_escaped_chars = bool(re.search(r"\\\$|\\\{|\\\}", latex_content))
-
-            # If it has LaTeX commands or escaped chars, extract plain text
-            if has_commands or has_escaped_chars:
-                # Remove LaTeX commands: \mathbf{, \text{, etc.
-                cleaned = re.sub(r"\\[a-zA-Z]+\*?\{?", "", latex_content)
-                # Remove braces
-                cleaned = re.sub(r"[{}]", "", cleaned)
-                # Convert \$ to $
-                cleaned = re.sub(r"\\\$", "$", cleaned)
-                # Remove remaining backslashes
-                cleaned = re.sub(r"\\+", "", cleaned)
-                # Normalize spaces
-                cleaned = re.sub(r"\s+", " ", cleaned).strip()
-
-                # Return cleaned text without $ wrappers
-                return cleaned if cleaned else ""
-
-            # Simple math expression without commands - keep it
-            return full_match
-
-        # Clean inline math $...$
-        text = re.sub(r"\$([^\$]+?)\$", process_latex, text)
-
-        # Remove display math $$...$$  entirely (usually malformed from OCR)
-        text = re.sub(r"\$\$[^\$]+?\$\$", "", text)
-
-        # Clean up leftover LaTeX fragments
-        text = re.sub(r"\}+\$", "", text)  # Remove }$
-        text = re.sub(r"\$\{+", "", text)  # Remove ${
-        text = re.sub(r"^\$|\$$", "", text)  # Remove standalone $ at start/end
-
-        # Clean double backslash sequences (common in OCR output)
-        text = re.sub(r"\\\\\$", "$", text)  # \\$ → $
-        text = re.sub(r"\\\\%", "%", text)  # \\% → %
-        text = re.sub(r"\\\\", "", text)  # Remove remaining \\
-
-        # Clean subscript notation from OCR (CO2_2 → CO2)
-        text = re.sub(r"([A-Z]+\d)_\d+", r"\1", text)  # CO2_2 → CO2
-
-        return text
-
-    @staticmethod
-    def markdown_to_plain_text(md_text: str) -> str:
-        """
-        Convert markdown to clean plain text using proper markdown parser.
-        This is the robust solution for handling OCR markdown output.
-        """
-        if not md_text:
-            return ""
-
-        try:
-            # Create HTML stripper
-            class HTMLStripper(parser.HTMLParser):
-                def __init__(self):
-                    super().__init__()
-                    self.reset()
-                    self.strict = False
-                    self.convert_charrefs = True
-                    self.text = StringIO()
-
-                def handle_data(self, d):
-                    self.text.write(d)
-
-                def handle_starttag(self, tag, attrs):
-                    if tag in [
-                        "br",
-                        "p",
-                        "div",
-                        "h1",
-                        "h2",
-                        "h3",
-                        "h4",
-                        "h5",
-                        "h6",
-                        "li",
-                    ]:
-                        self.text.write("\n")
-
-                def handle_endtag(self, tag):
-                    if tag in ["p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "li"]:
-                        self.text.write("\n")
-
-                def get_text(self):
-                    return self.text.getvalue()
-
-            # Convert markdown to HTML
-            md = Markdown(extensions=["extra", "nl2br"])
-            html = md.convert(md_text)
-
-            # Strip HTML tags to get plain text
-            stripper = HTMLStripper()
-            stripper.feed(html)
-            text = stripper.get_text()
-
-            # Clean malformed LaTeX that survived markdown conversion
-            text = TextCleaner.clean_malformed_latex(text)
-
-            # Final cleanup
-            text = re.sub(r"\n\s*\n\s*\n+", "\n\n", text)  # Max 2 newlines
-            text = re.sub(r" {2,}", " ", text)  # Multiple spaces
-            text = text.strip()
-
-            return text
-
-        except Exception as e:
-            log.error(f"Error converting markdown to plain text: {e}")
-            # Fallback to basic cleaning
-            return TextCleaner._basic_markdown_clean(md_text)
-
-    @staticmethod
-    def _basic_markdown_clean(text: str) -> str:
-        """Fallback: Basic markdown cleaning if parser fails"""
-        # Remove images
-        text = re.sub(r"!\[[^\]]*\]\([^\)]*\)", "", text)
-        # Remove image filenames
-        text = re.sub(
-            r"\b[\w\-]+\.(jpe?g|png|gif|webp)\b\s*-?\s*", "", text, flags=re.IGNORECASE
-        )
-        # Remove table markers
-        text = re.sub(r"\|[\s\-:]+\|+", "", text)
-        text = re.sub(r"^\s*\|+\s*$", "", text, flags=re.MULTILINE)
-        # Remove headers
-        text = re.sub(r"^#+\s+", "", text, flags=re.MULTILINE)
-        # Clean whitespace
-        text = re.sub(r"\n\s*\n\s*\n+", "\n\n", text)
-        return text.strip()
-
-    @staticmethod
-    def clean_markdown_artifacts(text: str) -> str:
-        """
-        Clean markdown using proper parser for robust handling.
-        Converts markdown to plain text, preserving content but removing formatting.
-        """
-        return TextCleaner.markdown_to_plain_text(text)
-
-    @staticmethod
-    def clean_for_vector_db(text) -> str:
-        """
-        Final cleaning for vector database storage.
-        Note: This is called AFTER chunking for final polishing only.
-        Main cleaning happens before chunking.
-        """
-        if not text:
-            return ""
-
-        # Remove zero-width characters and other problematic Unicode
-        text = re.sub(r"[\x00-\x1F\x7F-\x9F\u200B-\u200D\uFEFF]", "", text)
-
-        # Final whitespace normalization (aggressive single-space)
-        text = re.sub(r"\s+", " ", text).strip()
-
-        # Ensure valid UTF-8
-        text = text.encode("utf-8", "ignore").decode("utf-8")
-
-        # Prevent excessively long chunks (safety check)
-        max_length = 10000
-        if len(text) > max_length:
-            text = text[:max_length] + "..."
-
-        return text
-
-    @staticmethod
-    def remove_email_signatures(text: str) -> str:
-        """
-        Remove common email signature patterns.
-        
-        Detects and removes signatures by identifying:
-        - Standard email signature separator (-- on its own line)
-        - Lines of dashes or underscores (signature separators)
-        - Common closing phrases (Best regards, Sincerely, etc.) followed by contact info
-        
-        Performance: O(n) where n is number of lines in text
-        Security: Safe for untrusted input, no code execution
-        
-        Args:
-            text: Email body text that may contain a signature
-            
-        Returns:
-            Text with signature removed, or original text if no signature detected
-            
-        Examples:
-            >>> text = "Meeting at 2pm.\\n\\nBest regards,\\nJohn\\njohn@example.com"
-            >>> TextCleaner.remove_email_signatures(text)
-            "Meeting at 2pm."
-        """
-        if not text:
-            return ""
-        
-        # Input validation - ensure string type
-        if not isinstance(text, str):
-            return ""
-        
-        # Prevent catastrophic performance on extremely large inputs
-        max_lines = 10000
-        lines = text.split('\n', max_lines)
-        if len(lines) >= max_lines:
-            log.warning(f"Email text exceeds {max_lines} lines, truncating for signature detection")
-        
-        sig_start_idx = len(lines)
-        
-        # Scan for signature patterns
-        for i, line in enumerate(lines):
-            stripped = line.strip()
-            line_lower = stripped.lower()
-            
-            # Pattern 1: Standard RFC 3676 signature separator
-            if stripped == '--':
-                sig_start_idx = i
-                break
-            
-            # Pattern 2: Lines of repeated dashes or underscores (5+ chars)
-            if re.match(r'^[\s_-]{5,}$', stripped):
-                sig_start_idx = i
-                break
-            
-            # Pattern 3: Common closing phrases followed by contact info
-            # Match: "Best regards," "Sincerely," "Thanks," etc.
-            closing_pattern = r'^(best\s*regards?|sincerely|thanks?|cheers|regards?|warm\s*regards?|kind\s*regards?),?\s*$'
-            if re.match(closing_pattern, line_lower):
-                # Look ahead to confirm signature (contact info on next line)
-                if i + 1 < len(lines):
-                    next_line = lines[i + 1].strip()
-                    # Check if next line looks like signature content
-                    has_email = '@' in next_line
-                    has_phone = re.search(r'\d{3}[-.\s]?\d{3}[-.\s]?\d{4}', next_line)
-                    is_short_name = len(next_line.split()) <= 4 and next_line  # Likely a name
-                    
-                    if has_email or has_phone or is_short_name:
-                        sig_start_idx = i
-                        break
-        
-        # Extract content before signature
-        content_lines = lines[:sig_start_idx]
-        
-        # Join and clean up trailing whitespace
-        result = '\n'.join(content_lines).rstrip()
-        
-        return result
-
-    @staticmethod
-    def remove_quoted_replies(text: str) -> str:
-        """
-        Remove quoted reply sections from emails.
-        
-        Removes common email reply patterns:
-        - "On [date], [person] wrote:" followed by quoted content
-        - Lines prefixed with > or >> (standard quote markers)
-        - Preserves original message content
-        
-        Performance: O(n) where n is text length
-        Security: Uses non-backtracking regex to prevent ReDoS attacks
-        
-        Args:
-            text: Email body text that may contain quoted replies
-            
-        Returns:
-            Text with quoted replies removed
-            
-        Examples:
-            >>> text = "Yes, sounds good.\\n\\nOn Mon, Jane wrote:\\n> Can we meet?"
-            >>> TextCleaner.remove_quoted_replies(text)
-            "Yes, sounds good."
-        """
-        if not text:
-            return ""
-        
-        # Input validation
-        if not isinstance(text, str):
-            return ""
-        
-        # Pattern 1: Remove "On [date/time], [person] wrote:" blocks
-        # Use atomic grouping to prevent ReDoS on malicious input
-        # Matches: "On Mon, Jan 15, 2024, Jane <jane@example.com> wrote:"
-        text = re.sub(
-            r'\n+On\s+.{0,200}?wrote:\s*.*',  # Limit lookahead to 200 chars
-            '',
-            text,
-            flags=re.DOTALL | re.IGNORECASE
-        )
-        
-        # Pattern 2: Remove lines starting with > or >> (quote markers)
-        # Process line by line for better performance and control
-        lines = text.split('\n')
-        
-        # Filter out quoted lines
-        filtered_lines = []
-        for line in lines:
-            stripped = line.lstrip()
-            # Skip lines that start with quote markers
-            if not stripped.startswith('>'):
-                filtered_lines.append(line)
-        
-        result = '\n'.join(filtered_lines)
-        
-        # Clean up excessive newlines that may result from removal
-        result = re.sub(r'\n{3,}', '\n\n', result)
-        
-        return result.strip()
-
-    @staticmethod
-    def clean_email_text(text: str) -> str:
-        """
-        Comprehensive email cleaning pipeline optimized for vector embeddings.
-        
-        Applies a series of cleaning operations specifically designed for email content:
-        1. Basic text normalization (preserves LaTeX notation for technical emails)
-        2. Remove quoted reply sections (keeps only original message)
-        3. Remove email signatures (eliminates noise in embeddings)
-        4. Clean markdown artifacts (if present in HTML-rendered emails)
-        5. Clean OCR artifacts (if email contains scanned/OCR'd content)
-        6. Final whitespace normalization
-        
-        This method is designed for:
-        - High-quality vector embeddings
-        - Semantic search accuracy
-        - Entity extraction from clean text
-        
-        Performance: O(n) where n is text length, optimized for typical email sizes
-        Security: All regex patterns are ReDoS-safe with bounded quantifiers
-        Memory: Processes text in-place where possible
-        
-        Args:
-            text: Raw email body text (plain text or HTML-converted)
-            
-        Returns:
-            Cleaned text ready for embedding, with signatures and quotes removed
-            
-        Examples:
-            >>> email = "Meeting notes...\\n\\nBest,\\nJohn\\n--\\nJohn Smith\\njohn@example.com"
-            >>> TextCleaner.clean_email_text(email)
-            "Meeting notes..."
-        """
-        if not text:
-            return ""
-        
-        # Input validation and type safety
-        if not isinstance(text, str):
-            log.warning("clean_email_text received non-string input, converting")
-            text = str(text)
-        
-        # Performance optimization: Skip processing for very short text
-        if len(text.strip()) < 10:
-            return text.strip()
-        
-        # Step 1: Basic text cleaning with LaTeX preservation
-        # This handles: HTML entities, escape sequences, Unicode normalization
-        text = TextCleaner.clean_text(text)
-        
-        # Step 2: Remove quoted replies (keeps only original message)
-        # Must be done before signature removal to avoid false positives
-        text = TextCleaner.remove_quoted_replies(text)
-        
-        # Step 3: Remove email signatures
-        # Eliminates boilerplate that adds noise to embeddings
-        text = TextCleaner.remove_email_signatures(text)
-        
-        # Step 4: Clean markdown artifacts if present
-        # Check for markdown indicators before running expensive parser
-        markdown_indicators = ['**', '__', '##', '```', '![', '](']
-        if any(indicator in text for indicator in markdown_indicators):
-            text = TextCleaner.clean_markdown_artifacts(text)
-        
-        # Step 5: Clean OCR artifacts if present
-        # Check for common OCR patterns before running cleaning
-        ocr_patterns = ['\\\\$', '\\\\%', '\\\\']
-        if any(pattern in text for pattern in ocr_patterns):
-            text = TextCleaner.clean_malformed_latex(text)
-        
-        # Step 6: Final cleanup
-        # Remove excessive newlines (max 2 consecutive)
-        text = re.sub(r'\n{3,}', '\n\n', text)
-        
-        # Remove leading/trailing whitespace
-        text = text.strip()
-        
-        return text
-
-
-class HierarchicalChunker:
+def extract_enhanced_metadata(text: str, use_llm: bool = False) -> dict:
     """
-    Creates hierarchical parent-child chunks for better retrieval.
-    Child chunks are small and precise for retrieval.
-    Parent chunks are large and provide full context for generation.
+    Extract comprehensive metadata from text for improved RAG retrieval.
+    
+    High-Impact Features:
+    1. Chunk Summary & Title (helps users understand relevance)
+    2. Enhanced Entity Extraction (people, orgs, locations)
+    3. Question Generation (improves question-based retrieval)
+    
+    Args:
+        text: Text to analyze
+        use_llm: If True, use LLM for extraction (more accurate but slower)
+        
+    Returns:
+        Dictionary with summary, title, topics, entities, keywords, questions
     """
+    if not text or len(text.strip()) < 10:
+        return {
+            "chunk_summary": "",
+            "chunk_title": "",
+            "topics": [],
+            "entities_people": [],
+            "entities_organizations": [],
+            "entities_locations": [],
+            "keywords": [],
+            "potential_questions": []
+        }
+    
+    # Compile regex patterns once (performance optimization)
+    # These are stateless and can be reused
+    text_length = len(text)
+    
+    # === FEATURE 1: CHUNK SUMMARY & TITLE ===
+    chunk_summary, chunk_title = _generate_summary_and_title(text)
+    
+    # === FEATURE 2: ENHANCED ENTITY EXTRACTION ===
+    entities = _extract_enhanced_entities(text)
+    
+    # === FEATURE 3: QUESTION GENERATION ===
+    questions = _generate_potential_questions(text)
+    
+    # Extract keywords (words longer than 5 chars, frequent)
+    # Performance: Use Counter for better performance than manual dict
+    from collections import Counter
+    words = re.findall(r'\b[a-z]{6,}\b', text.lower())
+    word_freq = Counter(words)
+    
+    # Get top keywords by frequency (minimum 2 occurrences)
+    keywords = [word for word, freq in word_freq.most_common(10) if freq > 1]
+    
+    # Extract potential topics (capitalized phrases) with comprehensive stopword filtering
+    # Comprehensive English stopwords that should never be topics
+    STOPWORDS = {
+        # Articles & Demonstratives
+        'A', 'An', 'The', 'This', 'That', 'These', 'Those',
+        # Pronouns
+        'I', 'You', 'He', 'She', 'It', 'We', 'They', 'Me', 'Him', 'Her', 'Us', 'Them',
+        'My', 'Your', 'His', 'Her', 'Its', 'Our', 'Their', 'Mine', 'Yours', 'Hers', 'Ours', 'Theirs',
+        'Myself', 'Yourself', 'Himself', 'Herself', 'Itself', 'Ourselves', 'Yourselves', 'Themselves',
+        # Conjunctions
+        'And', 'But', 'Or', 'Nor', 'For', 'Yet', 'So', 'Because', 'Since', 'Unless', 'Although', 'Though',
+        # Prepositions
+        'In', 'On', 'At', 'To', 'For', 'Of', 'From', 'By', 'With', 'About', 'Against', 'Between',
+        'Into', 'Through', 'During', 'Before', 'After', 'Above', 'Below', 'Up', 'Down', 'Out', 'Off',
+        'Over', 'Under', 'Again', 'Further', 'Then', 'Once', 'Here', 'There', 'Where', 'When',
+        # Common Verbs
+        'Am', 'Is', 'Are', 'Was', 'Were', 'Be', 'Been', 'Being', 'Have', 'Has', 'Had', 'Having',
+        'Do', 'Does', 'Did', 'Doing', 'Will', 'Would', 'Should', 'Could', 'Might', 'May', 'Can', 'Must',
+        'Shall', 'Get', 'Gets', 'Got', 'Getting', 'Make', 'Makes', 'Made', 'Making', 'Go', 'Goes', 'Went',
+        # Interrogatives
+        'Who', 'What', 'Which', 'When', 'Where', 'Why', 'How', 'Whose', 'Whom',
+        # Quantifiers & Adjectives  
+        'All', 'Any', 'Both', 'Each', 'Few', 'More', 'Most', 'Other', 'Some', 'Such', 'No',
+        'Only', 'Own', 'Same', 'Than', 'Too', 'Very', 'Just', 'Now', 'Even', 'Also', 'Well',
+        'Many', 'Much', 'Every', 'Another', 'Still', 'Back', 'New', 'Old', 'Good', 'Bad', 'Great',
+        # Negations & Modals
+        'Not', 'Never', 'Nothing', 'Nobody', 'None', 'Neither', 'Nowhere',
+        # Common sentence starters
+        'If', 'Whether', 'As', 'Like', 'Unlike'
+    }
+    
+    # Extract all capitalized phrases
+    topics_raw = re.findall(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b', text)
+    
+    # Apply comprehensive filtering
+    topics_filtered = []
+    for topic in topics_raw:
+        # Skip if it's in stopwords
+        if topic in STOPWORDS:
+            continue
+        # Skip very short words (likely not meaningful topics)
+        if len(topic) <= 2:
+            continue
+        # Skip if it's a single letter followed by lowercase (e.g., "A" or "I")
+        if len(topic) == 1:
+            continue
+        # Add to filtered list
+        topics_filtered.append(topic)
+    
+    # Remove duplicates, sort for consistency, limit to top 5
+    topics = sorted(set(topics_filtered))[:5]
+    
+    return {
+        "chunk_summary": chunk_summary,
+        "chunk_title": chunk_title,
+        "topics": topics,
+        "entities_people": entities["people"][:5],
+        "entities_organizations": entities["organizations"][:5],
+        "entities_locations": entities["locations"][:5],
+        "keywords": keywords,
+        "potential_questions": questions
+    }
 
-    @staticmethod
-    def create_hierarchical_chunks(
-        docs: list[Document],
-        parent_splitter,
-        child_splitter,
-        min_parent_size: int = 800,
-    ) -> list[Document]:
-        """
-        Split documents into parent chunks, then split each parent into child chunks.
-        Each child maintains a reference to its parent content.
 
-        If parent chunk is too small (< min_parent_size), skip hierarchical splitting
-        and treat it as a regular chunk to avoid parent=child duplicates.
-        """
-        hierarchical_docs = []
+def _generate_summary_and_title(text: str) -> tuple:
+    """
+    Generate a concise summary and title for a text chunk.
+    Uses extractive summarization (first + important sentences).
+    
+    Returns:
+        Tuple of (summary, title)
+    """
+    sentences = re.split(r'[.!?]+', text)
+    sentences = [s.strip() for s in sentences if len(s.strip()) > 20]
+    
+    if not sentences:
+        return "", ""
+    
+    # Title: Extract from first sentence or use key phrases
+    first_sentence = sentences[0]
+    title_words = first_sentence.split()[:8]  # First 8 words
+    title = " ".join(title_words)
+    if len(first_sentence) > len(title):
+        title += "..."
+    
+    # Summary: Use first sentence + most informative sentence
+    summary = sentences[0]
+    
+    # Find sentence with most keywords/numbers (likely most informative)
+    if len(sentences) > 1:
+        scored_sentences = []
+        for sent in sentences[1:4]:  # Check next 3 sentences
+            # Score based on: numbers, question words, key phrases
+            score = 0
+            score += len(re.findall(r'\d+', sent)) * 2  # Numbers are informative
+            score += len(re.findall(r'\b[A-Z][a-z]+\b', sent))  # Proper nouns
+            if any(word in sent.lower() for word in ['important', 'key', 'main', 'significant', 'shows', 'found']):
+                score += 3
+            scored_sentences.append((score, sent))
+        
+        if scored_sentences:
+            scored_sentences.sort(reverse=True, key=lambda x: x[0])
+            best_sentence = scored_sentences[0][1]
+            if best_sentence != summary:
+                summary = f"{summary}. {best_sentence}"
+    
+    # Limit summary length
+    if len(summary) > 250:
+        summary = summary[:247] + "..."
+    
+    return summary, title
 
-        for doc in docs:
-            # Step 1: Create parent chunks (large, for context)
-            parent_chunks = parent_splitter.split_documents([doc])
 
-            # Step 2: For each parent, create child chunks (small, for retrieval)
-            for parent_idx, parent_chunk in enumerate(parent_chunks):
-                parent_content = parent_chunk.page_content
+def _extract_enhanced_entities(text: str) -> dict:
+    """
+    Enhanced entity extraction using multiple patterns and heuristics.
+    Extracts: people, organizations, locations.
+    
+    Returns:
+        Dictionary with lists of entities by type
+    """
+    # ===== PEOPLE EXTRACTION =====
+    people = set()
+    
+    # Pattern 1: Full names (First Last, First Middle Last)
+    people.update(re.findall(r'\b[A-Z][a-z]+\s+(?:[A-Z][a-z]+\s+)?[A-Z][a-z]+\b', text))
+    
+    # Pattern 2: Names with titles (Dr., Mr., Ms., Prof., etc.)
+    people.update(re.findall(r'\b(?:Dr|Mr|Ms|Mrs|Prof|Professor|Rev)\.?\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\b', text))
+    
+    # ===== ORGANIZATION EXTRACTION =====
+    organizations = set()
+    
+    # Pattern 1: Organizations with explicit keywords (combined into single regex for performance)
+    org_suffix = r'(?:Inc|Corp|Corporation|Company|LLC|Ltd|Institute|Foundation|Organization|Association|University|College|Agency|Department|Bureau|Commission|Council|Center|Centre|Group|Team|Network|Alliance|Coalition|Initiative|Project|Program)'
+    organizations.update(re.findall(rf'\b(?:The\s+)?[A-Z][A-Za-z\s&]+{org_suffix}\b', text))
+    
+    # Pattern 2: All-caps acronyms (3-6 letters, likely organizations)
+    common_words = {'US', 'UK', 'EU', 'UN', 'OK', 'PDF', 'CEO', 'CFO', 'CTO', 'AI', 'IT', 'HR', 'FAQ', 'DIY'}
+    acronyms = [a for a in re.findall(r'\b[A-Z]{3,6}\b', text) if a not in common_words]
+    organizations.update(acronyms)
+    
+    # Pattern 3: Media organizations
+    media_suffix = r'(?:Media|News|Press|Journal|Times|Post|Tribune|Herald|Gazette|Network|Channel|Radio|TV|Broadcasting)'
+    organizations.update(re.findall(rf'\b[A-Z][A-Za-z\s]+{media_suffix}\b', text))
+    
+    # ===== LOCATION EXTRACTION =====
+    locations = set()
+    
+    # Pattern 1: City, State/Country patterns
+    locations.update(re.findall(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*,\s+[A-Z]{2}\b', text))  # City, ST
+    locations.update(re.findall(r'\b[A-Z][a-z]+,\s+[A-Z][a-z]+\b', text))  # City, Country
+    
+    # Pattern 2: Preposition + location (in/at/from/to Location)
+    prep_locations = re.findall(r'\b(?:in|at|from|to)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b', text)
+    locations.update([loc for loc in prep_locations if len(loc) > 2])
+    
+    # Pattern 3: Geographic keywords
+    geo_suffix = r'(?:City|County|State|Province|Region|District|Area|Zone|Bay|Valley|Mountain|River|Lake|Ocean|Sea|Island|Peninsula)'
+    locations.update(re.findall(rf'\b[A-Z][a-z]+\s+{geo_suffix}\b', text))
+    
+    # ===== CLEANUP & FILTERING =====
+    # Remove people names that appear in organizations (keep most specific)
+    people_clean = [p for p in people if not any(p in org for org in organizations)]
+    
+    # Filter by minimum length and convert to sorted lists for consistency
+    return {
+        "people": sorted([p.strip() for p in people_clean if len(p.strip()) > 2]),
+        "organizations": sorted([o.strip() for o in organizations if len(o.strip()) > 2]),
+        "locations": sorted([loc.strip() for loc in locations if len(loc.strip()) > 2])
+    }
 
-                # Skip hierarchical splitting if parent is too small
-                # (would result in parent ≈ child, wasting storage)
-                if len(parent_content) < min_parent_size:
-                    # Treat as regular chunk (no hierarchy)
-                    regular_doc = Document(
-                        page_content=parent_content,
-                        metadata={
-                            **doc.metadata,
-                            **parent_chunk.metadata,
-                            "is_hierarchical": False,
-                        },
-                    )
-                    hierarchical_docs.append(regular_doc)
+
+def _generate_potential_questions(text: str) -> list:
+    """
+    Generate potential questions that this text chunk could answer.
+    Uses pattern matching and heuristics for 6 question types.
+    
+    Returns:
+        List of up to 5 unique questions
+    """
+    questions = []
+    
+    # Extract and filter sentences once for reuse
+    sentences = [s.strip() for s in re.split(r'[.!?]+', text) if len(s.strip()) > 10]
+    
+    if not sentences:
+        return []
+    
+    # Pattern 1: Extract explicit questions from text (only if they're not rhetorical)
+    # Filter out rhetorical questions like "guess what?", "you know what?", "right?"
+    rhetorical_patterns = [
+        r'guess what\?', r'you know what\?', r'know what\?', r'right\?', 
+        r'okay\?', r'yeah\?', r'see\?', r'get it\?'
+    ]
+    explicit_questions = re.findall(r'[A-Z][^.!?]*\?', text)
+    for q in explicit_questions[:3]:
+        # Skip if it's a rhetorical question or too short
+        if len(q) > 15 and not any(re.search(pattern, q, re.IGNORECASE) for pattern in rhetorical_patterns):
+            questions.append(q)
+    
+    # Limit sentence processing to first 5 for performance
+    sentences_subset = sentences[:5]
+    
+    # Pattern 2: Generate questions from statements with numbers/statistics
+    for sentence in sentences_subset:
+        numbers = re.findall(r'\d+(?:\.\d+)?%?', sentence)
+        if not numbers:
+            continue
+            
+        for num in numbers[:2]:  # Limit to 2 numbers per sentence
+            words = sentence.split()
+            # Find word index containing the number
+            num_idx = next((i for i, w in enumerate(words) if num in w), None)
+            if num_idx is not None:
+                # Extract context (3 words before and after)
+                context_start = max(0, num_idx - 3)
+                context_end = min(len(words), num_idx + 4)
+                context = " ".join(words[context_start:context_end])
+                
+                question_type = "What percentage" if '%' in num else "What are the numbers related to"
+                questions.append(f"{question_type} {context.lower()}?")
+    
+    # Pattern 3: Generate "What is..." questions for definitions
+    for sentence in sentences_subset:
+        sentence_lower = sentence.lower()
+        if not any(word in sentence_lower for word in [' is ', ' are ', ' means ', ' refers to ']):
                     continue
 
-                parent_id = f"{doc.metadata.get('file_id', 'unknown')}_{parent_idx}"
+        # Try to extract subject (the thing being defined)
+        match = re.search(r'^((?:a|an|the)?\s*[A-Z][^,]+?)\s+(?:is|are|means|refers to)\s+', sentence, re.IGNORECASE)
+        if match:
+            subject = match.group(1).strip()
+            # Clean up articles and check length
+            subject = re.sub(r'^(a|an|the)\s+', '', subject, flags=re.IGNORECASE).strip()
+            # Check if subject is reasonable (proper noun or important term)
+            if 3 < len(subject) < 50 and (subject[0].isupper() or any(word in subject.lower() for word in ['approach', 'method', 'process', 'system', 'model'])):
+                # Capitalize first letter for consistency
+                subject = subject[0].upper() + subject[1:]
+                questions.append(f"What is {subject}?")
+    
+    # Pattern 4: Generate "Who..." questions for people mentions
+    people_names = re.findall(r'\b[A-Z][a-z]+\s+[A-Z][a-z]+\b', text)[:2]
+    for name in people_names:
+        # Find action verb following the name
+        match = re.search(rf'{re.escape(name)}\s+([a-z]+(?:\s+[a-z]+){{0,4}})', text)
+        if match:
+            questions.append(f"Who {match.group(1)}?")
+    
+    # Pattern 5: Generate "How..." questions for process/method descriptions
+    how_keywords = ['how', 'process', 'method', 'way', 'approach', 'technique']
+    for sentence in sentences_subset:
+        if any(word in sentence.lower() for word in how_keywords):
+            verbs = re.findall(r'\b(?:to\s+)?([a-z]+(?:ing|ed)?)\b', sentence.lower())
+            if verbs:
+                questions.append(f"How to {verbs[0]}?")
+                break  # Only one "how" question needed
+    
+    # Pattern 6: Generate "Why..." questions for causal/explanatory statements
+    causal_keywords = ['because', 'since', 'reason', 'cause', 'due to', 'result']
+    for sentence in sentences_subset:
+        if any(word in sentence.lower() for word in causal_keywords):
+            topic = " ".join(sentence.split()[:10])
+            if len(topic) > 10:
+                questions.append(f"Why {topic.lower()}?")
+                break  # Only one "why" question needed
+    
+    # Deduplicate while preserving order and limit to 5 questions
+    seen = set()
+    unique_questions = []
+    for q in questions:
+        q_clean = q.strip()
+        q_normalized = q_clean.lower()
+        if q_normalized not in seen and 10 < len(q_clean) < 150:
+            seen.add(q_normalized)
+            unique_questions.append(q_clean)
+            if len(unique_questions) >= 5:
+                break
+    
+    return unique_questions
 
-                # Split parent into children
-                child_chunks = child_splitter.split_text(parent_content)
 
-                # Only create hierarchy if we got multiple children
-                if len(child_chunks) == 1:
-                    # Parent didn't split, treat as regular chunk
-                    regular_doc = Document(
-                        page_content=parent_content,
-                        metadata={
-                            **doc.metadata,
-                            **parent_chunk.metadata,
-                            "is_hierarchical": False,
-                        },
-                    )
-                    hierarchical_docs.append(regular_doc)
-                else:
-                    # Create child documents with parent reference
-                    for child_idx, child_content in enumerate(child_chunks):
-                        child_doc = Document(
-                            page_content=child_content,
-                            metadata={
-                                **doc.metadata,
-                                **parent_chunk.metadata,
-                                "parent_id": parent_id,
-                                "parent_content": parent_content,  # Store full parent for context
-                                "child_index": child_idx,
-                                "is_hierarchical": True,
-                            },
-                        )
-                        hierarchical_docs.append(child_doc)
-
-        log.info(
-            f"Created {len(hierarchical_docs)} chunks from {len(docs)} documents (hierarchical where beneficial)"
-        )
-        return hierarchical_docs
-
-
-class SemanticTextSplitter:
+def align_chunk_with_timestamps(chunk_text: str, segments: list, chunk_start_char: int, full_text: str) -> dict:
     """
-    Split text based on semantic similarity using embeddings.
-    Detects topic boundaries by measuring similarity between text segments.
-    """
-
-    @staticmethod
-    def split_into_sentences(text: str) -> list[str]:
-        """Split text into sentences using regex for better boundary detection"""
-        # Pattern for sentence boundaries (periods, exclamation, question marks)
-        # Handles common abbreviations and edge cases
-        sentence_pattern = r"(?<!\w\.\w.)(?<![A-Z][a-z]\.)(?<=\.|\?|!)\s"
-        sentences = re.split(sentence_pattern, text)
-        # Clean and filter empty sentences
-        sentences = [s.strip() for s in sentences if s.strip()]
-        return sentences
-
-    @staticmethod
-    def cosine_similarity(vec1: np.ndarray, vec2: np.ndarray) -> float:
-        """Calculate cosine similarity between two vectors"""
-        if len(vec1) == 0 or len(vec2) == 0:
-            return 0.0
-        dot_product = np.dot(vec1, vec2)
-        norm_a = np.linalg.norm(vec1)
-        norm_b = np.linalg.norm(vec2)
-        if norm_a == 0 or norm_b == 0:
-            return 0.0
-        return float(dot_product / (norm_a * norm_b))
-
-    @staticmethod
-    def split_text_semantically(
-        text: str,
-        embedding_function,
-        similarity_threshold: float = 0.75,
-        min_chunk_size: int = 300,
-        max_chunk_size: int = 2000,
-    ) -> list[str]:
-        """
-        Split text by semantic similarity.
+    Find the timestamps that align with a text chunk from the full transcript.
 
         Args:
-            text: Text to split
-            embedding_function: Function that generates embeddings for text
-            similarity_threshold: Similarity below this triggers a new chunk (0-1)
-            min_chunk_size: Minimum characters per chunk
-            max_chunk_size: Maximum characters per chunk
+        chunk_text: The chunked text
+        segments: List of segments with timestamps from Whisper
+        chunk_start_char: Character position where this chunk starts in full transcript
+        full_text: The complete transcript text
 
         Returns:
-            List of semantically coherent text chunks
-        """
-        sentences = SemanticTextSplitter.split_into_sentences(text)
-
-        if len(sentences) <= 1:
-            return [text]
-
-        try:
-            # Generate embeddings for each sentence
-            embeddings = []
-            for sentence in sentences:
-                if len(sentence.strip()) > 10:  # Skip very short sentences
-                    try:
-                        emb = embedding_function(sentence)
-                        if isinstance(emb, list):
-                            emb = np.array(emb)
-                        embeddings.append(emb)
-                    except Exception as e:
-                        log.debug(f"Error generating embedding for sentence: {e}")
-                        embeddings.append(None)
-                else:
-                    embeddings.append(None)
-
-            # Build chunks based on semantic similarity
-            chunks = []
-            current_chunk = [sentences[0]]
-            current_length = len(sentences[0])
-
-            for i in range(1, len(sentences)):
-                if embeddings[i - 1] is None or embeddings[i] is None:
-                    # No embedding, use size-based chunking
-                    if current_length + len(sentences[i]) <= max_chunk_size:
-                        current_chunk.append(sentences[i])
-                        current_length += len(sentences[i])
-                    else:
-                        if current_length >= min_chunk_size:
-                            chunks.append(" ".join(current_chunk))
-                            current_chunk = [sentences[i]]
-                            current_length = len(sentences[i])
-                        else:
-                            current_chunk.append(sentences[i])
-                            current_length += len(sentences[i])
-                    continue
-
-                # Calculate semantic similarity
-                similarity = SemanticTextSplitter.cosine_similarity(
-                    embeddings[i - 1], embeddings[i]
-                )
-
-                # Check if we should start a new chunk
-                topic_boundary = similarity < similarity_threshold
-                size_exceeded = current_length + len(sentences[i]) > max_chunk_size
-                meets_min_size = current_length >= min_chunk_size
-
-                if (topic_boundary and meets_min_size) or size_exceeded:
-                    # Start new chunk
-                    chunks.append(" ".join(current_chunk))
-                    current_chunk = [sentences[i]]
-                    current_length = len(sentences[i])
-                else:
-                    # Continue current chunk
-                    current_chunk.append(sentences[i])
-                    current_length += len(sentences[i])
-
-            # Add the last chunk
-            if current_chunk:
-                chunks.append(" ".join(current_chunk))
-
-            log.debug(
-                f"Semantic splitting: {len(sentences)} sentences → {len(chunks)} chunks"
-            )
-            return chunks
-
-        except Exception as e:
-            log.error(f"Error in semantic splitting: {e}")
-            # Fallback to simple character-based splitting
-            return [
-                text[i : i + max_chunk_size]
-                for i in range(0, len(text), max_chunk_size)
-            ]
+        Dictionary with timestamp_start, timestamp_end, and matching segments
+    """
+    if not segments or not chunk_text:
+        return {
+            "timestamp_start": None,
+            "timestamp_end": None,
+            "segment_ids": [],
+            "duration": None
+        }
+    
+    # Find which segments overlap with this chunk based on text matching
+    chunk_words = set(chunk_text.lower().split())
+    chunk_length = len(chunk_text)
+    chunk_end_char = chunk_start_char + chunk_length
+    
+    matching_segments = []
+    current_char_pos = 0
+    
+    for segment in segments:
+        segment_text = segment.get("text", "")
+        segment_start_char = current_char_pos
+        segment_end_char = current_char_pos + len(segment_text)
+        
+        # Check if this segment overlaps with the chunk
+        if not (segment_end_char < chunk_start_char or segment_start_char > chunk_end_char):
+            matching_segments.append(segment)
+        
+        current_char_pos = segment_end_char + 1  # +1 for space between segments
+    
+    if matching_segments:
+        return {
+            "timestamp_start": round(matching_segments[0]["start"], 2),
+            "timestamp_end": round(matching_segments[-1]["end"], 2),
+            "segment_ids": [seg.get("id", i) for i, seg in enumerate(matching_segments)],
+            "duration": round(matching_segments[-1]["end"] - matching_segments[0]["start"], 2)
+        }
+    
+    return {
+        "timestamp_start": None,
+        "timestamp_end": None,
+        "segment_ids": [],
+        "duration": None
+    }
 
 
 def get_ef(
@@ -872,7 +553,18 @@ def get_rf(
                 log.error(f"ColBERT: {e}")
                 raise Exception(ERROR_MESSAGES.DEFAULT(e))
         else:
-            if engine == "external":
+            if engine == "pinecone":
+                try:
+                    from open_webui.retrieval.models.pinecone_reranker import PineconeReranker
+
+                    rf = PineconeReranker(
+                        api_key=None,  # Will use PINECONE_API_KEY from environment
+                        model=reranking_model,
+                    )
+                except Exception as e:
+                    log.error(f"PineconeReranking: {e}")
+                    raise Exception(ERROR_MESSAGES.DEFAULT(e))
+            elif engine == "external":
                 try:
                     from open_webui.retrieval.models.external import ExternalReranker
 
@@ -2019,105 +1711,32 @@ def save_docs_to_vector_db(
         if result is not None:
             existing_doc_ids = result.ids[0]
             if existing_doc_ids:
-                log.info(f"Document with hash {metadata['hash']} already exists")
-                raise ValueError(ERROR_MESSAGES.DUPLICATE_CONTENT)
+                log.info(f"Document with hash {metadata['hash']} already exists in collection {collection_name}")
+                
+                # If overwrite is True, delete existing documents first
+                if overwrite:
+                    log.info(f"Overwriting existing documents with hash {metadata['hash']}")
+                    try:
+                        VECTOR_DB_CLIENT.delete(
+                            collection_name=collection_name,
+                            ids=existing_doc_ids
+                        )
+                        log.info(f"Deleted {len(existing_doc_ids)} existing documents")
+                    except Exception as e:
+                        log.warning(f"Failed to delete existing documents: {e}")
+                        # Continue processing instead of failing
+                else:
+                    # Provide more informative error message
+                    filename = metadata.get("name", "Unknown file")
+                    raise ValueError(f"File '{filename}' with identical content already exists in this knowledge base. To replace it, please delete the existing file first or use the overwrite option.")
 
-    # Clean text content before processing
-    log.debug("Cleaning document text content")
-    for doc in docs:
-        doc.page_content = TextCleaner.clean_text(doc.page_content)
-        # Clean markdown artifacts early (before chunking)
-        doc.page_content = TextCleaner.clean_markdown_artifacts(doc.page_content)
-
-    # Apply semantic chunking first if enabled (creates semantically coherent chunks)
-    if split and request.app.state.config.ENABLE_SEMANTIC_CHUNKING:
-        log.info("Applying semantic chunking to detect topic boundaries")
-
-        # Get embedding function for semantic similarity
-        embedding_function = get_embedding_function(
-            request.app.state.config.RAG_EMBEDDING_ENGINE,
-            request.app.state.config.RAG_EMBEDDING_MODEL,
-            request.app.state.ef,
-            (
-                request.app.state.config.RAG_OPENAI_API_BASE_URL
-                if request.app.state.config.RAG_EMBEDDING_ENGINE == "openai"
-                else (
-                    request.app.state.config.RAG_OLLAMA_BASE_URL
-                    if request.app.state.config.RAG_EMBEDDING_ENGINE == "ollama"
-                    else request.app.state.config.RAG_AZURE_OPENAI_BASE_URL
-                )
-            ),
-            (
-                request.app.state.config.RAG_OPENAI_API_KEY
-                if request.app.state.config.RAG_EMBEDDING_ENGINE == "openai"
-                else (
-                    request.app.state.config.RAG_OLLAMA_API_KEY
-                    if request.app.state.config.RAG_EMBEDDING_ENGINE == "ollama"
-                    else request.app.state.config.RAG_AZURE_OPENAI_API_KEY
-                )
-            ),
-            request.app.state.config.RAG_EMBEDDING_BATCH_SIZE,
-        )
-
-        # Apply semantic splitting to each document
-        semantic_docs = []
-        for doc in docs:
-            try:
-                semantic_chunks = SemanticTextSplitter.split_text_semantically(
-                    doc.page_content,
-                    embedding_function,
-                    similarity_threshold=request.app.state.config.SEMANTIC_SIMILARITY_THRESHOLD,
-                    min_chunk_size=request.app.state.config.SEMANTIC_MIN_CHUNK_SIZE,
-                    max_chunk_size=request.app.state.config.SEMANTIC_MAX_CHUNK_SIZE,
-                )
-
-                # Create Document objects for each semantic chunk
-                for idx, chunk_text in enumerate(semantic_chunks):
-                    semantic_doc = Document(
-                        page_content=chunk_text,
-                        metadata={
-                            **doc.metadata,
-                            "semantic_chunk_index": idx,
-                            "is_semantic": True,
-                        },
-                    )
-                    semantic_docs.append(semantic_doc)
-
-            except Exception as e:
-                log.error(f"Error in semantic chunking: {e}")
-                # Fallback to original document
-                semantic_docs.append(doc)
-
-        docs = semantic_docs
-        log.info(f"Semantic chunking created {len(docs)} semantically coherent chunks")
-
-    # Apply secondary chunking based on configuration (only if semantic chunking is not enabled)
-    if split and not request.app.state.config.ENABLE_SEMANTIC_CHUNKING:
-        if request.app.state.config.ENABLE_HIERARCHICAL_CHUNKING:
-            log.info("Using hierarchical chunking (parent-child chunks)")
-
-            # Create parent splitter (large chunks for context)
-            parent_splitter = RecursiveCharacterTextSplitter(
-                separators=["\n\n", "\n", ".", "!", "?", ",", " ", ""],
-                chunk_size=request.app.state.config.PARENT_CHUNK_SIZE,
-                chunk_overlap=request.app.state.config.PARENT_CHUNK_OVERLAP,
-                add_start_index=True,
-            )
-
-            # Create child splitter (small chunks for retrieval)
-            child_splitter = RecursiveCharacterTextSplitter(
-                separators=["\n\n", "\n", ".", "!", "?", ",", " ", ""],
-                chunk_size=request.app.state.config.CHILD_CHUNK_SIZE,
-                chunk_overlap=request.app.state.config.CHILD_CHUNK_OVERLAP,
-            )
-
-            # Create hierarchical chunks
-            docs = HierarchicalChunker.create_hierarchical_chunks(
-                docs, parent_splitter, child_splitter
-            )
-        elif request.app.state.config.TEXT_SPLITTER in ["", "character"]:
+    if split:
+        if request.app.state.config.TEXT_SPLITTER in ["", "unstructured"]:
+            # Unstructured.io handles chunking internally, no additional splitting needed
+            log.info("Using Unstructured.io semantic chunking (handled internally)")
+            # docs are already chunked by UnstructuredUnifiedLoader
+        elif request.app.state.config.TEXT_SPLITTER in ["character"]:
             text_splitter = RecursiveCharacterTextSplitter(
-                separators=["\n\n", "\n", ".", "!", "?", ",", " ", ""],
                 chunk_size=request.app.state.config.CHUNK_SIZE,
                 chunk_overlap=request.app.state.config.CHUNK_OVERLAP,
                 add_start_index=True,
@@ -2158,7 +1777,6 @@ def save_docs_to_vector_db(
             for doc in docs:
                 md_header_splits = markdown_splitter.split_text(doc.page_content)
                 text_splitter = RecursiveCharacterTextSplitter(
-                    separators=["\n\n", "\n", ".", "!", "?", ",", " ", ""],
                     chunk_size=request.app.state.config.CHUNK_SIZE,
                     chunk_overlap=request.app.state.config.CHUNK_OVERLAP,
                     add_start_index=True,
@@ -2186,30 +1804,62 @@ def save_docs_to_vector_db(
         else:
             raise ValueError(ERROR_MESSAGES.DEFAULT("Invalid text splitter"))
 
-    # Clean documents for vector database storage
-    log.debug("Cleaning documents for vector database storage")
-    for doc in docs:
-        doc.page_content = TextCleaner.clean_for_vector_db(doc.page_content)
-
-        # Also clean parent_content if hierarchical chunking is enabled
-        if doc.metadata.get("is_hierarchical") and "parent_content" in doc.metadata:
-            doc.metadata["parent_content"] = TextCleaner.clean_for_vector_db(
-                doc.metadata["parent_content"]
-            )
-
+    # Filter out empty documents and validate content
+    docs = [doc for doc in docs if doc.page_content and doc.page_content.strip()]
+    
     if len(docs) == 0:
+        log.warning(f"No valid content found in documents for collection {collection_name}")
         raise ValueError(ERROR_MESSAGES.EMPTY_CONTENT)
 
     texts = [doc.page_content for doc in docs]
+    
+    # Additional validation: ensure texts are not just whitespace
+    texts = [text.strip() for text in texts if text.strip()]
+    
+    if len(texts) == 0:
+        log.warning(f"No valid text content found after filtering for collection {collection_name}")
+        raise ValueError(ERROR_MESSAGES.EMPTY_CONTENT)
+    # Optimize metadata for better performance and lower storage costs
+    def optimize_metadata(doc_metadata, additional_metadata):
+        """Optimize metadata by removing large/unnecessary fields and consolidating data"""
+        optimized = {}
+        
+        # Copy essential fields
+        essential_fields = [
+            "file_id", "filename", "filetype", "hash", "created_by", "chunk_index", 
+            "total_chunks", "page_number", "processing_engine", "strategy", 
+            "chunking_strategy", "cleaning_level", "element_type", "source", "languages", "last_modified",
+            # High-Impact Enrichment Fields
+            "chunk_summary", "chunk_title", "potential_questions",
+            # Enhanced Entity Extraction
+            "topics", "entities_people", "entities_organizations", "entities_locations", "keywords",
+            # Audio/Video Timestamp Fields
+            "timestamp_start", "timestamp_end", "duration", "audio_segment_url", "video_segment_url",
+            "transcript_language", "transcript_duration"
+        ]
+        
+        for field in essential_fields:
+            if field in doc_metadata and doc_metadata[field] is not None:
+                optimized[field] = doc_metadata[field]
+        
+        # Add additional metadata (filtering out None values)
+        if additional_metadata:
+            for key, value in additional_metadata.items():
+                if value is not None:
+                    optimized[key] = value
+        
+        # Add compact embedding config (single string instead of object)
+        optimized["embedding"] = f"{request.app.state.config.RAG_EMBEDDING_ENGINE}:{request.app.state.config.RAG_EMBEDDING_MODEL}"
+        
+        # Validate metadata size (Pinecone has limits)
+        metadata_size = len(str(optimized))
+        if metadata_size > 40000:  # Pinecone limit is ~40KB
+            log.warning(f"Metadata size ({metadata_size} bytes) is close to Pinecone limit")
+        
+        return optimized
+
     metadatas = [
-        {
-            **doc.metadata,
-            **(metadata if metadata else {}),
-            "embedding_config": {
-                "engine": request.app.state.config.RAG_EMBEDDING_ENGINE,
-                "model": request.app.state.config.RAG_EMBEDDING_MODEL,
-            },
-        }
+        optimize_metadata(doc.metadata, metadata if metadata else {})
         for doc in docs
     ]
 
@@ -2262,26 +1912,31 @@ def save_docs_to_vector_db(
             prefix=RAG_EMBEDDING_CONTENT_PREFIX,
             user=user,
         )
+        
+        if embeddings is None:
+            log.error("Embedding generation failed")
+            return False
+        
+        # Filter out None embeddings and corresponding texts/metadatas
+        valid_embeddings = []
+        valid_texts = []
+        valid_metadatas = []
+        
+        for i, embedding in enumerate(embeddings):
+            if embedding is not None:
+                valid_embeddings.append(embedding)
+                valid_texts.append(texts[i])
+                valid_metadatas.append(metadatas[i])
+        
+        if len(valid_embeddings) == 0:
+            log.error("No valid embeddings generated")
+            return False
+        
+        embeddings = valid_embeddings
+        texts = valid_texts
+        metadatas = valid_metadatas
+        
         log.info(f"embeddings generated {len(embeddings)} for {len(texts)} items")
-
-        # Handle case where embedding generation partially failed
-        if len(embeddings) != len(texts):
-            log.error(
-                f"Embedding count mismatch: {len(embeddings)} embeddings for {len(texts)} texts"
-            )
-            if len(embeddings) < len(texts):
-                # Only process texts that have embeddings
-                log.warning(
-                    f"Dropping {len(texts) - len(embeddings)} texts without embeddings"
-                )
-                texts = texts[: len(embeddings)]
-                metadatas = metadatas[: len(embeddings)]
-            elif len(embeddings) > len(texts):
-                # Truncate embeddings to match texts (shouldn't happen, but be safe)
-                log.warning(
-                    f"Truncating {len(embeddings) - len(texts)} extra embeddings"
-                )
-                embeddings = embeddings[: len(texts)]
 
         items = [
             {
@@ -2293,13 +1948,26 @@ def save_docs_to_vector_db(
             for idx, text in enumerate(texts)
         ]
 
-        log.info(f"adding to collection {collection_name}")
-        VECTOR_DB_CLIENT.insert(
-            collection_name=collection_name,
-            items=items,
-        )
+        # Log detailed information about what's being saved
+        log.info(f"Adding {len(items)} items to collection {collection_name}")
+        if items and "file_id" in metadatas[0]:
+            log.info(f"File ID in metadata: {metadatas[0].get('file_id')}")
+            log.info(f"File name in metadata: {metadatas[0].get('name', 'Unknown')}")
+        
+        # Process in batches for better performance (especially for large documents)
+        batch_size = 100  # Optimal batch size for most vector databases
+        total_added = 0
+        
+        for i in range(0, len(items), batch_size):
+            batch = items[i:i + batch_size]
+            VECTOR_DB_CLIENT.insert(
+                collection_name=collection_name,
+                items=batch,
+            )
+            total_added += len(batch)
+            log.debug(f"Added batch {i//batch_size + 1}: {len(batch)} items")
 
-        log.info(f"added {len(items)} items to collection {collection_name}")
+        log.info(f"added {total_added} items to collection {collection_name}")
         return True
     except Exception as e:
         log.exception(e)
@@ -2318,6 +1986,8 @@ def process_file(
     form_data: ProcessFileForm,
     user=Depends(get_verified_user),
 ):
+    log.info(f"Processing file: file_id={form_data.file_id}, has_content={bool(form_data.content)}, collection_name={form_data.collection_name}")
+    
     if user.role == "admin":
         file = Files.get_file_by_id(form_data.file_id)
     else:
@@ -2330,25 +2000,52 @@ def process_file(
 
             if collection_name is None:
                 collection_name = f"file-{file.id}"
+            
+            # CRITICAL: Ensure file.id is unique and correct
+            if not file.id or len(file.id) < 10:
+                log.error(f"Invalid file ID: {file.id} for file {file.filename}")
+                raise ValueError(f"Invalid file ID: {file.id}")
+            
+            log.info(f"File {file.id} ({file.filename}) will be saved to collection: {collection_name}")
+            
+            # Double-check that we're not accidentally using the wrong collection
+            if form_data.content and not form_data.collection_name:
+                expected_collection = f"file-{file.id}"
+                if collection_name != expected_collection:
+                    log.error(f"Collection name mismatch! Expected: {expected_collection}, Got: {collection_name}")
+                    raise ValueError(f"Collection name mismatch for file {file.id}")
 
-            if form_data.content:
+            # When adding to knowledge base, reuse existing file-{id} vectors (same as text files)
+            # Only process content if: (1) content exists AND (2) NOT adding to knowledge base
+            if form_data.content and not form_data.collection_name:
                 # Update the content in the file
                 # Usage: /files/{file_id}/data/content/update, /files/ (audio file upload pipeline)
+                # Note: Audio/video transcripts come through this path and need chunking
+                # Unlike file-based processing, transcripts don't go through Loader/Unstructured
 
-                try:
-                    # /files/{file_id}/data/content/update
-                    VECTOR_DB_CLIENT.delete_collection(
-                        collection_name=f"file-{file.id}"
-                    )
-                except:
-                    # Audio file upload pipeline
-                    pass
+                # Only delete existing collection if it exists (for updates)
+                # For new uploads, the collection won't exist yet
+                if VECTOR_DB_CLIENT.has_collection(collection_name=f"file-{file.id}"):
+                    try:
+                        # This is an update operation - delete the old collection
+                        log.info(f"Updating existing collection for file {file.id}")
+                        VECTOR_DB_CLIENT.delete_collection(
+                            collection_name=f"file-{file.id}"
+                        )
+                    except Exception as e:
+                        log.warning(f"Failed to delete existing collection for file {file.id}: {e}")
+                        # Continue processing even if deletion fails
 
+                # Create single document with full transcript
+                full_transcript = form_data.content.replace("<br/>", "\n")
+                # Filter out potentially contaminated file-specific URLs from metadata
+                filtered_meta = {k: v for k, v in file.meta.items() 
+                               if k not in ["video_segment_url", "audio_segment_url"]}
                 docs = [
                     Document(
-                        page_content=form_data.content.replace("<br/>", "\n"),
+                        page_content=full_transcript,
                         metadata={
-                            **file.meta,
+                            **filtered_meta,
                             "name": file.filename,
                             "created_by": file.user_id,
                             "file_id": file.id,
@@ -2356,37 +2053,252 @@ def process_file(
                         },
                     )
                 ]
+                
+                # Get transcript segments from file metadata (if available)
+                transcript_segments = file.meta.get("transcript_segments", [])
+                transcript_duration = file.meta.get("transcript_duration")
+                transcript_language = file.meta.get("transcript_language")
+                
+                # Manually chunk audio/video transcripts since they bypass the Loader
+                # For unstructured TEXT_SPLITTER, force character splitting since 
+                # Unstructured.io requires file paths (not raw text)
+                text_splitter_config = request.app.state.config.TEXT_SPLITTER
+                
+                if text_splitter_config in ["", "unstructured", "character"]:
+                    # Use RecursiveCharacterTextSplitter for transcripts
+                    text_splitter = RecursiveCharacterTextSplitter(
+                        chunk_size=request.app.state.config.CHUNK_SIZE,
+                        chunk_overlap=request.app.state.config.CHUNK_OVERLAP,
+                        add_start_index=True,
+                    )
+                    docs = text_splitter.split_documents(docs)
+                    log.info(f"Split audio/video transcript into {len(docs)} chunks")
+                elif text_splitter_config == "token":
+                    # Use token-based splitting
+                    tiktoken.get_encoding(str(request.app.state.config.TIKTOKEN_ENCODING_NAME))
+                    text_splitter = TokenTextSplitter(
+                        encoding_name=str(request.app.state.config.TIKTOKEN_ENCODING_NAME),
+                        chunk_size=request.app.state.config.CHUNK_SIZE,
+                        chunk_overlap=request.app.state.config.CHUNK_OVERLAP,
+                        add_start_index=True,
+                    )
+                    docs = text_splitter.split_documents(docs)
+                    log.info(f"Split audio/video transcript into {len(docs)} chunks using token splitter")
+                elif text_splitter_config == "markdown_header":
+                    # Use markdown header splitting
+                    headers_to_split_on = [
+                        ("#", "Header 1"),
+                        ("##", "Header 2"),
+                        ("###", "Header 3"),
+                    ]
+                    markdown_splitter = MarkdownHeaderTextSplitter(
+                        headers_to_split_on=headers_to_split_on,
+                        strip_headers=False,
+                    )
+                    md_splits = markdown_splitter.split_text(docs[0].page_content)
+                    text_splitter = RecursiveCharacterTextSplitter(
+                        chunk_size=request.app.state.config.CHUNK_SIZE,
+                        chunk_overlap=request.app.state.config.CHUNK_OVERLAP,
+                        add_start_index=True,
+                    )
+                    docs = text_splitter.split_documents(md_splits)
+                    log.info(f"Split audio/video transcript into {len(docs)} chunks using markdown splitter")
+                else:
+                    # Fallback to character splitting for unknown TEXT_SPLITTER values
+                    log.warning(f"Unknown TEXT_SPLITTER '{text_splitter_config}', using character splitter as fallback")
+                    text_splitter = RecursiveCharacterTextSplitter(
+                        chunk_size=request.app.state.config.CHUNK_SIZE,
+                        chunk_overlap=request.app.state.config.CHUNK_OVERLAP,
+                        add_start_index=True,
+                    )
+                    docs = text_splitter.split_documents(docs)
+                    log.info(f"Split audio/video transcript into {len(docs)} chunks using fallback character splitter")
+                
+                # Enrich each chunk with timestamps and topics/entities
+                enriched_docs = []
+                for idx, doc in enumerate(docs):
+                    chunk_start_char = doc.metadata.get("start_index", 0)
+                    
+                    # Extract enhanced metadata (summary, title, entities, questions)
+                    enrichment = extract_enhanced_metadata(doc.page_content)
+                    
+                    # Align chunk with timestamps from Whisper segments
+                    timestamp_data = {}
+                    if transcript_segments:
+                        timestamp_data = align_chunk_with_timestamps(
+                            doc.page_content,
+                            transcript_segments,
+                            chunk_start_char,
+                            full_transcript
+                        )
+                    
+                    # Create enriched document with all metadata
+                    # Build metadata dict, only including non-None values
+                    enriched_metadata = {
+                        **doc.metadata,
+                        # High-Impact Features
+                        "chunk_summary": enrichment.get("chunk_summary", ""),
+                        "chunk_title": enrichment.get("chunk_title", ""),
+                        "potential_questions": enrichment.get("potential_questions", []),
+                        # Enhanced Entity Extraction
+                        "topics": enrichment.get("topics", []),
+                        "entities_people": enrichment.get("entities_people", []),
+                        "entities_organizations": enrichment.get("entities_organizations", []),
+                        "entities_locations": enrichment.get("entities_locations", []),
+                        "keywords": enrichment.get("keywords", []),
+                        # Chunk position metadata
+                        "chunk_index": idx,
+                        "total_chunks": len(docs),
+                    }
+                    
+                    # Add timestamp metadata only if available
+                    if timestamp_data.get("timestamp_start") is not None:
+                        enriched_metadata["timestamp_start"] = timestamp_data["timestamp_start"]
+                    if timestamp_data.get("timestamp_end") is not None:
+                        enriched_metadata["timestamp_end"] = timestamp_data["timestamp_end"]
+                    if timestamp_data.get("duration") is not None:
+                        enriched_metadata["duration"] = timestamp_data["duration"]
+                    
+                    # Add media URLs for playback
+                    if (timestamp_data.get("timestamp_start") is not None and 
+                        timestamp_data.get("timestamp_end") is not None):
+                        # Check if source is video or audio
+                        is_video = file.meta.get("content_type", "").startswith("video/")
+                        
+                        if is_video:
+                            # For video files, provide both full video URL and audio URL/segment
+                            enriched_metadata["video_url"] = f"/api/v1/files/{file.id}/video"
+                            enriched_metadata["video_segment_url"] = (
+                                f"/api/v1/audio/video/files/{file.id}/segment"
+                                f"?start={timestamp_data['timestamp_start']}"
+                                f"&end={timestamp_data['timestamp_end']}"
+                            )
+                        
+                        # Always provide audio URL (works for both audio and video files)
+                        enriched_metadata["audio_segment_url"] = (
+                            f"/api/v1/audio/files/{file.id}/segment"
+                            f"?start={timestamp_data['timestamp_start']}"
+                            f"&end={timestamp_data['timestamp_end']}"
+                        )
+                    
+                    # Add transcript metadata only if available
+                    if transcript_language is not None:
+                        enriched_metadata["transcript_language"] = transcript_language
+                    if transcript_duration is not None:
+                        enriched_metadata["transcript_duration"] = transcript_duration
+                    
+                    enriched_doc = Document(
+                        page_content=doc.page_content,
+                        metadata=enriched_metadata
+                    )
+                    enriched_docs.append(enriched_doc)
+                
+                docs = enriched_docs
+                log.info(f"Enriched {len(docs)} chunks with timestamps and topics/entities")
 
                 text_content = form_data.content
             elif form_data.collection_name:
-                # Check if the file has already been processed and save the content
+                # Check if the file has already been processed and reuse vectors
                 # Usage: /knowledge/{id}/file/add, /knowledge/{id}/file/update
-
-                result = VECTOR_DB_CLIENT.query(
-                    collection_name=f"file-{file.id}", filter={"file_id": file.id}
-                )
-
-                if result is not None and len(result.ids[0]) > 0:
-                    docs = [
-                        Document(
-                            page_content=result.documents[0][idx],
-                            metadata=result.metadatas[0][idx],
+                log.info(f"Checking if file {file.id} already processed in collection file-{file.id}")
+                
+                # Query with retry to handle Pinecone's eventual consistency
+                # After upsert, vectors may not be immediately queryable (1-15s delay)
+                max_retries = 6
+                retry_delay = 3  # seconds
+                result = None
+                
+                for attempt in range(max_retries):
+                    try:
+                        result = VECTOR_DB_CLIENT.query(
+                            collection_name=f"file-{file.id}", 
+                            filter={"file_id": file.id}
                         )
-                        for idx, id in enumerate(result.ids[0])
-                    ]
+                        
+                        # Check if result has vectors (safely check nested structure)
+                        if result is not None and result.ids and len(result.ids) > 0 and len(result.ids[0]) > 0:
+                            log.info(f"Found {len(result.ids[0])} existing vectors for file {file.id} on attempt {attempt + 1}")
+                            break
+                        
+                        if attempt < max_retries - 1:
+                            log.warning(f"No vectors found yet for file {file.id}, retrying in {retry_delay}s (attempt {attempt + 1}/{max_retries})")
+                            time.sleep(retry_delay)
+                    except Exception as e:
+                        log.error(f"Error querying collection file-{file.id}: {e}")
+                        if attempt < max_retries - 1:
+                            time.sleep(retry_delay)
+
+                # Check if we successfully found vectors
+                if result is not None and result.ids and len(result.ids) > 0 and len(result.ids[0]) > 0:
+                    log.info(f"Reusing {len(result.ids[0])} existing vectors for file {file.id}")
+                    docs = []
+                    for idx, id in enumerate(result.ids[0]):
+                        existing_metadata = result.metadatas[0][idx]
+                        
+                        # Filter out file-specific URLs that might be from other files
+                        # and regenerate them with the correct file ID
+                        filtered_metadata = {k: v for k, v in existing_metadata.items() 
+                                           if k not in ["video_segment_url", "audio_segment_url"]}
+                        
+                        # Regenerate URLs if timestamps are available
+                        if "timestamp_start" in filtered_metadata and "timestamp_end" in filtered_metadata:
+                            # Check if source is video or audio
+                            is_video = file.meta.get("content_type", "").startswith("video/")
+                            
+                            if is_video:
+                                # For video files, provide both full video URL and audio URL/segment
+                                filtered_metadata["video_url"] = f"/api/v1/files/{file.id}/video"
+                                filtered_metadata["video_segment_url"] = (
+                                    f"/api/v1/audio/video/files/{file.id}/segment"
+                                    f"?start={filtered_metadata['timestamp_start']}"
+                                    f"&end={filtered_metadata['timestamp_end']}"
+                                )
+                            
+                            # Always provide audio URL (works for both audio and video files)
+                            filtered_metadata["audio_segment_url"] = (
+                                f"/api/v1/audio/files/{file.id}/segment"
+                                f"?start={filtered_metadata['timestamp_start']}"
+                                f"&end={filtered_metadata['timestamp_end']}"
+                            )
+                        
+                        doc = Document(
+                            page_content=result.documents[0][idx],
+                            metadata={
+                                **filtered_metadata,
+                                # Ensure correct file metadata
+                                "file_id": file.id,
+                                "name": file.filename,
+                                "source": file.filename,
+                                # Update collection_name to the knowledge base collection
+                                "collection_name": collection_name,
+                            },
+                        )
+                        docs.append(doc)
                 else:
+                    log.warning(f"No existing vectors found for file {file.id} after {max_retries} retries, falling back to content field")
+                    # Filter out potentially contaminated file-specific URLs from metadata
+                    filtered_meta = {k: v for k, v in file.meta.items() 
+                                   if k not in ["video_segment_url", "audio_segment_url"]}
+                    # If this is a video, include the full video URL for client-side seeking
+                    if file.meta.get("content_type", "").startswith("video/"):
+                        filtered_meta["video_url"] = f"/api/v1/files/{file.id}/video"
                     docs = [
                         Document(
                             page_content=file.data.get("content", ""),
                             metadata={
-                                **file.meta,
+                                **filtered_meta,
                                 "name": file.filename,
                                 "created_by": file.user_id,
                                 "file_id": file.id,
                                 "source": file.filename,
+                                # Set collection_name to the knowledge base collection
+                                "collection_name": collection_name,
                             },
                         )
                     ]
+                    # IMPORTANT: Clear form_data.content so should_split=True later
+                    # This ensures the fallback content gets chunked properly
+                    form_data.content = None
 
                 text_content = file.data.get("content", "")
             else:
@@ -2397,6 +2309,16 @@ def process_file(
                     file_path = Storage.get_file(file_path)
                     loader = Loader(
                         engine=request.app.state.config.CONTENT_EXTRACTION_ENGINE,
+                        CHUNK_SIZE=request.app.state.config.CHUNK_SIZE,
+                        CHUNK_OVERLAP=request.app.state.config.CHUNK_OVERLAP,
+                        UNSTRUCTURED_STRATEGY=getattr(request.app.state.config, "UNSTRUCTURED_STRATEGY", "hi_res"),
+                        UNSTRUCTURED_CHUNKING_STRATEGY=getattr(request.app.state.config, "UNSTRUCTURED_CHUNKING_STRATEGY", "by_title"),
+                        UNSTRUCTURED_CLEANING_LEVEL=getattr(request.app.state.config, "UNSTRUCTURED_CLEANING_LEVEL", "standard"),
+                        UNSTRUCTURED_INCLUDE_METADATA=getattr(request.app.state.config, "UNSTRUCTURED_INCLUDE_METADATA", True),
+                        UNSTRUCTURED_CLEAN_TEXT=getattr(request.app.state.config, "UNSTRUCTURED_CLEAN_TEXT", True),
+                        UNSTRUCTURED_SEMANTIC_CHUNKING=getattr(request.app.state.config, "UNSTRUCTURED_SEMANTIC_CHUNKING", True),
+                        UNSTRUCTURED_INFER_TABLE_STRUCTURE=getattr(request.app.state.config, "UNSTRUCTURED_INFER_TABLE_STRUCTURE", False),
+                        UNSTRUCTURED_EXTRACT_IMAGES_IN_PDF=getattr(request.app.state.config, "UNSTRUCTURED_EXTRACT_IMAGES_IN_PDF", False),
                         DATALAB_MARKER_API_KEY=request.app.state.config.DATALAB_MARKER_API_KEY,
                         DATALAB_MARKER_API_BASE_URL=request.app.state.config.DATALAB_MARKER_API_BASE_URL,
                         DATALAB_MARKER_ADDITIONAL_CONFIG=request.app.state.config.DATALAB_MARKER_ADDITIONAL_CONFIG,
@@ -2485,16 +2407,32 @@ def process_file(
                 }
             else:
                 try:
+                    # Note: split=False because audio/video transcripts are already chunked above
+                    # Text files will have split=True (default) since they're chunked by Loader
+                    should_split = not form_data.content  # Don't split if content provided (already chunked)
+                    
+                    # CRITICAL: Ensure each file's metadata includes its unique file_id
+                    # This is essential for Pinecone which uses metadata filtering for collections
+                    file_metadata = {
+                        "file_id": file.id,
+                        "name": file.filename,
+                        "hash": hash,
+                    }
+                    
+                    # Double-check file_id is in all document metadata
+                    for doc in docs:
+                        if "file_id" not in doc.metadata or doc.metadata["file_id"] != file.id:
+                            log.warning(f"Correcting file_id in document metadata. Was: {doc.metadata.get('file_id')}, Should be: {file.id}")
+                            doc.metadata["file_id"] = file.id
+                    
                     result = save_docs_to_vector_db(
                         request,
                         docs=docs,
                         collection_name=collection_name,
-                        metadata={
-                            "file_id": file.id,
-                            "name": file.filename,
-                            "hash": hash,
-                        },
+                        metadata=file_metadata,
                         add=(True if form_data.collection_name else False),
+                        overwrite=False,  # Don't overwrite - add to existing collection (critical for knowledge bases)
+                        split=should_split,  # Skip splitting for transcripts (already chunked)
                         user=user,
                     )
                     log.info(f"added {len(docs)} items to collection {collection_name}")
