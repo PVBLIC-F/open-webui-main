@@ -6,7 +6,7 @@
 
 	import { goto } from '$app/navigation';
 
-	import { updateUserById, getUserGroupsById } from '$lib/apis/users';
+	import { updateUserById, getUserGroupsById, forceGmailSync } from '$lib/apis/users';
 
 	import Modal from '$lib/components/common/Modal.svelte';
 	import localizedFormat from 'dayjs/plugin/localizedFormat';
@@ -57,6 +57,23 @@
 			console.log('User update successful:', res);
 			dispatch('save');
 			show = false;
+		}
+	};
+
+	const handleForceGmailSync = async () => {
+		if (!selectedUser?.id) return;
+		
+		toast.info('Starting full Gmail sync...');
+		
+		try {
+			const res = await forceGmailSync(localStorage.token, selectedUser.id);
+			if (res) {
+				toast.success('Gmail sync started! This may take a few minutes.');
+			} else {
+				toast.error('Failed to start Gmail sync');
+			}
+		} catch (error) {
+			toast.error(`Gmail sync error: ${error}`);
 		}
 	};
 
@@ -245,6 +262,21 @@
 										<div class="text-xs text-gray-500 mt-1">
 											{$i18n.t('Allow this user to sync Gmail emails for search')}
 										</div>
+										
+										{#if _user.gmail_sync_enabled === 1}
+											<div class="mt-2">
+												<button
+													type="button"
+													class="px-3 py-1.5 text-xs font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition"
+													on:click={handleForceGmailSync}
+												>
+													🔄 {$i18n.t('Force Full Sync')}
+												</button>
+												<div class="text-xs text-gray-500 mt-1">
+													{$i18n.t('Trigger a complete re-sync of all Gmail emails')}
+												</div>
+											</div>
+										{/if}
 									</div>
 								</div>
 							</div>

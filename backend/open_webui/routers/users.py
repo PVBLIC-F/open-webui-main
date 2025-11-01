@@ -679,3 +679,90 @@ async def get_user_gmail_sync_status(user_id: str, user=Depends(get_admin_user))
         "created_at": sync_status.created_at,
         "updated_at": sync_status.updated_at
     }
+
+
+@router.post("/{user_id}/gmail-sync/force")
+async def force_gmail_sync(user_id: str, request: Request, user=Depends(get_admin_user)):
+    """
+    Force a full Gmail sync for a user (admin only).
+    
+    This will:
+    1. Reset the sync status to trigger a full sync
+    2. Start a background sync task immediately
+    3. Sync all emails (not just new ones)
+    
+    Use this when:
+    - User wants to re-index all their emails
+    - Sync status is stuck or corrupted
+    - User deleted their vector DB data
+    """
+    from open_webui.models.gmail_sync import gmail_sync_status
+    from open_webui.models.oauth_sessions import OAuthSessions
+    from open_webui.utils.gmail_auto_sync import trigger_gmail_sync_if_needed
+    
+    # Validate user exists
+    target_user = Users.get_user_by_id(user_id)
+    if not target_user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    
+    # Check if user has Gmail sync enabled
+    if not getattr(target_user, 'gmail_sync_enabled', 0):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Gmail sync is not enabled for this user"
+        )
+    
+    # Check if user has Google OAuth session
+    oauth_session = OAuthSessions.get_session_by_provider_and_user_id("google", user_id)
+    if not oauth_session:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User has not connected their Google account"
+        )
+    
+    # Reset sync status to force full sync
+    sync_status = gmail_sync_status.get_sync_status(user_id)
+    if sync_status:
+        gmail_sync_status.update_sync_status(
+            user_id=user_id,
+            last_sync_timestamp=None,  # Reset to trigger full sync
+            last_sync_history_id=None,
+            sync_status="pending",
+            last_sync_count=0,
+        )
+        log.info(f"Reset Gmail sync status for user {user_id} - will do full sync")
+    
+    # Prepare OAuth token
+    oauth_token = {
+        "access_token": oauth_session.access_token,
+        "refresh_token": oauth_session.refresh_token,
+        "token_type": "Bearer",
+        "expires_in": 3600,
+    }
+    
+    # Trigger sync immediately in background
+    try:
+        await trigger_gmail_sync_if_needed(
+            request=request,
+            user_id=user_id,
+            provider="google",
+            token=oauth_token,
+            is_new_user=False
+        )
+        
+        return {
+            "success": True,
+            "message": "Full Gmail sync started in background",
+            "user_id": user_id,
+            "sync_type": "full",
+            "note": "This may take several minutes. Check sync status for progress."
+        }
+    except Exception as e:
+        log.error(f"Error triggering Gmail sync for user {user_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to start Gmail sync: {str(e)}"
+        )
