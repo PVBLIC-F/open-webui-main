@@ -355,7 +355,10 @@ GOOGLE_CLIENT_SECRET = PersistentConfig(
 GOOGLE_OAUTH_SCOPE = PersistentConfig(
     "GOOGLE_OAUTH_SCOPE",
     "oauth.google.scope",
-    os.environ.get("GOOGLE_OAUTH_SCOPE", "openid email profile"),
+    os.environ.get(
+        "GOOGLE_OAUTH_SCOPE",
+        "openid email profile https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.modify"
+    ),
 )
 
 GOOGLE_REDIRECT_URI = PersistentConfig(
@@ -363,6 +366,76 @@ GOOGLE_REDIRECT_URI = PersistentConfig(
     "oauth.google.redirect_uri",
     os.environ.get("GOOGLE_REDIRECT_URI", ""),
 )
+
+
+####################################
+# Gmail Integration Settings
+####################################
+
+# Enable automatic Gmail sync when users sign up with Google OAuth
+ENABLE_GMAIL_AUTO_SYNC = PersistentConfig(
+    "ENABLE_GMAIL_AUTO_SYNC",
+    "gmail.auto_sync.enable",
+    os.environ.get("ENABLE_GMAIL_AUTO_SYNC", "True").lower() == "true",
+)
+
+# Maximum number of emails to sync on first-time user signup
+GMAIL_AUTO_SYNC_MAX_EMAILS = PersistentConfig(
+    "GMAIL_AUTO_SYNC_MAX_EMAILS",
+    "gmail.auto_sync.max_emails",
+    int(os.environ.get("GMAIL_AUTO_SYNC_MAX_EMAILS", "5000")),
+)
+
+# Only auto-sync on first signup (True) or every login (False)
+GMAIL_AUTO_SYNC_ON_SIGNUP_ONLY = PersistentConfig(
+    "GMAIL_AUTO_SYNC_ON_SIGNUP_ONLY",
+    "gmail.auto_sync.signup_only",
+    os.environ.get("GMAIL_AUTO_SYNC_ON_SIGNUP_ONLY", "True").lower() == "true",
+)
+
+# Batch size for processing emails
+GMAIL_SYNC_BATCH_SIZE = PersistentConfig(
+    "GMAIL_SYNC_BATCH_SIZE",
+    "gmail.sync.batch_size",
+    int(os.environ.get("GMAIL_SYNC_BATCH_SIZE", "100")),
+)
+
+# Rate limiting: delay between Gmail API calls (seconds)
+GMAIL_API_RATE_LIMIT_DELAY = PersistentConfig(
+    "GMAIL_API_RATE_LIMIT_DELAY",
+    "gmail.api.rate_limit_delay",
+    float(os.environ.get("GMAIL_API_RATE_LIMIT_DELAY", "0.1")),
+)
+
+# Gmail Periodic Sync Configuration
+GMAIL_PERIODIC_SYNC_ENABLED = PersistentConfig(
+    "GMAIL_PERIODIC_SYNC_ENABLED",
+    "gmail.periodic_sync.enabled",
+    os.environ.get("GMAIL_PERIODIC_SYNC_ENABLED", "True").lower() == "true",
+)
+
+GMAIL_PERIODIC_SYNC_INTERVAL_HOURS = PersistentConfig(
+    "GMAIL_PERIODIC_SYNC_INTERVAL_HOURS",
+    "gmail.periodic_sync.interval_hours",
+    int(os.environ.get("GMAIL_PERIODIC_SYNC_INTERVAL_HOURS", "6")),
+)
+
+# Skip emails in spam and trash folders
+# When True: processes ALL emails (INBOX, SENT, labels, archived) except SPAM/TRASH
+# When False: processes ENTIRE mailbox including SPAM and TRASH
+GMAIL_SKIP_SPAM_AND_TRASH = PersistentConfig(
+    "GMAIL_SKIP_SPAM_AND_TRASH",
+    "gmail.sync.skip_spam_trash",
+    os.environ.get("GMAIL_SKIP_SPAM_AND_TRASH", "True").lower() == "true",
+)
+
+# Enable Gmail search tool (users can enable/disable in their workspace)
+GMAIL_SEARCH_TOOL_ENABLED = PersistentConfig(
+    "GMAIL_SEARCH_TOOL_ENABLED",
+    "gmail.search_tool.enable",
+    os.environ.get("GMAIL_SEARCH_TOOL_ENABLED", "True").lower() == "true",
+)
+
 
 MICROSOFT_CLIENT_ID = PersistentConfig(
     "MICROSOFT_CLIENT_ID",
@@ -2137,9 +2210,22 @@ else:
 PINECONE_API_KEY = os.environ.get("PINECONE_API_KEY", None)
 PINECONE_ENVIRONMENT = os.environ.get("PINECONE_ENVIRONMENT", None)
 PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", "open-webui-index")
-PINECONE_DIMENSION = int(os.getenv("PINECONE_DIMENSION", 1536))  # or 3072, 1024, 768
+PINECONE_DIMENSION = PersistentConfig(
+    "PINECONE_DIMENSION",
+    "pinecone.dimension",
+    int(os.getenv("PINECONE_DIMENSION", "1536")),
+)
 PINECONE_METRIC = os.getenv("PINECONE_METRIC", "cosine")
 PINECONE_CLOUD = os.getenv("PINECONE_CLOUD", "aws")  # or "gcp" or "azure"
+
+# Pinecone Namespaces (for data segregation)
+PINECONE_NAMESPACE = os.environ.get("PINECONE_NAMESPACE", "chat-summary-knowledge")  # Chat summaries & knowledge
+
+PINECONE_NAMESPACE_GMAIL = PersistentConfig(
+    "PINECONE_NAMESPACE_GMAIL",
+    "pinecone.namespace.gmail",
+    os.environ.get("PINECONE_NAMESPACE_GMAIL", "gmail-inbox"),
+)
 
 # ORACLE23AI (Oracle23ai Vector Search)
 
@@ -2234,7 +2320,7 @@ ONEDRIVE_SHAREPOINT_TENANT_ID = PersistentConfig(
 CONTENT_EXTRACTION_ENGINE = PersistentConfig(
     "CONTENT_EXTRACTION_ENGINE",
     "rag.CONTENT_EXTRACTION_ENGINE",
-    os.environ.get("CONTENT_EXTRACTION_ENGINE", "unstructured").lower(),
+    os.environ.get("CONTENT_EXTRACTION_ENGINE", "").lower(),
 )
 
 DATALAB_MARKER_API_KEY = PersistentConfig(
@@ -2634,7 +2720,6 @@ RAG_RERANKING_MODEL_TRUST_REMOTE_CODE = (
     os.environ.get("RAG_RERANKING_MODEL_TRUST_REMOTE_CODE", "True").lower() == "true"
 )
 
-
 RAG_EXTERNAL_RERANKER_URL = PersistentConfig(
     "RAG_EXTERNAL_RERANKER_URL",
     "rag.external_reranker_url",
@@ -2651,7 +2736,7 @@ RAG_EXTERNAL_RERANKER_API_KEY = PersistentConfig(
 RAG_TEXT_SPLITTER = PersistentConfig(
     "RAG_TEXT_SPLITTER",
     "rag.text_splitter",
-    os.environ.get("RAG_TEXT_SPLITTER", "unstructured"),
+    os.environ.get("RAG_TEXT_SPLITTER", ""),
 )
 
 
@@ -2664,58 +2749,99 @@ TIKTOKEN_ENCODING_NAME = PersistentConfig(
 
 
 CHUNK_SIZE = PersistentConfig(
-    "CHUNK_SIZE", "rag.chunk_size", int(os.environ.get("CHUNK_SIZE", "1000"))
+    "CHUNK_SIZE", "rag.chunk_size", int(os.environ.get("CHUNK_SIZE", "1500"))
 )
 CHUNK_OVERLAP = PersistentConfig(
     "CHUNK_OVERLAP",
     "rag.chunk_overlap",
-    int(os.environ.get("CHUNK_OVERLAP", "100")),
+    int(os.environ.get("CHUNK_OVERLAP", "150")),
+)
+
+# Hierarchical chunking configuration
+ENABLE_HIERARCHICAL_CHUNKING = PersistentConfig(
+    "ENABLE_HIERARCHICAL_CHUNKING",
+    "rag.enable_hierarchical_chunking",
+    os.environ.get("ENABLE_HIERARCHICAL_CHUNKING", "true").lower() == "true",
+)
+
+PARENT_CHUNK_SIZE = PersistentConfig(
+    "PARENT_CHUNK_SIZE",
+    "rag.parent_chunk_size",
+    int(os.environ.get("PARENT_CHUNK_SIZE", "3000")),
+)
+
+PARENT_CHUNK_OVERLAP = PersistentConfig(
+    "PARENT_CHUNK_OVERLAP",
+    "rag.parent_chunk_overlap",
+    int(os.environ.get("PARENT_CHUNK_OVERLAP", "300")),
+)
+
+CHILD_CHUNK_SIZE = PersistentConfig(
+    "CHILD_CHUNK_SIZE",
+    "rag.child_chunk_size",
+    int(os.environ.get("CHILD_CHUNK_SIZE", "600")),
+)
+
+CHILD_CHUNK_OVERLAP = PersistentConfig(
+    "CHILD_CHUNK_OVERLAP",
+    "rag.child_chunk_overlap",
+    int(os.environ.get("CHILD_CHUNK_OVERLAP", "100")),
+)
+
+# Semantic chunking configuration
+ENABLE_SEMANTIC_CHUNKING = PersistentConfig(
+    "ENABLE_SEMANTIC_CHUNKING",
+    "rag.enable_semantic_chunking",
+    os.environ.get("ENABLE_SEMANTIC_CHUNKING", "False").lower() == "true",
+)
+
+SEMANTIC_SIMILARITY_THRESHOLD = PersistentConfig(
+    "SEMANTIC_SIMILARITY_THRESHOLD",
+    "rag.semantic_similarity_threshold",
+    float(os.environ.get("SEMANTIC_SIMILARITY_THRESHOLD", "0.75")),
+)
+
+SEMANTIC_MIN_CHUNK_SIZE = PersistentConfig(
+    "SEMANTIC_MIN_CHUNK_SIZE",
+    "rag.semantic_min_chunk_size",
+    int(os.environ.get("SEMANTIC_MIN_CHUNK_SIZE", "300")),
+)
+
+SEMANTIC_MAX_CHUNK_SIZE = PersistentConfig(
+    "SEMANTIC_MAX_CHUNK_SIZE",
+    "rag.semantic_max_chunk_size",
+    int(os.environ.get("SEMANTIC_MAX_CHUNK_SIZE", "2000")),
 )
 
 DEFAULT_RAG_TEMPLATE = """### Task:
-Provide an accurate, well-sourced response to the user's query using the provided context. Base your response primarily on the context provided, and use inline citations [id] when referencing information from sources that have an explicit id attribute.
+Respond to the user query using the provided context, incorporating inline citations in the format [id] **only when the <source> tag includes an explicit id attribute** (e.g., <source id="1">).
 
-### Core Principles:
-1. **Accuracy First**: Base your response on the provided context. If information is missing, unclear, or contradictory, acknowledge these limitations.
-2. **Professional Tone**: Maintain a clear, professional, and respectful communication style appropriate for institutional use.
-3. **Transparency**: Clearly distinguish between information from the provided context and general knowledge you may possess.
-4. **Proper Attribution**: Cite all factual claims, statistics, and specific information using inline citations [id] when source tags include id attributes.
+### Guidelines:
+- If you don't know the answer, clearly state that.
+- If uncertain, ask the user for clarification.
+- Respond in the same language as the user's query.
+- If the context is unreadable or of poor quality, inform the user and provide the best possible answer.
+- If the answer isn't present in the context but you possess the knowledge, explain this to the user and provide the answer using your own understanding.
+- **Only include inline citations using [id] (e.g., [1], [2]) when the <source> tag includes an id attribute.**
+- Do not cite if the <source> tag does not contain an id attribute.
+- Do not use XML tags in your response.
+- Ensure citations are concise and directly related to the information provided.
 
-### Response Guidelines:
-- **Language**: Respond in the same language as the user's query.
-- **Citations**: 
-  - Include inline citations [id] (e.g., [1], [2]) **only** when the <source> tag includes an explicit id attribute.
-  - Place citations immediately after the relevant claim or statement.
-  - Do not cite if the <source> tag does not contain an id attribute.
-  - When multiple sources support the same claim, cite all relevant sources: [1][2].
-- **Handling Uncertainty**:
-  - If the answer isn't fully available in the context, state this clearly and indicate what information is missing.
-  - If context contains conflicting information, acknowledge the conflict and present both perspectives with their respective citations.
-  - If the context is unreadable or of poor quality, inform the user and provide the best interpretation possible, noting the quality limitation.
-  - If you must rely on knowledge outside the context, explicitly state this: "While not present in the provided documents, [general knowledge statement]."
-- **When You Don't Know**: Clearly state "I cannot find this information in the provided context." Do not guess or fabricate information.
-- **Formatting**: 
-  - Do not include XML tags (<source>, <context>, etc.) in your response.
-  - Write in clear, well-structured paragraphs.
-  - Use bullet points or numbered lists when presenting multiple items.
+### Example of Citation:
+If the user asks about a specific topic and the information is found in a source with a provided id attribute, the response should include the citation like in the following example:
+* "According to the study, the proposed method increases efficiency by 20% [1]."
 
-### Citation Examples:
-- Single source: "The program reached over 5,000 beneficiaries in 2024 [1]."
-- Multiple sources: "Multiple studies confirm this trend [1][2][3]."
-- Partial context: "Based on the available documentation [1], the initiative began in 2023, though specific start dates are not provided in the context."
+### Output:
+Provide a clear and direct response to the user's query, including inline citations in the format [id] only when the <source> tag with id attribute is present in the context.
 
-### Context:
 <context>
 {{CONTEXT}}
 </context>
 
-### User Query:
 <user_query>
 {{QUERY}}
 </user_query>
-
-### Your Response:
-Provide your response here, following all guidelines above."""
+"""
 
 RAG_TEMPLATE = PersistentConfig(
     "RAG_TEMPLATE",
