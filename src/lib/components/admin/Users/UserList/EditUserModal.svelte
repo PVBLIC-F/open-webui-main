@@ -39,17 +39,22 @@
 		role: 'pending',
 		name: '',
 		email: '',
-		password: ''
+		password: '',
+		gmail_sync_enabled: 0
 	};
 
 	let userGroups: any[] | null = null;
 
 	const submitHandler = async () => {
+		console.log('Submitting user data:', _user);
+		console.log('Gmail sync enabled:', _user.gmail_sync_enabled);
+		
 		const res = await updateUserById(localStorage.token, selectedUser.id, _user).catch((error) => {
 			toast.error(`${error}`);
 		});
 
 		if (res) {
+			console.log('User update successful:', res);
 			dispatch('save');
 			show = false;
 		}
@@ -64,6 +69,19 @@
 			return null;
 		});
 	};
+
+	onMount(() => {
+		if (selectedUser) {
+			console.log('Selected user data:', selectedUser);
+			_user = selectedUser;
+			_user.password = '';
+			// Ensure gmail_sync_enabled is properly set (default to 0 if undefined)
+			_user.gmail_sync_enabled = _user.gmail_sync_enabled || 0;
+			console.log('Processed user data:', _user);
+			console.log('Gmail sync enabled value:', _user.gmail_sync_enabled);
+			loadUserGroups();
+		}
+	});
 </script>
 
 <Modal size="sm" bind:show>
@@ -202,6 +220,30 @@
 												autocomplete="new-password"
 												required={false}
 											/>
+										</div>
+									</div>
+
+									<div class="flex flex-col w-full">
+										<div class=" mb-1 text-xs text-gray-500">{$i18n.t('Gmail Email Sync')}</div>
+
+										<div class="flex-1 flex items-center space-x-2">
+											<label class="relative inline-flex items-center cursor-pointer">
+												<input
+													type="checkbox"
+													class="sr-only peer"
+													checked={_user.gmail_sync_enabled === 1}
+													on:change={(e) => {
+														_user.gmail_sync_enabled = e.target.checked ? 1 : 0;
+													}}
+												/>
+												<div class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
+											</label>
+											<span class="text-sm text-gray-700 dark:text-gray-300">
+												{_user.gmail_sync_enabled === 1 ? $i18n.t('Enabled') : $i18n.t('Disabled')}
+											</span>
+										</div>
+										<div class="text-xs text-gray-500 mt-1">
+											{$i18n.t('Allow this user to sync Gmail emails for search')}
 										</div>
 									</div>
 								</div>
