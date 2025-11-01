@@ -23,9 +23,7 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 from open_webui.utils.gmail_processor import GmailProcessor
-from open_webui.utils.text_cleaner import TextCleaner
-from open_webui.utils.semantic_chunker import SemanticEmailChunker
-from open_webui.utils.email_enricher import EmailContentEnricher
+from open_webui.routers.retrieval import extract_enhanced_metadata
 from openai import AsyncOpenAI
 
 # Set up logger with INFO level for visibility
@@ -70,8 +68,6 @@ class GmailIndexer:
         self.embeddings = embedding_service
         self.splitter = content_aware_splitter
         self.doc_processor = document_processor
-        self.semantic_chunker = SemanticEmailChunker()
-        self.email_enricher = EmailContentEnricher()
         self.namespace = gmail_namespace
         self.summarizer_client = summarizer_client
         self.summarizer_model = summarizer_model
@@ -108,23 +104,18 @@ class GmailIndexer:
 
         logger.info(f"Processing email {email_id} ({base_metadata['subject'][:50]}...)")
 
-        # Step 2: Enrich email data with semantic analysis
-        enriched_email_data = self.email_enricher.enrich_email({
-            'subject': base_metadata.get('subject', ''),
-            'body': document_text,
-            **base_metadata
-        })
+        # Step 2: Extract enhanced metadata using Open WebUI's extract_enhanced_metadata
+        combined_text = f"{base_metadata.get('subject', '')}\n\n{document_text}"
+        enhanced_metadata = extract_enhanced_metadata(combined_text, use_llm=False)
 
-        # Step 3: Create semantic chunks using intelligent chunking
-        semantic_chunks = self.semantic_chunker.chunk_email(
-            document_text, 
-            base_metadata.get('subject', '')
-        )
+        # Step 3: Use Open WebUI's content-aware splitter for chunking
+        chunks = self.splitter.split_text(document_text) if document_text else []
+        
+        # If no chunks created or text is short, use full text
+        if not chunks:
+            chunks = [document_text]
 
-        # Convert semantic chunks to simple text chunks for compatibility
-        chunks = [chunk.text for chunk in semantic_chunks] if semantic_chunks else [document_text]
-
-        logger.info(f"Email {email_id} will have {len(chunks)} semantic chunk(s)")
+        logger.info(f"Email {email_id} will have {len(chunks)} chunk(s)")
 
         # Step 4: Generate email summary (1-2 sentences)
         email_summary = await self._generate_summary(
@@ -190,7 +181,7 @@ class GmailIndexer:
             embeddings=all_embeddings,
             chunk_types=chunk_types,
             base_metadata=base_metadata,
-            enriched_data=enriched_email_data,
+            enhanced_metadata=enhanced_metadata,
             email_summary=email_summary,
         )
 
@@ -335,36 +326,22 @@ class GmailIndexer:
 
         return summary if summary else subject
 
-    def _extract_entity_values(self, entities: dict, entity_type: str) -> str:
+    def _extract_list_values(self, data_list: list) -> str:
         """
-        Extract entity values from enriched data and format for Pinecone storage.
+        Extract values from a list and format for Pinecone storage.
         
         Args:
-            entities: Dictionary of entities from email_enricher
-            entity_type: Type of entity to extract (e.g., 'people', 'organizations')
+            data_list: List of strings to join
             
         Returns:
-            Comma-separated string of entity values
+            Comma-separated string of values
         """
-        if not entities or entity_type not in entities:
+        if not data_list or not isinstance(data_list, list):
             return ""
-        
-        entity_list = entities[entity_type]
-        if not entity_list:
-            return ""
-        
-        # Extract just the values from entity objects
-        values = []
-        for entity in entity_list:
-            if isinstance(entity, dict):
-                values.append(entity.get('value', ''))
-            else:
-                # Handle EntityInfo objects
-                values.append(getattr(entity, 'value', str(entity)))
         
         # Remove empty values and join
-        values = [v for v in values if v]
-        return ",".join(values[:10])  # Limit to 10 entities per type
+        values = [str(v) for v in data_list if v]
+        return ",".join(values[:10])  # Limit to 10 items
 
     def _create_content_fingerprint(self, snippet: str) -> str:
         """
@@ -419,7 +396,7 @@ class GmailIndexer:
         embeddings: List[List[float]],
         chunk_types: List[str],
         base_metadata: Dict,
-        enriched_data: Dict,
+        enhanced_metadata: Dict,
         email_summary: str,
     ) -> List[Dict]:
         """
@@ -431,7 +408,10 @@ class GmailIndexer:
         Args:
             chunks: List of text chunks from email
             embeddings: List of embedding vectors (one per chunk)
+            chunk_types: List of chunk types ('summary' or 'content')
             base_metadata: Base metadata from GmailProcessor
+            enhanced_metadata: Enhanced metadata from extract_enhanced_metadata
+            email_summary: Generated email summary
 
         Returns:
             List of dicts ready for Pinecone upsert
@@ -459,12 +439,15 @@ class GmailIndexer:
                 "thread_id": base_metadata["thread_id"],
                 "user_id": user_id,
                 # Content with chunk type
-                "chunk_text": TextCleaner.clean_for_pinecone(chunk_text),
+                "chunk_text": self._clean_for_storage(chunk_text),
                 "chunk_type": chunk_type,  # "summary" or "content"
                 "chunk_index": i,
                 "total_chunks": len(chunks),
                 # Email summary (for all chunks)
                 "email_summary": email_summary,
+                # Enhanced metadata from Open WebUI's extract_enhanced_metadata
+                "chunk_summary": enhanced_metadata.get("chunk_summary", ""),
+                "chunk_title": enhanced_metadata.get("chunk_title", ""),
                 # Timing (SAME structure as chat)
                 "timestamp": datetime.utcnow().isoformat() + "Z",
                 "date_timestamp": base_metadata["date_timestamp"],
@@ -493,21 +476,14 @@ class GmailIndexer:
                 # Deduplication
                 "hash": base_metadata["hash"],
                 
-                # Enhanced metadata from content enrichment (Pinecone-compatible format)
-                "topics": ",".join(enriched_data.get("topics", [])),
-                "sentiment_score": enriched_data.get("sentiment", {}).get("overall", 0.0),
-                "sentiment_positive": enriched_data.get("sentiment", {}).get("positive", 0.0),
-                "sentiment_negative": enriched_data.get("sentiment", {}).get("negative", 0.0),
-                "key_phrases": ",".join(enriched_data.get("key_phrases", [])),
-                "semantic_tags": ",".join(enriched_data.get("semantic_tags", [])),
-                "content_type": enriched_data.get("content_type", "general"),
-                "action_items": ",".join(enriched_data.get("action_items", [])),
+                # Enhanced metadata from Open WebUI's extract_enhanced_metadata
+                "topics": self._extract_list_values(enhanced_metadata.get("topics", [])),
+                "keywords": self._extract_list_values(enhanced_metadata.get("keywords", [])),
+                "potential_questions": self._extract_list_values(enhanced_metadata.get("potential_questions", [])),
                 # Entity extraction - store as comma-separated values
-                "entity_people": self._extract_entity_values(enriched_data.get("entities", {}), "people"),
-                "entity_organizations": self._extract_entity_values(enriched_data.get("entities", {}), "organizations"),
-                "entity_locations": self._extract_entity_values(enriched_data.get("entities", {}), "locations"),
-                "entity_dates": self._extract_entity_values(enriched_data.get("entities", {}), "date"),
-                "entity_money": self._extract_entity_values(enriched_data.get("entities", {}), "money"),
+                "entity_people": self._extract_list_values(enhanced_metadata.get("entities_people", [])),
+                "entity_organizations": self._extract_list_values(enhanced_metadata.get("entities_organizations", [])),
+                "entity_locations": self._extract_list_values(enhanced_metadata.get("entities_locations", [])),
             }
 
             upsert_data.append(
@@ -521,18 +497,12 @@ class GmailIndexer:
         return upsert_data
 
     @staticmethod
-    def _clean_for_pinecone(text: str) -> str:
+    def _clean_for_storage(text: str) -> str:
         """
-        Clean text for Pinecone storage (remove problematic characters).
-
-        Simplified version - you can replace with TextCleaner.clean_for_pinecone
-        from your chat filter if needed.
+        Clean text for vector database storage (remove problematic characters).
         """
-
         if not text:
             return ""
-
-        import re
 
         # Remove control characters except newlines/tabs
         text = re.sub(r"[\x00-\x1F\x7F-\x9F]", "", text)
@@ -543,7 +513,7 @@ class GmailIndexer:
         # Encode as UTF-8 (remove invalid chars)
         text = text.encode("utf-8", "ignore").decode("utf-8")
 
-        # Limit length for Pinecone
+        # Limit length for storage
         max_length = 10000
         if len(text) > max_length:
             text = text[:max_length] + "..."

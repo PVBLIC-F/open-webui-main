@@ -13,11 +13,30 @@ Produces high-quality, clean text suitable for embeddings and search.
 
 import re
 from typing import Tuple
-from open_webui.utils.text_cleaner import TextCleaner
 
 
 class EmailCleaner:
     """Advanced email cleaning specifically for Gmail messages"""
+
+    @staticmethod
+    def _basic_clean_text(text: str) -> str:
+        """Basic text cleaning - handles HTML entities, escape sequences"""
+        if not text:
+            return ""
+        
+        # Handle escape sequences
+        text = text.replace("\\n\\n", "\n\n")
+        text = text.replace("\\n", "\n")
+        text = text.replace("\\t", "\t")
+        text = text.replace("\\r", "")
+        text = text.replace('\\"', '"')
+        text = text.replace("\\'", "'")
+        
+        # Normalize whitespace
+        text = re.sub(r" {2,}", " ", text)
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        
+        return text.strip()
 
     # Common signature patterns (more comprehensive)
     SIGNATURE_PATTERNS = [
@@ -68,7 +87,7 @@ class EmailCleaner:
             return "", ""
 
         # Start with basic text cleaning
-        text = TextCleaner.clean_text(body)
+        text = EmailCleaner._basic_clean_text(body)
 
         # Split into lines for processing
         lines = text.split("\n")

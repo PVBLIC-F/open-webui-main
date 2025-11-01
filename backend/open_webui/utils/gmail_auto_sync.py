@@ -618,25 +618,23 @@ async def _background_gmail_sync(request, user_id: str, oauth_token: dict):
 
             async def embed_batch(self, texts: List[str]) -> List[List[float]]:
                 """Generate embeddings using Open WebUI's embedding function (non-blocking)"""
-                from open_webui.utils.text_cleaner import TextCleaner
 
                 async def embed_single(text: str) -> List[float]:
                     """Embed single text in executor to avoid blocking event loop"""
                     try:
-                        # Run CPU-intensive cleaning and embedding in thread executor
+                        # Run CPU-intensive embedding in thread executor
                         loop = asyncio.get_running_loop()
 
-                        # Clean and truncate in thread pool (CPU-intensive)
-                        def clean_and_embed():
-                            clean_text = TextCleaner.clean_text(text)
-
+                        # Prepare and embed in thread pool
+                        def prepare_and_embed():
                             # Truncate to safe limit
+                            clean_text = text.strip()
                             max_chars = 8000
                             if len(clean_text) > max_chars:
                                 clean_text = clean_text[:max_chars]
 
                             # Ensure not empty
-                            if not clean_text or not clean_text.strip():
+                            if not clean_text:
                                 clean_text = "Email content not available"
 
                             # Call embedding function (may be network I/O)
@@ -644,7 +642,7 @@ async def _background_gmail_sync(request, user_id: str, oauth_token: dict):
                                 clean_text, prefix="", user=None
                             )
 
-                        vector = await loop.run_in_executor(None, clean_and_embed)
+                        vector = await loop.run_in_executor(None, prepare_and_embed)
 
                         if vector is None:
                             raise ValueError("Embedding function returned None")
