@@ -451,8 +451,7 @@ from open_webui.config import (
     GMAIL_SEARCH_TOOL_ENABLED,
     GMAIL_PERIODIC_SYNC_ENABLED,
     GMAIL_PERIODIC_SYNC_INTERVAL_HOURS,
-    PINECONE_NAMESPACE_GMAIL,
-    # Pinecone (needed for Gmail)
+    # Pinecone dimension (needed for embeddings)
     PINECONE_DIMENSION,
     AppConfig,
     reset_config,
@@ -936,8 +935,8 @@ app.state.config.GMAIL_SKIP_SPAM_AND_TRASH = GMAIL_SKIP_SPAM_AND_TRASH
 app.state.config.GMAIL_SEARCH_TOOL_ENABLED = GMAIL_SEARCH_TOOL_ENABLED
 app.state.config.GMAIL_PERIODIC_SYNC_ENABLED = GMAIL_PERIODIC_SYNC_ENABLED
 app.state.config.GMAIL_PERIODIC_SYNC_INTERVAL_HOURS = GMAIL_PERIODIC_SYNC_INTERVAL_HOURS
-app.state.config.PINECONE_NAMESPACE_GMAIL = PINECONE_NAMESPACE_GMAIL
 app.state.config.PINECONE_DIMENSION = PINECONE_DIMENSION
+# Note: Gmail now uses per-user namespaces (email-{user_id}), no shared namespace
 
 app.state.config.RAG_EMBEDDING_ENGINE = RAG_EMBEDDING_ENGINE
 app.state.config.RAG_EMBEDDING_MODEL = RAG_EMBEDDING_MODEL

@@ -50,7 +50,6 @@ class GmailAutoSync:
         content_aware_splitter,
         document_processor,
         pinecone_manager,
-        gmail_namespace: str,
     ):
         """
         Initialize auto-sync orchestrator.
@@ -60,16 +59,15 @@ class GmailAutoSync:
             content_aware_splitter: ContentAwareTextSplitter from chat filter
             document_processor: DocumentProcessor from chat filter
             pinecone_manager: PineconeManager from chat filter
-            gmail_namespace: Pinecone namespace for Gmail (PINECONE_NAMESPACE_GMAIL)
+            
+        Note: Uses per-user namespaces (email-{user_id}) computed at sync time
         """
         self.indexer = GmailIndexer(
             embedding_service=embedding_service,
             content_aware_splitter=content_aware_splitter,
             document_processor=document_processor,
-            gmail_namespace=gmail_namespace,
         )
         self.pinecone = pinecone_manager
-        self.gmail_namespace = gmail_namespace
 
         # Track active syncs
         self.active_syncs = {}  # user_id -> sync_status
@@ -103,7 +101,7 @@ class GmailAutoSync:
         logger.info(f"   Max emails: {max_emails}")
         logger.info(f"   Skip spam/trash: {skip_spam_trash}")
         logger.info(f"   Incremental: {incremental}")
-        logger.info(f"   Namespace: {self.gmail_namespace}")
+        logger.info(f"   Namespace: email-{user_id} (per-user isolation)")
         logger.info("=" * 70)
 
         # Get or create sync status
@@ -599,12 +597,11 @@ async def _background_gmail_sync(request, user_id: str, oauth_token: dict):
         max_emails = request.app.state.config.GMAIL_AUTO_SYNC_MAX_EMAILS
         skip_spam_trash = request.app.state.config.GMAIL_SKIP_SPAM_AND_TRASH
         batch_size = request.app.state.config.GMAIL_SYNC_BATCH_SIZE
-        gmail_namespace = request.app.state.config.PINECONE_NAMESPACE_GMAIL
 
         logger.info(
             f"Gmail sync config: max_emails={max_emails}, "
             f"skip_spam_trash={skip_spam_trash}, batch_size={batch_size}, "
-            f"namespace={gmail_namespace}"
+            f"namespace=email-{user_id} (per-user)"
         )
 
         # Create simple wrapper services for the background task
@@ -724,26 +721,31 @@ async def _background_gmail_sync(request, user_id: str, oauth_token: dict):
             """
             Thin wrapper around VECTOR_DB_CLIENT for Gmail email storage.
 
-            Uses collection-based isolation (not namespaces):
-            - Each user has their own collection: gmail_{user_id}
-            - User isolation via collection name + metadata user_id
+            Uses per-user namespace strategy:
+            - Pinecone: namespace = "email-{user_id}" (namespace-based isolation)
+            - Chroma: collection = "email-{user_id}" (collection-based isolation)
             - Compatible with Open WebUI's vector DB abstraction
             """
 
-            def __init__(self, namespace):
-                self.namespace = namespace  # Gmail namespace (e.g., "gmail-inbox")
+            def __init__(self):
+                pass  # No shared namespace - computed per-user at upsert time
 
             async def schedule_upsert(
                 self, upsert_data: List[dict], user_id: str, namespace: str = None
             ):
                 """
-                Upsert vectors using existing VECTOR_DB_CLIENT with namespace support.
+                Upsert vectors using existing VECTOR_DB_CLIENT with per-user namespace support.
 
-                Namespace Strategy:
-                - Gmail emails: Use PINECONE_NAMESPACE_GMAIL (e.g., "gmail-inbox")
-                - Chat summaries: Use PINECONE_NAMESPACE (e.g., "chat-summary-knowledge")
-                - User isolation via metadata user_id
-                - Type metadata: "email" (document type filter)
+                Namespace Strategy for Open WebUI:
+                - Pinecone: namespace = "email-{user_id}" (per-user namespace isolation)
+                - Chroma: collection = "email-{user_id}" (per-user collection)
+                - Collection name: "gmail" (shared, for Pinecone only)
+                - Type metadata: "email" for document type filtering
+
+                Benefits:
+                - Easy user data deletion: just delete the namespace
+                - Clean isolation between users
+                - No cross-user data leakage
 
                 Runs in thread executor to avoid blocking the async event loop.
                 """
@@ -804,14 +806,14 @@ async def _background_gmail_sync(request, user_id: str, oauth_token: dict):
                     )
                     return
 
-                # Use namespace-based isolation for Gmail emails WITH user isolation
+                # Per-user namespace strategy for Open WebUI
                 # Collection name: "gmail" (shared across all users)
-                # Namespace: self.namespace (e.g., "gmail-inbox") 
-                # User isolation: metadata user_id + collection filter
+                # Namespace: "email-{user_id}" (separate namespace per user for easy management)
+                # User isolation: namespace-based (cleanest isolation in Pinecone)
                 collection_name = "gmail"
-                gmail_namespace = self.namespace or "gmail-inbox"
+                user_namespace = f"email-{user_id}"  # Per-user namespace
 
-                # Ensure all vectors have user_id in metadata for isolation
+                # Ensure all vectors have user_id in metadata for additional filtering
                 for item in valid_items:
                     if "metadata" not in item:
                         item["metadata"] = {}
@@ -822,10 +824,10 @@ async def _background_gmail_sync(request, user_id: str, oauth_token: dict):
                     f"📤 Upserting {len(valid_items)} valid vectors to collection: {collection_name}"
                 )
                 logger.info(
-                    f"   Namespace: '{gmail_namespace}' (Gmail emails separated from chat summaries)"
+                    f"   Namespace: '{user_namespace}' (per-user isolation in Open WebUI)"
                 )
                 logger.info(
-                    f"   User isolation: metadata user_id=""{user_id}"" + collection filter"
+                    f"   User: {user_id}"
                 )
 
                 try:
@@ -838,20 +840,21 @@ async def _background_gmail_sync(request, user_id: str, oauth_token: dict):
                     upsert_signature = inspect.signature(VECTOR_DB_CLIENT.upsert)
                     if 'namespace' in upsert_signature.parameters:
                         # Vector DB supports namespace (e.g., Pinecone)
+                        # Use per-user namespace: email-{user_id}
                         await loop.run_in_executor(
-                            None, VECTOR_DB_CLIENT.upsert, collection_name, valid_items, gmail_namespace
+                            None, VECTOR_DB_CLIENT.upsert, collection_name, valid_items, user_namespace
                         )
                         logger.info(
-                            f"✅ Upserted {len(valid_items)} vectors to collection {collection_name} in namespace '{gmail_namespace}' with user isolation"
+                            f"✅ Upserted {len(valid_items)} vectors to collection '{collection_name}' in namespace '{user_namespace}'"
                         )
                     else:
                         # Vector DB doesn't support namespace (e.g., Chroma) - use collection-based isolation
-                        user_collection = f"gmail_{user_id}"
+                        user_collection = f"email-{user_id}"
                         await loop.run_in_executor(
                             None, VECTOR_DB_CLIENT.upsert, user_collection, valid_items
                         )
                         logger.info(
-                            f"✅ Upserted {len(valid_items)} vectors to collection {user_collection} (no namespace support - using collection isolation)"
+                            f"✅ Upserted {len(valid_items)} vectors to collection '{user_collection}' (per-user collection)"
                         )
 
                     # Clear valid_items to free memory immediately after upsert
@@ -867,15 +870,14 @@ async def _background_gmail_sync(request, user_id: str, oauth_token: dict):
         embedding_service = SimpleEmbeddingService(request.app.state)
         text_splitter = SimpleTextSplitter()
         doc_processor = SimpleDocProcessor()
-        pinecone_manager = SimplePineconeManager(gmail_namespace)
+        pinecone_manager = SimplePineconeManager()
 
-        # Initialize GmailAutoSync orchestrator
+        # Initialize GmailAutoSync orchestrator (uses per-user namespaces)
         gmail_sync = GmailAutoSync(
             embedding_service=embedding_service,
             content_aware_splitter=text_splitter,
             document_processor=doc_processor,
             pinecone_manager=pinecone_manager,
-            gmail_namespace=gmail_namespace,
         )
 
         # Execute the sync
@@ -943,10 +945,9 @@ async def test_auto_sync_orchestrator():
         content_aware_splitter=MockSplitter(),
         document_processor=MockDocProcessor(),
         pinecone_manager=MockPineconeManager(),
-        gmail_namespace="gmail-inbox",
     )
 
-    print(f"   Namespace: {sync.gmail_namespace}")
+    print(f"   Namespace strategy: Per-user (email-{{user_id}})")
     print(f"   Indexer initialized: ✓")
     print(f"   Pinecone manager ready: ✓")
     print("   ✅ PASSED\n")

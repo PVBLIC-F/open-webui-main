@@ -4,14 +4,18 @@ Gmail Indexer - Integration Layer
 This module integrates GmailProcessor with existing chat summary infrastructure:
 - Uses ContentAwareTextSplitter for intelligent email chunking
 - Uses EmbeddingService for vector generation
-- Uses PineconeManager for storage
+- Uses Open WebUI's extract_enhanced_metadata for content analysis
 - Matches the exact metadata pattern from chat summaries
 
-Namespace Strategy:
-- Chat summaries: PINECONE_NAMESPACE (e.g., "chat-summary-knowledge")
-- Gmail emails: PINECONE_NAMESPACE_GMAIL (e.g., "gmail-inbox")
+Namespace Strategy (Pinecone):
+- Per-user namespaces: "email-{user_id}" (e.g., "email-abc123")
+- Collection name: "gmail" (shared across all users)
+- Easy user data deletion: just delete the namespace
 
-This is the bridge between Gmail parsing and your existing RAG system.
+For non-namespace vector DBs (Chroma):
+- Per-user collections: "email-{user_id}"
+
+This is the bridge between Gmail parsing and Open WebUI's RAG system.
 """
 
 import logging
@@ -38,10 +42,12 @@ class GmailIndexer:
     Reuses:
     - ContentAwareTextSplitter (from chat summary filter)
     - EmbeddingService (from chat summary filter)
-    - PineconeManager (from chat summary filter)
+    - Open WebUI's extract_enhanced_metadata for content analysis
     - DocumentProcessor quality scoring
 
-    Uses separate namespace: PINECONE_NAMESPACE_GMAIL
+    Namespace Strategy:
+    - Per-user namespaces: "email-{user_id}" for Pinecone
+    - Per-user collections: "email-{user_id}" for Chroma
     """
 
     def __init__(
@@ -49,7 +55,6 @@ class GmailIndexer:
         embedding_service,
         content_aware_splitter,
         document_processor,
-        gmail_namespace: str = "gmail-inbox",
         summarizer_client: AsyncOpenAI = None,
         summarizer_model: str = None,
     ):
@@ -60,15 +65,15 @@ class GmailIndexer:
             embedding_service: EmbeddingService instance from chat filter
             content_aware_splitter: ContentAwareTextSplitter instance
             document_processor: DocumentProcessor instance for quality scoring
-            gmail_namespace: Pinecone namespace for Gmail emails (from PINECONE_NAMESPACE_GMAIL env var)
             summarizer_client: OpenAI client for summarization (optional)
             summarizer_model: Model for summarization (optional)
+            
+        Note: Namespace is now per-user (email-{user_id}), computed at upsert time
         """
         self.gmail_processor = GmailProcessor()
         self.embeddings = embedding_service
         self.splitter = content_aware_splitter
         self.doc_processor = document_processor
-        self.namespace = gmail_namespace
         self.summarizer_client = summarizer_client
         self.summarizer_model = summarizer_model
 
