@@ -436,6 +436,7 @@ type UserUpdateForm = {
 	email: string;
 	name: string;
 	password: string;
+	gmail_sync_enabled?: number;
 };
 
 export const updateUserById = async (token: string, userId: string, user: UserUpdateForm) => {
@@ -452,7 +453,8 @@ export const updateUserById = async (token: string, userId: string, user: UserUp
 			role: user.role,
 			email: user.email,
 			name: user.name,
-			password: user.password !== '' ? user.password : undefined
+			password: user.password !== '' ? user.password : undefined,
+			gmail_sync_enabled: user.gmail_sync_enabled
 		})
 	})
 		.then(async (res) => {
