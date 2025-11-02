@@ -88,7 +88,7 @@ class GmailAttachmentProcessor:
         """
         try:
             # Import unstructured loader
-            from open_webui.retrieval.loaders.unstructured_loader import UnstructuredLoader
+            from open_webui.retrieval.loaders.unstructured_loader import UnstructuredUnifiedLoader
             
             # Create temporary file for processing
             with tempfile.NamedTemporaryFile(
@@ -103,12 +103,15 @@ class GmailAttachmentProcessor:
                 # Process with unstructured.io
                 logger.info(f"Processing attachment '{filename}' ({len(attachment_data)} bytes) with unstructured.io")
                 
-                loader = UnstructuredLoader(
+                loader = UnstructuredUnifiedLoader(
                     file_path=temp_path,
-                    # Use basic chunking for attachments (we'll re-chunk later with email content)
+                    # Use fast strategy for attachments (performance over quality)
+                    strategy="fast",
+                    # Use basic chunking for attachments
                     chunking_strategy="basic",
-                    max_characters=4000,  # Reasonable chunk size
-                    combine_under_n_chars=100,  # Combine small elements
+                    max_characters=1000,  # Smaller chunks for attachments
+                    chunk_overlap=100,
+                    cleaning_level="standard",  # Standard cleaning
                 )
                 
                 # Extract documents

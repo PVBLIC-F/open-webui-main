@@ -167,9 +167,31 @@ class GmailIndexerV2:
             attachment_texts=attachment_texts,
         )
         
+        # Debug: Check if search_text is empty
+        if not search_text or not search_text.strip():
+            logger.warning(
+                f"  ⚠️ Email {email_id[:8]} has empty search_text after cleaning! "
+                f"Subject: {base_metadata['subject'][:50]}, "
+                f"Body length: {len(parsed['document_text'])}"
+            )
+            # Fallback: use cleaned subject + snippet if body is empty
+            search_text = f"{base_metadata['subject']}\n\n{parsed.get('snippet', '')}"
+            search_text = self._deep_clean_for_embeddings(search_text)
+        
+        logger.debug(f"  Search text length: {len(search_text)} chars")
+        logger.debug(f"  Search text preview: {search_text[:200]}...")
+        
         # Step 4: Extract enhanced metadata for filtering/enrichment
         # Use LLM=False for speed (rule-based extraction)
         enhanced_metadata = extract_enhanced_metadata(search_text, use_llm=False)
+        
+        # Debug: Check enhanced metadata quality
+        logger.debug(
+            f"  Enhanced metadata: "
+            f"topics={len(enhanced_metadata.get('topics', []))}, "
+            f"keywords={len(enhanced_metadata.get('keywords', []))}, "
+            f"entities_people={len(enhanced_metadata.get('entities_people', []))}"
+        )
         
         # Step 5: Generate ONE high-quality embedding
         # Note: embedding service only has embed_batch, so we pass single-item list
@@ -349,6 +371,13 @@ class GmailIndexerV2:
         if body:
             body_clean = self._deep_clean_for_embeddings(body)
             
+            # Debug: Log cleaning impact
+            if len(body) > 0 and len(body_clean) == 0:
+                logger.warning(
+                    f"Body cleaning removed ALL content! "
+                    f"Original: {len(body)} chars → Cleaned: {len(body_clean)} chars"
+                )
+            
             # Limit body length intelligently
             if len(body_clean) > self.OPTIMAL_TEXT_LENGTH:
                 # Keep first N chars (usually most important content)
@@ -360,6 +389,13 @@ class GmailIndexerV2:
             
             if body_clean:
                 parts.append(body_clean)
+            elif body:
+                # Fallback: if cleaning removed everything, use first 800 chars of original
+                logger.warning("Cleaning removed all body text, using original (lightly cleaned)")
+                body_fallback = body[:self.OPTIMAL_TEXT_LENGTH]
+                # Just remove obvious escape sequences
+                body_fallback = body_fallback.replace('\\n', '\n').replace('\\t', ' ')
+                parts.append(body_fallback)
         
         # 4. Attachment content (if substantive)
         if attachment_texts:
@@ -380,7 +416,16 @@ class GmailIndexerV2:
         if len(final_text) > self.MAX_TEXT_LENGTH:
             final_text = final_text[:self.MAX_TEXT_LENGTH]
         
-        return final_text.strip()
+        final_text = final_text.strip()
+        
+        # Sanity check: ensure no literal escape sequences remain
+        if '\\n' in final_text or '\\t' in final_text:
+            logger.warning("Search text still contains escape sequences after cleaning!")
+            # One more pass to clean escape sequences
+            final_text = final_text.replace('\\n', '\n').replace('\\t', ' ')
+            final_text = final_text.replace('\\r', '').replace('\\\\', '')
+        
+        return final_text
 
     @staticmethod
     def _deep_clean_for_embeddings(text: str) -> str:
@@ -541,6 +586,13 @@ class GmailIndexerV2:
         text_snippet = search_text[:500].strip()
         if len(search_text) > 500:
             text_snippet += "..."
+        
+        # Debug: Log if text_snippet is empty
+        if not text_snippet:
+            logger.error(
+                f"❌ text_snippet is EMPTY for email {email_id}! "
+                f"search_text length was: {len(search_text)}"
+            )
         
         metadata = {
             # === Core Identification ===
