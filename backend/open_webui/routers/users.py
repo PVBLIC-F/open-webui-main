@@ -724,9 +724,7 @@ async def force_gmail_sync(user_id: str, request: Request, user=Depends(get_admi
         )
     
     # Get or refresh OAuth token using Open WebUI's OAuth manager
-    from open_webui.utils.oauth import oauth_manager
-    
-    oauth_token = await oauth_manager.get_oauth_token(
+    oauth_token = await request.app.state.oauth_manager.get_oauth_token(
         user_id=user_id,
         session_id=oauth_session.id,
         force_refresh=False  # Will auto-refresh if expired
