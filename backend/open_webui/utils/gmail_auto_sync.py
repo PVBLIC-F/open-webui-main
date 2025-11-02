@@ -26,7 +26,7 @@ from typing import Dict, List, Optional
 from datetime import datetime
 
 from open_webui.utils.gmail_fetcher import GmailFetcher
-from open_webui.utils.gmail_indexer import GmailIndexer
+from open_webui.utils.gmail_indexer_v2 import GmailIndexerV2
 from open_webui.models.users import Users
 from open_webui.models.oauth_sessions import OAuthSessions
 from open_webui.models.gmail_sync import gmail_sync_status
@@ -47,9 +47,9 @@ class GmailAutoSync:
     def __init__(
         self,
         embedding_service,
-        content_aware_splitter,
         document_processor,
         pinecone_manager,
+        app_config=None,
         process_attachments: bool = True,
         max_attachment_size_mb: int = 10,
         allowed_attachment_types: str = ".pdf,.docx,.doc,.xlsx,.xls,.pptx,.ppt,.txt,.csv,.md,.html,.eml",
@@ -59,19 +59,21 @@ class GmailAutoSync:
 
         Args:
             embedding_service: EmbeddingService from chat filter
-            content_aware_splitter: ContentAwareTextSplitter from chat filter
             document_processor: DocumentProcessor from chat filter
             pinecone_manager: PineconeManager from chat filter
+            app_config: App config for accessing RAG/Document settings
             process_attachments: Enable attachment processing
             max_attachment_size_mb: Maximum attachment size in MB
             allowed_attachment_types: Comma-separated allowed extensions
             
         Note: Uses per-user namespaces (email-{user_id}) computed at sync time
+        Note: V2 uses single-vector strategy (no chunking needed)
+        Note: Respects admin panel RAG/Document settings
         """
-        self.indexer = GmailIndexer(
+        self.indexer = GmailIndexerV2(
             embedding_service=embedding_service,
-            content_aware_splitter=content_aware_splitter,
             document_processor=document_processor,
+            app_config=app_config,
         )
         self.pinecone = pinecone_manager
         
@@ -698,25 +700,8 @@ async def _background_gmail_sync(request, user_id: str, oauth_token: dict):
 
                 return embeddings
 
-        class SimpleTextSplitter:
-            """Simple text splitter (fallback if ContentAwareTextSplitter not available)"""
-
-            def split_text(self, text: str) -> List[str]:
-                """Split text into chunks by paragraphs"""
-                # Simple split by double newlines
-                chunks = text.split("\n\n")
-                chunks = [
-                    c.strip() for c in chunks if c.strip() and len(c.strip()) > 50
-                ]
-
-                # If no chunks or single large chunk, return as-is
-                if not chunks:
-                    return [text] if text else []
-
-                return chunks
-
         # Reuse quality scoring from gmail_indexer (no duplication!)
-        from open_webui.utils.gmail_indexer import GmailIndexer
+        from open_webui.utils.gmail_indexer_v2 import GmailIndexerV2
 
         class SimpleDocProcessor:
             """Thin wrapper to provide quality_score method"""
@@ -891,16 +876,17 @@ async def _background_gmail_sync(request, user_id: str, oauth_token: dict):
 
         # Initialize services
         embedding_service = SimpleEmbeddingService(request.app.state)
-        text_splitter = SimpleTextSplitter()
         doc_processor = SimpleDocProcessor()
         pinecone_manager = SimplePineconeManager()
 
         # Initialize GmailAutoSync orchestrator (uses per-user namespaces)
+        # V2: Single-vector strategy (no chunking needed)
+        # Uses admin panel RAG/Document settings
         gmail_sync = GmailAutoSync(
             embedding_service=embedding_service,
-            content_aware_splitter=text_splitter,
             document_processor=doc_processor,
             pinecone_manager=pinecone_manager,
+            app_config=request.app.state.config,  # Pass config for RAG settings
             process_attachments=process_attachments,
             max_attachment_size_mb=max_attachment_size_mb,
             allowed_attachment_types=allowed_attachment_types,
@@ -950,10 +936,6 @@ async def test_auto_sync_orchestrator():
         async def embed_batch(self, texts):
             return [[0.1] * 1536 for _ in texts]
 
-    class MockSplitter:
-        def split_text(self, text):
-            return [text]  # Simple: one chunk per email
-
     class MockDocProcessor:
         @staticmethod
         def quick_quality_score(text):
@@ -964,15 +946,15 @@ async def test_auto_sync_orchestrator():
             logger.info(f"Mock upsert: {len(data)} vectors for user '{user_id}' to namespace '{namespace}'")
             return f"job_{time.time()}"
 
-    print("\n✅ TEST 1: Initialize Auto-Sync Orchestrator")
+    print("\n✅ TEST 1: Initialize Auto-Sync Orchestrator (V2)")
 
     sync = GmailAutoSync(
         embedding_service=MockEmbeddingService(),
-        content_aware_splitter=MockSplitter(),
         document_processor=MockDocProcessor(),
         pinecone_manager=MockPineconeManager(),
     )
 
+    print(f"   Strategy: Single-vector per email (V2)")
     print(f"   Namespace strategy: Per-user (email-{{user_id}})")
     print(f"   Indexer initialized: ✓")
     print(f"   Pinecone manager ready: ✓")
