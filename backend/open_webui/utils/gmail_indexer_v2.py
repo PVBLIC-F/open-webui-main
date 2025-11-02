@@ -359,22 +359,32 @@ class GmailIndexerV2:
         """
         parts = []
         
+        # DEBUG: Log inputs
+        logger.debug(f"Creating search text - Subject: {len(subject)} chars, From: {len(from_name)} chars, Body: {len(body)} chars")
+        
         # 1. Subject (highest semantic importance)
         if subject and subject != "(No Subject)":
             parts.append(f"Subject: {subject}")
+            logger.debug(f"  Added subject: {len(subject)} chars")
         
         # 2. From name (important for person-based queries)
         if from_name:
             parts.append(f"From: {from_name}")
+            logger.debug(f"  Added from_name: {len(from_name)} chars")
         
         # 3. Email body (deeply cleaned)
         if body:
+            # DEBUG: Check for escape sequences in input
+            has_escapes = '\\n' in body or '\\t' in body or '\\r' in body
+            logger.debug(f"  Body has escape sequences: {has_escapes}, Body preview: {body[:100]}")
+            
             body_clean = self._deep_clean_for_embeddings(body)
             
             # Debug: Log cleaning impact
+            logger.debug(f"  Body: {len(body)} chars → Cleaned: {len(body_clean)} chars")
             if len(body) > 0 and len(body_clean) == 0:
                 logger.warning(
-                    f"Body cleaning removed ALL content! "
+                    f"  ⚠️ Body cleaning removed ALL content! "
                     f"Original: {len(body)} chars → Cleaned: {len(body_clean)} chars"
                 )
             
@@ -409,8 +419,15 @@ class GmailIndexerV2:
             if att_clean:
                 parts.append(f"Attachments: {att_clean}")
         
+        # Debug: Log parts before joining
+        logger.debug(f"  Parts to combine: {len(parts)} parts")
+        for i, part in enumerate(parts):
+            logger.debug(f"    Part {i}: {len(part)} chars, has escapes: {'\\n' in part}")
+        
         # Combine with proper spacing
         final_text = "\n\n".join(parts)
+        
+        logger.debug(f"  After join: {len(final_text)} chars, has escapes: {'\\n' in final_text}")
         
         # Final length check
         if len(final_text) > self.MAX_TEXT_LENGTH:
@@ -419,11 +436,19 @@ class GmailIndexerV2:
         final_text = final_text.strip()
         
         # Sanity check: ensure no literal escape sequences remain
-        if '\\n' in final_text or '\\t' in final_text:
-            logger.warning("Search text still contains escape sequences after cleaning!")
+        if '\\n' in final_text or '\\t' in final_text or '\\r' in final_text:
+            logger.warning(f"  ⚠️ Search text has escape sequences! Cleaning now...")
+            logger.debug(f"  Before escape clean: {repr(final_text[:100])}")
             # One more pass to clean escape sequences
             final_text = final_text.replace('\\n', '\n').replace('\\t', ' ')
             final_text = final_text.replace('\\r', '').replace('\\\\', '')
+            # Re-normalize whitespace after converting escapes
+            final_text = re.sub(r'\s+', ' ', final_text)
+            final_text = re.sub(r'\n{3,}', '\n\n', final_text)
+            final_text = final_text.strip()
+            logger.debug(f"  After escape clean: {repr(final_text[:100])}")
+        
+        logger.debug(f"  Final search text: {len(final_text)} chars")
         
         return final_text
 
@@ -452,7 +477,15 @@ class GmailIndexerV2:
             return ""
         
         # STEP 1: Fix escape sequences (critical for embedding quality)
-        # These MUST be handled first
+        # These MUST be handled first - handle both single and double-escaped
+        
+        # First, handle double-escaped sequences (\\n → \n)
+        text = text.replace('\\\\n', '\n')
+        text = text.replace('\\\\t', '\t')
+        text = text.replace('\\\\r', '\r')
+        text = text.replace('\\\\\\\\', '\\')
+        
+        # Then handle single-escaped sequences (\n → actual newline)
         text = text.replace('\\n\\n', '\n\n')
         text = text.replace('\\n', '\n')
         text = text.replace('\\t', '    ')  # Convert tabs to spaces
@@ -587,12 +620,28 @@ class GmailIndexerV2:
         if len(search_text) > 500:
             text_snippet += "..."
         
-        # Debug: Log if text_snippet is empty
-        if not text_snippet:
-            logger.error(
-                f"❌ text_snippet is EMPTY for email {email_id}! "
-                f"search_text length was: {len(search_text)}"
+        # CRITICAL FIX: If text_snippet is empty, use subject as fallback
+        if not text_snippet or len(text_snippet) < 10:
+            logger.warning(
+                f"  ⚠️ text_snippet empty or too short ({len(text_snippet)} chars), "
+                f"using subject as fallback"
             )
+            text_snippet = base_metadata["subject"]
+            if not text_snippet:
+                text_snippet = f"Email {email_id[:8]}"
+        
+        # Apply final Pinecone cleaning (matches chat summary format)
+        text_snippet_clean = self._clean_for_pinecone(text_snippet)
+        
+        # Debug: Log text_snippet creation
+        logger.debug(
+            f"  Text snippet: search_text={len(search_text)} chars, "
+            f"snippet={len(text_snippet_clean)} chars, "
+            f"preview: {text_snippet_clean[:100]}"
+        )
+        
+        # Final sanity check before building metadata
+        logger.debug(f"  Building metadata with text_snippet_clean: {len(text_snippet_clean)} chars")
         
         metadata = {
             # === Core Identification ===
@@ -602,8 +651,11 @@ class GmailIndexerV2:
             "user_id": user_id,
             "index_version": self.INDEX_VERSION,
             
-            # === Searchable Text (for result display) ===
-            "text": text_snippet,
+            # === Searchable Text (PRIMARY - matches chat summary format) ===
+            # Use chunk_text as primary field (standard for all Open WebUI content)
+            # Fallback to text for backward compatibility
+            "chunk_text": text_snippet_clean,  # PRIMARY: Used for search/display (Pinecone-cleaned)
+            "text": text_snippet_clean,  # FALLBACK: For compatibility
             
             # === Structured Email Fields (for filtering) ===
             "subject": base_metadata["subject"],
@@ -636,6 +688,10 @@ class GmailIndexerV2:
             "quality_score": quality_score,
             "vector_dim": 1536,  # Standard OpenAI embedding dimension
             
+            # === Chunk Information (matches chat summary format) ===
+            "chunk_index": 0,  # Single vector per email
+            "total_chunks": 1,  # No chunking in V2
+            
             # === Enhanced Metadata (from extract_enhanced_metadata) ===
             "topics": self._extract_list_values(enhanced_metadata.get("topics", [])),
             "keywords": self._extract_list_values(enhanced_metadata.get("keywords", [])),
@@ -653,14 +709,66 @@ class GmailIndexerV2:
             "source": "gmail",
             "doc_type": "email",
             
+            # === Summary/Record ID (matches chat summary format) ===
+            "summary_id": f"email-{email_id}",  # Consistent with chat summaries
+            
             # === Deduplication ===
             "hash": hashlib.sha256(
                 f"{email_id}{user_id}".encode()
             ).hexdigest(),
         }
         
+        # FINAL DEBUG: Verify text fields are set
+        logger.debug(
+            f"  Metadata built: chunk_text={len(metadata['chunk_text'])} chars, "
+            f"text={len(metadata['text'])} chars, "
+            f"subject={len(metadata['subject'])} chars, "
+            f"word_count={metadata['word_count']}"
+        )
+        
         return metadata
 
+    @staticmethod
+    def _clean_for_pinecone(text: str) -> str:
+        """
+        Final cleaning for Pinecone storage (matches TextCleaner.clean_for_pinecone).
+        
+        This is CRITICAL for metadata storage:
+        - Converts ANY remaining escape sequences to actual chars
+        - Removes control characters (including newlines for single-line storage)
+        - Normalizes to single-line format with space separation
+        - Ensures valid UTF-8
+        
+        Returns single-line text suitable for Pinecone metadata storage.
+        """
+        if not text:
+            return ""
+        
+        # STEP 0: Handle any remaining escape sequences (defensive)
+        # This catches any escape sequences that slipped through earlier cleaning
+        text = text.replace('\\n', ' ')  # Convert literal \n to space
+        text = text.replace('\\t', ' ')  # Convert literal \t to space
+        text = text.replace('\\r', '')   # Remove literal \r
+        text = text.replace('\\\\', '')  # Remove literal \\
+        
+        # STEP 1: Remove control characters and zero-width chars
+        # This removes ACTUAL newlines (0x0A), tabs (0x09), etc.
+        text = re.sub(r"[\x00-\x1F\x7F-\x9F\u200B-\u200D\uFEFF]", "", text)
+        
+        # STEP 2: Normalize whitespace to single spaces
+        text = re.sub(r"\s+", " ", text)  # All whitespace → single space
+        text = text.strip()
+        
+        # STEP 3: Ensure valid UTF-8
+        text = text.encode("utf-8", "ignore").decode("utf-8")
+        
+        # STEP 4: Limit length for Pinecone (40KB metadata limit)
+        max_length = 10000
+        if len(text) > max_length:
+            text = text[:max_length] + "..."
+        
+        return text
+    
     @staticmethod
     def _extract_list_values(items: List[str]) -> str:
         """
