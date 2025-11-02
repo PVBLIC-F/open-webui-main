@@ -422,12 +422,14 @@ class GmailIndexerV2:
         # Debug: Log parts before joining
         logger.debug(f"  Parts to combine: {len(parts)} parts")
         for i, part in enumerate(parts):
-            logger.debug(f"    Part {i}: {len(part)} chars, has escapes: {'\\n' in part}")
+            has_escapes = '\\n' in part
+            logger.debug(f"    Part {i}: {len(part)} chars, has escapes: {has_escapes}")
         
         # Combine with proper spacing
         final_text = "\n\n".join(parts)
         
-        logger.debug(f"  After join: {len(final_text)} chars, has escapes: {'\\n' in final_text}")
+        has_escapes_after_join = '\\n' in final_text
+        logger.debug(f"  After join: {len(final_text)} chars, has escapes: {has_escapes_after_join}")
         
         # Final length check
         if len(final_text) > self.MAX_TEXT_LENGTH:
