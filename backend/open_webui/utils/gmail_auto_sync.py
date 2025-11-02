@@ -263,6 +263,7 @@ class GmailAutoSync:
             indexed_count = await self._process_and_index_batch(
                 emails=emails,
                 user_id=user_id,
+                fetcher=fetcher,  # Pass fetcher for attachment downloads
                 batch_size=50,  # Reduced from 100 to prevent memory buildup
             )
 
@@ -336,6 +337,7 @@ class GmailAutoSync:
         self,
         emails: List[dict],
         user_id: str,
+        fetcher,
         batch_size: int = 100,
     ) -> int:
         """
@@ -343,6 +345,7 @@ class GmailAutoSync:
 
         Args:
             emails: List of Gmail API email responses
+            fetcher: GmailFetcher instance for attachment downloads
             user_id: User ID for isolation
             batch_size: Number of emails to process per batch
 
