@@ -1199,18 +1199,14 @@ async def _sync_user_periodic(user_id: str) -> bool:
             logger.debug(f"⏭️  No Google OAuth session for user {user_id}")
             return False
         
-        # Get or refresh OAuth token using Open WebUI's OAuth manager
-        from open_webui.utils.oauth import oauth_manager
+        # Use OAuth token from session
+        # Note: Token refresh happens automatically on next OAuth login
+        # If token is expired, Gmail API will fail and we'll retry on next cycle
+        oauth_token = oauth_session.token
         
-        oauth_token = await oauth_manager.get_oauth_token(
-            user_id=user_id,
-            session_id=oauth_session.id,
-            force_refresh=False  # Will auto-refresh if expired
-        )
-        
-        # Validation: Check OAuth token is valid
+        # Validation: Check OAuth token exists and has access_token
         if not oauth_token or not oauth_token.get("access_token"):
-            logger.warning(f"⚠️  Unable to obtain valid OAuth token for user {user_id} (may need to re-authenticate)")
+            logger.warning(f"⚠️  Invalid OAuth token for user {user_id} (may need to re-authenticate)")
             return False
         
         # Check if this is first sync for this user
