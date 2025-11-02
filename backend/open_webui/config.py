@@ -436,6 +436,28 @@ GMAIL_SEARCH_TOOL_ENABLED = PersistentConfig(
     os.environ.get("GMAIL_SEARCH_TOOL_ENABLED", "True").lower() == "true",
 )
 
+# Attachment Processing Settings
+GMAIL_PROCESS_ATTACHMENTS = PersistentConfig(
+    "GMAIL_PROCESS_ATTACHMENTS",
+    "gmail.attachments.enabled",
+    os.environ.get("GMAIL_PROCESS_ATTACHMENTS", "True").lower() == "true",
+)
+
+GMAIL_MAX_ATTACHMENT_SIZE_MB = PersistentConfig(
+    "GMAIL_MAX_ATTACHMENT_SIZE_MB",
+    "gmail.attachments.max_size_mb",
+    int(os.environ.get("GMAIL_MAX_ATTACHMENT_SIZE_MB", "10")),
+)
+
+GMAIL_ATTACHMENT_TYPES = PersistentConfig(
+    "GMAIL_ATTACHMENT_TYPES",
+    "gmail.attachments.allowed_types",
+    os.environ.get(
+        "GMAIL_ATTACHMENT_TYPES", 
+        ".pdf,.docx,.doc,.xlsx,.xls,.pptx,.ppt,.txt,.csv,.md,.html,.eml"
+    ),
+)
+
 
 MICROSOFT_CLIENT_ID = PersistentConfig(
     "MICROSOFT_CLIENT_ID",

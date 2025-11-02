@@ -91,8 +91,9 @@ class GmailProcessor:
             # Extract labels
             labels = email_data.get("labelIds", [])
             
-            # Check for attachments
-            has_attachments = self._has_attachments(payload)
+            # Extract attachment information
+            attachments = self._get_attachments(payload)
+            has_attachments = len(attachments) > 0
             
             # Parse email addresses
             from_name, from_email = EmailCleaner.parse_email_address(from_addr)
@@ -135,6 +136,7 @@ class GmailProcessor:
                 
                 # Content metadata
                 "has_attachments": has_attachments,
+                "attachment_count": len(attachments),
                 "is_reply": is_reply,
                 "word_count": len(body_clean.split()),
                 "body_length": len(body_clean),
@@ -162,6 +164,7 @@ class GmailProcessor:
                 "raw_body": body_raw,
                 "cleaned_body": body_clean,
                 "snippet": snippet,
+                "attachments": attachments,  # List of attachment metadata
             }
             
         except Exception as e:
@@ -353,28 +356,43 @@ class GmailProcessor:
         return text.strip()
     
     def _has_attachments(self, payload: dict) -> bool:
+        """Check if email has attachments (returns boolean only)."""
+        attachments = self._get_attachments(payload)
+        return len(attachments) > 0
+    
+    def _get_attachments(self, payload: dict, attachments: list = None) -> list:
         """
-        Check if email has attachments.
+        Extract attachment metadata from email payload.
         
         Args:
             payload: Gmail API message payload
+            attachments: List to accumulate attachments (for recursion)
             
         Returns:
-            True if email has attachments
+            List of attachment dicts with: filename, mimeType, size, attachmentId
         """
+        if attachments is None:
+            attachments = []
         
         if "parts" in payload:
             for part in payload["parts"]:
                 filename = part.get("filename", "")
-                if filename:  # If part has a filename, it's likely an attachment
-                    return True
                 
-                # Check nested parts
+                # Part has a filename and body.attachmentId - it's an attachment
+                if filename and part.get("body", {}).get("attachmentId"):
+                    attachment_info = {
+                        "filename": filename,
+                        "mimeType": part.get("mimeType", "application/octet-stream"),
+                        "size": part.get("body", {}).get("size", 0),
+                        "attachmentId": part.get("body", {}).get("attachmentId"),
+                    }
+                    attachments.append(attachment_info)
+                
+                # Recursively check nested parts
                 if "parts" in part:
-                    if self._has_attachments(part):
-                        return True
+                    self._get_attachments(part, attachments)
         
-        return False
+        return attachments
     
     def _create_document_text(
         self,

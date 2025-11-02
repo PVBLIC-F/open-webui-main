@@ -50,6 +50,9 @@ class GmailAutoSync:
         content_aware_splitter,
         document_processor,
         pinecone_manager,
+        process_attachments: bool = True,
+        max_attachment_size_mb: int = 10,
+        allowed_attachment_types: str = ".pdf,.docx,.doc,.xlsx,.xls,.pptx,.ppt,.txt,.csv,.md,.html,.eml",
     ):
         """
         Initialize auto-sync orchestrator.
@@ -59,6 +62,9 @@ class GmailAutoSync:
             content_aware_splitter: ContentAwareTextSplitter from chat filter
             document_processor: DocumentProcessor from chat filter
             pinecone_manager: PineconeManager from chat filter
+            process_attachments: Enable attachment processing
+            max_attachment_size_mb: Maximum attachment size in MB
+            allowed_attachment_types: Comma-separated allowed extensions
             
         Note: Uses per-user namespaces (email-{user_id}) computed at sync time
         """
@@ -68,6 +74,11 @@ class GmailAutoSync:
             document_processor=document_processor,
         )
         self.pinecone = pinecone_manager
+        
+        # Attachment processing config
+        self.process_attachments = process_attachments
+        self.max_attachment_size_mb = max_attachment_size_mb
+        self.allowed_attachment_types = allowed_attachment_types
 
         # Track active syncs
         self.active_syncs = {}  # user_id -> sync_status
@@ -357,11 +368,16 @@ class GmailAutoSync:
             )
             logger.info(f"   Batch size: {len(batch)} emails")
 
-            # Process batch with GmailIndexer
+            # Process batch with GmailIndexer (with attachment support)
             try:
+                # Use attachment config from sync parameters
                 result = await self.indexer.process_email_batch(
                     emails=batch,
                     user_id=user_id,
+                    fetcher=fetcher,
+                    process_attachments=getattr(self, 'process_attachments', True),
+                    max_attachment_size_mb=getattr(self, 'max_attachment_size_mb', 10),
+                    allowed_attachment_types=getattr(self, 'allowed_attachment_types', ".pdf,.docx,.doc,.xlsx,.xls,.pptx,.ppt,.txt,.csv,.md,.html,.eml"),
                 )
 
                 upsert_data = result["upsert_data"]
@@ -597,11 +613,15 @@ async def _background_gmail_sync(request, user_id: str, oauth_token: dict):
         max_emails = request.app.state.config.GMAIL_AUTO_SYNC_MAX_EMAILS
         skip_spam_trash = request.app.state.config.GMAIL_SKIP_SPAM_AND_TRASH
         batch_size = request.app.state.config.GMAIL_SYNC_BATCH_SIZE
+        process_attachments = request.app.state.config.GMAIL_PROCESS_ATTACHMENTS
+        max_attachment_size_mb = request.app.state.config.GMAIL_MAX_ATTACHMENT_SIZE_MB
+        allowed_attachment_types = request.app.state.config.GMAIL_ATTACHMENT_TYPES
 
         logger.info(
             f"Gmail sync config: max_emails={max_emails}, "
             f"skip_spam_trash={skip_spam_trash}, batch_size={batch_size}, "
-            f"namespace=email-{user_id} (per-user)"
+            f"namespace=email-{user_id} (per-user), "
+            f"attachments={process_attachments}"
         )
 
         # Create simple wrapper services for the background task
@@ -878,6 +898,9 @@ async def _background_gmail_sync(request, user_id: str, oauth_token: dict):
             content_aware_splitter=text_splitter,
             document_processor=doc_processor,
             pinecone_manager=pinecone_manager,
+            process_attachments=process_attachments,
+            max_attachment_size_mb=max_attachment_size_mb,
+            allowed_attachment_types=allowed_attachment_types,
         )
 
         # Execute the sync
