@@ -399,6 +399,66 @@ class GmailFetcher:
     def get_stats(self) -> Dict:
         """Get fetcher statistics"""
         return self.stats.copy()
+    
+    async def fetch_attachment(
+        self,
+        message_id: str,
+        attachment_id: str,
+        filename: str
+    ) -> Optional[bytes]:
+        """
+        Fetch an email attachment by ID.
+        
+        Args:
+            message_id: The Gmail message ID
+            attachment_id: The attachment ID from the message
+            filename: The attachment filename (for logging)
+            
+        Returns:
+            bytes: The attachment data, or None if failed
+        """
+        url = f"{self.GMAIL_API_BASE}/users/me/messages/{message_id}/attachments/{attachment_id}"
+        
+        try:
+            await self._wait_for_rate_limit()
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    url,
+                    headers=self.headers,
+                    timeout=aiohttp.ClientTimeout(total=30)
+                ) as response:
+                    self.api_calls += 1
+                    
+                    if response.status == 200:
+                        attachment_data = await response.json()
+                        # Gmail returns base64url-encoded data
+                        import base64
+                        data = attachment_data.get("data", "")
+                        # Convert base64url to regular base64
+                        data = data.replace('-', '+').replace('_', '/')
+                        attachment_bytes = base64.b64decode(data)
+                        
+                        logger.debug(f"Downloaded attachment '{filename}': {len(attachment_bytes)} bytes")
+                        return attachment_bytes
+                    
+                    elif response.status == 401:
+                        logger.error("Gmail API authentication failed (token expired?)")
+                        raise Exception("OAuth token expired or invalid")
+                    
+                    else:
+                        error_text = await response.text()
+                        logger.warning(f"Failed to download attachment '{filename}': {response.status} - {error_text}")
+                        return None
+                        
+        except asyncio.TimeoutError:
+            logger.error(f"Timeout downloading attachment '{filename}'")
+            self.errors += 1
+            return None
+        except Exception as e:
+            logger.error(f"Error downloading attachment '{filename}': {e}")
+            self.errors += 1
+            return None
 
 
 # ============================================================================

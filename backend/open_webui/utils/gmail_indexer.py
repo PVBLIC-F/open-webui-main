@@ -81,6 +81,10 @@ class GmailIndexer:
         self,
         email_data: dict,
         user_id: str,
+        fetcher=None,
+        process_attachments: bool = True,
+        max_attachment_size_mb: int = 10,
+        allowed_attachment_types: str = ".pdf,.docx,.doc,.xlsx,.xls,.pptx,.ppt,.txt,.csv,.md,.html,.eml",
     ) -> Dict:
         """
         Process a single Gmail email into Pinecone-ready format.
@@ -106,36 +110,79 @@ class GmailIndexer:
         email_id = parsed["email_id"]
         document_text = parsed["document_text"]
         base_metadata = parsed["metadata"]
+        attachments_info = parsed.get("attachments", [])
 
         logger.info(f"Processing email {email_id} ({base_metadata['subject'][:50]}...)")
+        
+        # Step 1.5: Process attachments if enabled and present
+        attachment_texts = []
+        attachment_names = []
+        
+        if process_attachments and attachments_info and fetcher:
+            from open_webui.utils.gmail_attachment_processor import GmailAttachmentProcessor
+            
+            att_processor = GmailAttachmentProcessor(
+                max_size_mb=max_attachment_size_mb,
+                allowed_extensions=allowed_attachment_types
+            )
+            
+            processed_attachments = await att_processor.process_attachments_batch(
+                attachments_info,
+                fetcher,
+                email_id
+            )
+            
+            for att in processed_attachments:
+                attachment_texts.append(att["text"])
+                attachment_names.append(att["filename"])
+            
+            if attachment_texts:
+                logger.info(f"  📎 Processed {len(attachment_texts)} attachment(s): {', '.join(attachment_names)}")
 
-        # Step 2: Extract enhanced metadata using Open WebUI's extract_enhanced_metadata
-        combined_text = f"{base_metadata.get('subject', '')}\n\n{document_text}"
+        # Step 2: Deep clean the email text for high-quality semantic search
+        cleaned_text = self._deep_clean_for_search(document_text)
+        
+        # Step 2.1: Add attachment content to email text if available
+        if attachment_texts:
+            combined_text = cleaned_text + "\n\n" + "\n\n".join(attachment_texts)
+            cleaned_text = combined_text
+            logger.info(f"  Combined email + {len(attachment_texts)} attachment(s): {len(cleaned_text)} chars total")
+        
+        # Step 2.5: Detect low-quality notification emails
+        is_notification = self._is_notification_email(base_metadata.get('subject', ''), cleaned_text)
+        
+        # Step 3: Extract enhanced metadata using Open WebUI's extract_enhanced_metadata
+        # Use cleaned text for better entity/topic extraction
+        combined_text = f"{base_metadata.get('subject', '')}\n\n{cleaned_text}"
         enhanced_metadata = extract_enhanced_metadata(combined_text, use_llm=False)
 
-        # Step 3: Use Open WebUI's content-aware splitter for chunking
-        chunks = self.splitter.split_text(document_text) if document_text else []
-        
-        # If no chunks created or text is short, use full text
-        if not chunks:
-            chunks = [document_text]
-
-        logger.info(f"Email {email_id} will have {len(chunks)} chunk(s)")
+        # Step 4: Smart chunking based on email type
+        if is_notification or len(cleaned_text) < 500:
+            # For notifications or short emails, don't chunk - just use as-is
+            chunks = [cleaned_text] if cleaned_text else []
+            logger.info(f"Email {email_id}: notification/short email - no chunking")
+        else:
+            # For substantial emails, use content-aware splitting
+            chunks = self.splitter.split_text(cleaned_text) if cleaned_text else []
+            if not chunks:
+                chunks = [cleaned_text]
+            logger.info(f"Email {email_id}: substantial email - {len(chunks)} chunk(s)")
 
         # Step 4: Generate email summary (1-2 sentences)
         email_summary = await self._generate_summary(
             base_metadata.get("subject", ""), base_metadata.get("body_original", "")
         )
 
-        # Step 5: Build dual-representation vectors
-        # Vector 1: Always create a summary vector (for email discovery)
-        # Vectors 2-N: Content chunks (for long emails only)
+        # Step 5: Build optimized vector representation
+        # Strategy:
+        # - Notifications/short emails: summary only (1 vector)
+        # - Substantive emails: summary + content chunks (multiple vectors)
 
         all_chunks = []
         all_embeddings = []
         chunk_types = []
 
-        # Always add summary as first "chunk"
+        # Always add summary as first vector (for email discovery)
         summary_text = self._build_summary_text(
             base_metadata.get("subject", ""),
             base_metadata.get("from_name", ""),
@@ -145,30 +192,19 @@ class GmailIndexer:
         all_chunks.append(summary_text)
         chunk_types.append("summary")
 
-        # Add content chunks if email is long (include subject in each chunk)
-        # Only add chunks that have meaningful content (not just subject repetition)
-        if len(chunks) > 1 or len(document_text) > 1500:
+        # Add content chunks only for substantial non-notification emails
+        if not is_notification and (len(chunks) > 1 or len(cleaned_text) > 800):
             for i, chunk in enumerate(chunks):
                 # Skip empty or very short chunks
-                if not chunk or len(chunk.strip()) < 50:
+                if not chunk or len(chunk.strip()) < 100:
                     continue
 
                 # Skip chunks that are mostly subject repetition
                 if chunk.strip().lower() == base_metadata.get("subject", "").lower():
                     continue
 
-                # Only add subject if chunk doesn't already contain it
-                chunk_clean = chunk.strip()
-                subject = base_metadata.get("subject", "").strip()
-
-                if subject.lower() not in chunk_clean.lower():
-                    # Subject not in chunk - prepend it for context
-                    chunk_with_subject = f"{subject}\n\n{chunk_clean}"
-                else:
-                    # Subject already in chunk - use as is
-                    chunk_with_subject = chunk_clean
-
-                all_chunks.append(chunk_with_subject)
+                # Use chunk as-is (already cleaned, subject context handled by summary vector)
+                all_chunks.append(chunk.strip())
                 chunk_types.append("content")
 
         logger.info(
@@ -188,6 +224,7 @@ class GmailIndexer:
             base_metadata=base_metadata,
             enhanced_metadata=enhanced_metadata,
             email_summary=email_summary,
+            attachment_names=attachment_names,
         )
 
         processing_time = time.time() - start_time
@@ -403,6 +440,7 @@ class GmailIndexer:
         base_metadata: Dict,
         enhanced_metadata: Dict,
         email_summary: str,
+        attachment_names: List[str] = None,
     ) -> List[Dict]:
         """
         Build Pinecone upsert data matching chat summary format.
@@ -470,6 +508,9 @@ class GmailIndexer:
                     else base_metadata["labels"]
                 ),  # Comma-separated string for Pinecone compatibility
                 "has_attachments": base_metadata["has_attachments"],
+                "attachment_count": base_metadata.get("attachment_count", 0),
+                "attachment_names": ",".join(attachment_names) if attachment_names else "",
+                "attachment_processed_count": len(attachment_names) if attachment_names else 0,
                 "is_reply": base_metadata.get("is_reply", False),
                 "word_count": base_metadata.get("word_count", 0),
                 # Quality & metadata (SAME as chat)
@@ -502,20 +543,137 @@ class GmailIndexer:
         return upsert_data
 
     @staticmethod
+    def _is_notification_email(subject: str, body: str) -> bool:
+        """
+        Detect if an email is a low-value notification/automated message.
+        
+        These emails typically have minimal useful content and should be
+        indexed differently (summary-only, no chunking).
+        
+        Returns:
+            True if email is a notification, False if substantive content
+        """
+        subject_lower = subject.lower()
+        body_lower = body.lower()
+        
+        # Google service notifications
+        google_notifications = [
+            'document shared with you',
+            'file shared with you',
+            'has invited you to',
+            'calendar invitation',
+            'google drive',
+            'google docs',
+            'google sheets',
+            'google slides',
+            'view in google',
+            'open in google'
+        ]
+        
+        # Other automated notifications
+        notification_patterns = [
+            'no-reply@',
+            'noreply@',
+            'do not reply',
+            'automated message',
+            'this is an automated',
+            'confirmation email',
+            'password reset',
+            'verify your email',
+            'subscription confirmation',
+            'unsubscribe'
+        ]
+        
+        # Check subject
+        for pattern in google_notifications + notification_patterns:
+            if pattern in subject_lower:
+                return True
+        
+        # Check body (limit to first 500 chars for performance)
+        body_check = body_lower[:500]
+        for pattern in google_notifications:
+            if pattern in body_check:
+                return True
+        
+        return False
+    
+    @staticmethod
+    def _deep_clean_for_search(text: str) -> str:
+        """
+        Deep clean email text for optimal semantic search quality.
+        
+        Removes:
+        - URLs and tracking links (replace with [link])
+        - Email addresses (privacy + noise)
+        - Escape sequences (\\n, \\", etc.)
+        - Control characters
+        - Excessive whitespace
+        
+        Returns clean, readable text optimized for vector embeddings.
+        """
+        if not text:
+            return ""
+        
+        # Step 1: Remove URLs (they're noise for semantic search)
+        text = re.sub(
+            r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+',
+            '[link]',
+            text
+        )
+        
+        # Step 2: Remove email addresses (privacy + reduces noise)
+        text = re.sub(
+            r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',
+            '[email]',
+            text
+        )
+        
+        # Step 3: Clean escape sequences
+        text = text.replace('\\n\\n', '\n\n')
+        text = text.replace('\\n', '\n')
+        text = text.replace('\\/', '/')
+        text = text.replace('\\"', '"')
+        text = text.replace("\\'", "'")
+        text = text.replace('\\\\', '')
+        
+        # Step 4: Remove HTML entities
+        from html import unescape
+        text = unescape(text)
+        
+        # Step 5: Remove control characters (keep newlines and tabs)
+        text = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]', '', text)
+        
+        # Step 6: Normalize whitespace
+        # Remove multiple spaces
+        text = re.sub(r' {2,}', ' ', text)
+        # Remove excessive newlines (max 2)
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        # Trim spaces from each line
+        lines = text.split('\n')
+        text = '\n'.join(line.strip() for line in lines)
+        
+        # Step 7: Remove orphaned punctuation
+        text = re.sub(r'\s+([.,!?;:])', r'\1', text)
+        text = re.sub(r'([.,!?;:])([A-Za-z])', r'\1 \2', text)
+        
+        return text.strip()
+    
+    @staticmethod
     def _clean_for_storage(text: str) -> str:
         """
-        Clean text for vector database storage (remove problematic characters).
+        Final cleaning pass for vector database storage.
+        Applied after chunking to ensure storage compatibility.
         """
         if not text:
             return ""
 
-        # Remove control characters except newlines/tabs
-        text = re.sub(r"[\x00-\x1F\x7F-\x9F]", "", text)
+        # Remove any remaining control characters
+        text = re.sub(r"[\x00-\x1F\x7F-\x9F\u200B-\u200D\uFEFF]", "", text)
 
-        # Normalize whitespace
+        # Single-space normalization for storage
         text = re.sub(r"\s+", " ", text).strip()
 
-        # Encode as UTF-8 (remove invalid chars)
+        # Ensure valid UTF-8
         text = text.encode("utf-8", "ignore").decode("utf-8")
 
         # Limit length for storage
@@ -529,6 +687,10 @@ class GmailIndexer:
         self,
         emails: List[dict],
         user_id: str,
+        fetcher=None,
+        process_attachments: bool = True,
+        max_attachment_size_mb: int = 10,
+        allowed_attachment_types: str = ".pdf,.docx,.doc,.xlsx,.xls,.pptx,.ppt,.txt,.csv,.md,.html,.eml",
     ) -> Dict:
         """
         Process multiple emails in batch with content deduplication.
@@ -577,8 +739,15 @@ class GmailIndexer:
                 # Track this content
                 seen_content[content_fingerprint] = email_id
 
-                # Process unique email
-                result = await self.process_email_for_indexing(email_data, user_id)
+                # Process unique email with attachment support
+                result = await self.process_email_for_indexing(
+                    email_data,
+                    user_id,
+                    fetcher=fetcher,
+                    process_attachments=process_attachments,
+                    max_attachment_size_mb=max_attachment_size_mb,
+                    allowed_attachment_types=allowed_attachment_types,
+                )
                 all_upsert_data.extend(result["upsert_data"])
                 processed_count += 1
 
