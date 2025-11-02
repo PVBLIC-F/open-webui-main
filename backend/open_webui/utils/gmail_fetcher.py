@@ -420,16 +420,21 @@ class GmailFetcher:
         url = f"{self.GMAIL_API_BASE}/users/me/messages/{message_id}/attachments/{attachment_id}"
         
         try:
-            await self._wait_for_rate_limit()
-            
+            await self._rate_limit()
+
+            headers = {
+                "Authorization": f"Bearer {self.oauth_token}",
+                "Accept": "application/json",
+            }
+
             async with aiohttp.ClientSession() as session:
                 async with session.get(
                     url,
-                    headers=self.headers,
-                    timeout=aiohttp.ClientTimeout(total=30)
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=self.timeout)
                 ) as response:
-                    self.api_calls += 1
-                    
+                    self.stats["api_calls"] += 1
+
                     if response.status == 200:
                         attachment_data = await response.json()
                         # Gmail returns base64url-encoded data
@@ -453,11 +458,11 @@ class GmailFetcher:
                         
         except asyncio.TimeoutError:
             logger.error(f"Timeout downloading attachment '{filename}'")
-            self.errors += 1
+            self.stats["errors"] += 1
             return None
         except Exception as e:
             logger.error(f"Error downloading attachment '{filename}': {e}")
-            self.errors += 1
+            self.stats["errors"] += 1
             return None
 
 
