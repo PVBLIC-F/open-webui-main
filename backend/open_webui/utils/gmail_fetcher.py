@@ -285,7 +285,8 @@ class GmailFetcher:
         
         except Exception as e:
             self.stats["errors"] += 1
-            logger.error(f"Exception fetching email {message_id}: {e}")
+            logger.error(f"Exception fetching email {message_id}: {type(e).__name__}: {str(e)}")
+            logger.error(f"Full traceback:", exc_info=True)
             return None
     
     async def fetch_emails_batch(
