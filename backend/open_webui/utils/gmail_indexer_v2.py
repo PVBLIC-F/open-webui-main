@@ -182,8 +182,14 @@ class GmailIndexerV2:
         logger.debug(f"  Search text preview: {search_text[:200]}...")
         
         # Step 4: Extract enhanced metadata for filtering/enrichment
+        # CRITICAL: Clean the text one more time before metadata extraction
+        # This ensures extract_enhanced_metadata receives clean text without escape sequences
+        search_text_for_metadata = self._final_clean_before_metadata(search_text)
+        
+        logger.debug(f"  Text for metadata extraction (cleaned): {search_text_for_metadata[:200]}...")
+        
         # Use LLM=False for speed (rule-based extraction)
-        enhanced_metadata = extract_enhanced_metadata(search_text, use_llm=False)
+        enhanced_metadata = extract_enhanced_metadata(search_text_for_metadata, use_llm=False)
         
         # Debug: Check enhanced metadata quality
         logger.debug(
@@ -635,6 +641,12 @@ class GmailIndexerV2:
         # Apply final Pinecone cleaning (matches chat summary format)
         text_snippet_clean = self._clean_for_pinecone(text_snippet)
         
+        # Remove "Subject:" and "From:" prefixes from display text
+        # These are useful for embeddings but clutter display
+        text_snippet_clean = re.sub(r'^Subject:\s*', '', text_snippet_clean)
+        text_snippet_clean = re.sub(r'\s+From:\s+', ' ', text_snippet_clean)
+        text_snippet_clean = text_snippet_clean.strip()
+        
         # Debug: Log text_snippet creation
         logger.debug(
             f"  Text snippet: search_text={len(search_text)} chars, "
@@ -731,6 +743,35 @@ class GmailIndexerV2:
         return metadata
 
     @staticmethod
+    def _final_clean_before_metadata(text: str) -> str:
+        """
+        Final cleaning pass specifically for metadata extraction.
+        
+        This ensures extract_enhanced_metadata() receives perfectly clean text
+        without ANY escape sequences, so entity/topic extraction works correctly.
+        
+        Returns:
+            Clean text with actual newlines (not escape sequences)
+        """
+        if not text:
+            return ""
+        
+        # Handle ALL escape sequence variations
+        text = text.replace('\\n\\n', '\n\n')  # Double escaped newline
+        text = text.replace('\\n', '\n')       # Single escaped newline
+        text = text.replace('\\t', '\t')       # Escaped tab
+        text = text.replace('\\r', '')         # Escaped carriage return
+        text = text.replace('\\"', '"')        # Escaped quote
+        text = text.replace("\\'", "'")        # Escaped single quote
+        text = text.replace('\\\\', '')        # Escaped backslash
+        
+        # Normalize whitespace but KEEP newlines for metadata extraction
+        text = re.sub(r' {2,}', ' ', text)     # Multiple spaces → single
+        text = re.sub(r'\n{3,}', '\n\n', text) # Max 2 newlines
+        
+        return text.strip()
+    
+    @staticmethod
     def _clean_for_pinecone(text: str) -> str:
         """
         Final cleaning for Pinecone storage (matches TextCleaner.clean_for_pinecone).
@@ -738,7 +779,7 @@ class GmailIndexerV2:
         This is CRITICAL for metadata storage:
         - Converts ANY remaining escape sequences to actual chars
         - Removes control characters (including newlines for single-line storage)
-        - Normalizes to single-line format with space separation
+        - Normalizes to single-line format with PROPER space separation
         - Ensures valid UTF-8
         
         Returns single-line text suitable for Pinecone metadata storage.
@@ -748,23 +789,29 @@ class GmailIndexerV2:
         
         # STEP 0: Handle any remaining escape sequences (defensive)
         # This catches any escape sequences that slipped through earlier cleaning
-        text = text.replace('\\n', ' ')  # Convert literal \n to space
-        text = text.replace('\\t', ' ')  # Convert literal \t to space
-        text = text.replace('\\r', '')   # Remove literal \r
-        text = text.replace('\\\\', '')  # Remove literal \\
+        text = text.replace('\\n\\n', '  ')  # Double newline → double space (paragraph break)
+        text = text.replace('\\n', ' ')  # Single newline → single space
+        text = text.replace('\\t', ' ')  # Tab → space
+        text = text.replace('\\r', '')   # Remove carriage return
+        text = text.replace('\\\\', '')  # Remove literal backslash
         
-        # STEP 1: Remove control characters and zero-width chars
-        # This removes ACTUAL newlines (0x0A), tabs (0x09), etc.
+        # STEP 1: Convert ACTUAL newlines to spaces BEFORE removing control chars
+        # This ensures proper word spacing (critical fix!)
+        text = text.replace('\n\n', '  ')  # Paragraph break → double space
+        text = text.replace('\n', ' ')     # Line break → single space
+        text = text.replace('\t', ' ')     # Tab → space
+        
+        # STEP 2: Remove remaining control characters and zero-width chars
         text = re.sub(r"[\x00-\x1F\x7F-\x9F\u200B-\u200D\uFEFF]", "", text)
         
-        # STEP 2: Normalize whitespace to single spaces
-        text = re.sub(r"\s+", " ", text)  # All whitespace → single space
+        # STEP 3: Normalize whitespace to single spaces
+        text = re.sub(r" {2,}", " ", text)  # Multiple spaces → single space
         text = text.strip()
         
-        # STEP 3: Ensure valid UTF-8
+        # STEP 4: Ensure valid UTF-8
         text = text.encode("utf-8", "ignore").decode("utf-8")
         
-        # STEP 4: Limit length for Pinecone (40KB metadata limit)
+        # STEP 5: Limit length for Pinecone (40KB metadata limit)
         max_length = 10000
         if len(text) > max_length:
             text = text[:max_length] + "..."
@@ -777,11 +824,24 @@ class GmailIndexerV2:
         Convert list of strings to comma-separated string for Pinecone.
         
         Handles both list and string inputs safely.
+        Also cleans escape sequences from the values.
         """
         if isinstance(items, list):
-            return ",".join(str(item) for item in items if item)
+            # Clean each item and join
+            cleaned_items = []
+            for item in items:
+                if item:
+                    # Convert to string and clean escape sequences
+                    item_str = str(item)
+                    item_str = item_str.replace('\\n', ' ').replace('\\t', ' ').replace('\\r', '')
+                    item_str = item_str.strip()
+                    if item_str:
+                        cleaned_items.append(item_str)
+            return ",".join(cleaned_items)
         elif isinstance(items, str):
-            return items
+            # Clean the string
+            cleaned = items.replace('\\n', ' ').replace('\\t', ' ').replace('\\r', '')
+            return cleaned.strip()
         return ""
 
     async def _process_email_attachments(
