@@ -692,53 +692,6 @@ class GmailIndexerV2:
         return metadata
 
     @staticmethod
-    def _remove_duplicate_sentences(text: str) -> str:
-        """
-        Remove duplicate phrases while preserving readability.
-        
-        Detects duplicate long phrases (30+ chars) and removes them.
-        Uses sliding window to find duplicates without relying on punctuation.
-        
-        Common in emails where subject line is repeated in the body.
-        """
-        if not text or len(text) < 100:
-            return text
-        
-        # Simple approach: Find long repeated substrings (40+ chars)
-        # If a phrase of 40+ chars appears twice, keep only first occurrence
-        min_phrase_length = 40
-        
-        # Look for long duplicated phrases
-        for length in range(len(text) // 2, min_phrase_length - 1, -10):
-            if length < min_phrase_length:
-                break
-            
-            # Check if first 'length' chars appear again later
-            phrase = text[:length]
-            # Normalize for comparison (remove extra spaces, lowercase)
-            phrase_normalized = re.sub(r'\s+', ' ', phrase).strip().lower()
-            
-            # Search for this phrase later in the text
-            rest_of_text = text[length:]
-            rest_normalized = re.sub(r'\s+', ' ', rest_of_text).strip().lower()
-            
-            if phrase_normalized and phrase_normalized in rest_normalized:
-                # Found duplicate - remove the second occurrence
-                # Find where it starts in original text
-                pattern = re.escape(phrase).replace(r'\ ', r'\s+')
-                # Remove second occurrence only
-                parts = re.split(pattern, text, maxsplit=2, flags=re.IGNORECASE)
-                if len(parts) >= 3:
-                    # Keep first occurrence, skip second, keep rest
-                    text = parts[0] + parts[1] + parts[2]
-                    break
-        
-        # Clean up any resulting double spaces
-        text = re.sub(r'\s+', ' ', text).strip()
-        
-        return text
-    
-    @staticmethod
     def _clean_metadata_field(text: str) -> str:
         """
         Aggressively clean a metadata field value.
@@ -760,35 +713,6 @@ class GmailIndexerV2:
         
         # Normalize whitespace
         text = re.sub(r'\s+', ' ', text)
-        
-        return text.strip()
-    
-    @staticmethod
-    def _final_clean_before_metadata(text: str) -> str:
-        """
-        Final cleaning pass specifically for metadata extraction.
-        
-        This ensures extract_enhanced_metadata() receives perfectly clean text
-        without ANY escape sequences, so entity/topic extraction works correctly.
-        
-        Returns:
-            Clean text with actual newlines (not escape sequences)
-        """
-        if not text:
-            return ""
-        
-        # Handle ALL escape sequence variations
-        text = text.replace('\\n\\n', '\n\n')  # Double escaped newline
-        text = text.replace('\\n', '\n')       # Single escaped newline
-        text = text.replace('\\t', '\t')       # Escaped tab
-        text = text.replace('\\r', '')         # Escaped carriage return
-        text = text.replace('\\"', '"')        # Escaped quote
-        text = text.replace("\\'", "'")        # Escaped single quote
-        text = text.replace('\\\\', '')        # Escaped backslash
-        
-        # Normalize whitespace but KEEP newlines for metadata extraction
-        text = re.sub(r' {2,}', ' ', text)     # Multiple spaces → single
-        text = re.sub(r'\n{3,}', '\n\n', text) # Max 2 newlines
         
         return text.strip()
     
