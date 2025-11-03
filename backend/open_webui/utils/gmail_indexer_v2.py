@@ -654,6 +654,23 @@ class GmailIndexerV2:
         # These are useful for embeddings but clutter display
         text_snippet_clean = re.sub(r'^Subject:\s*', '', text_snippet_clean)
         text_snippet_clean = re.sub(r'\s+From:\s+', ' ', text_snippet_clean)
+        
+        # Remove email reply/forward abbreviations
+        # Re:, RE:, Fwd:, FW:, etc. - these are just noise
+        text_snippet_clean = re.sub(r'\b(Re|RE|Fwd|FW|Fw):\s*', '', text_snippet_clean, flags=re.IGNORECASE)
+        
+        # Clean up any duplicate content (subject appearing twice in some emails)
+        # Split by spaces and remove exact duplicates while preserving order
+        words = text_snippet_clean.split()
+        seen = set()
+        clean_words = []
+        for word in words:
+            word_lower = word.lower()
+            if word_lower not in seen or len(word_lower) <= 3:  # Keep short words even if repeated
+                clean_words.append(word)
+                seen.add(word_lower)
+        text_snippet_clean = ' '.join(clean_words)
+        
         text_snippet_clean = text_snippet_clean.strip()
         
         # Debug: Log text_snippet creation
