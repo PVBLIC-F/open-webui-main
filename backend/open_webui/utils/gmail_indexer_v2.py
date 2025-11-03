@@ -186,18 +186,27 @@ class GmailIndexerV2:
         # This ensures extract_enhanced_metadata receives clean text without escape sequences
         search_text_for_metadata = self._final_clean_before_metadata(search_text)
         
+        # Remove "Subject:" and "From:" prefixes for better entity extraction
+        # These labels confuse the entity extraction algorithm
+        search_text_for_metadata = re.sub(r'^Subject:\s*', '', search_text_for_metadata)
+        search_text_for_metadata = re.sub(r'\s+From:\s+', '\n', search_text_for_metadata)
+        search_text_for_metadata = search_text_for_metadata.strip()
+        
         logger.debug(f"  Text for metadata extraction (cleaned): {search_text_for_metadata[:200]}...")
         
         # Use LLM=False for speed (rule-based extraction)
         enhanced_metadata = extract_enhanced_metadata(search_text_for_metadata, use_llm=False)
         
-        # Debug: Check enhanced metadata quality
+        # Debug: Check enhanced metadata quality AND content
         logger.debug(
             f"  Enhanced metadata: "
             f"topics={len(enhanced_metadata.get('topics', []))}, "
             f"keywords={len(enhanced_metadata.get('keywords', []))}, "
             f"entities_people={len(enhanced_metadata.get('entities_people', []))}"
         )
+        logger.debug(f"  RAW entity_people from extract: {enhanced_metadata.get('entities_people', [])}")
+        logger.debug(f"  RAW topics from extract: {enhanced_metadata.get('topics', [])}")
+        logger.debug(f"  RAW entity_locations from extract: {enhanced_metadata.get('entities_locations', [])}")
         
         # Step 5: Generate ONE high-quality embedding
         # Note: embedding service only has embed_batch, so we pass single-item list
@@ -707,16 +716,21 @@ class GmailIndexerV2:
             "total_chunks": 1,  # No chunking in V2
             
             # === Enhanced Metadata (from extract_enhanced_metadata) ===
-            "topics": self._extract_list_values(enhanced_metadata.get("topics", [])),
-            "keywords": self._extract_list_values(enhanced_metadata.get("keywords", [])),
-            "entity_people": self._extract_list_values(
-                enhanced_metadata.get("entities_people", [])
+            # Clean each field to remove escape sequences
+            "topics": self._clean_metadata_field(
+                self._extract_list_values(enhanced_metadata.get("topics", []))
             ),
-            "entity_organizations": self._extract_list_values(
-                enhanced_metadata.get("entities_organizations", [])
+            "keywords": self._clean_metadata_field(
+                self._extract_list_values(enhanced_metadata.get("keywords", []))
             ),
-            "entity_locations": self._extract_list_values(
-                enhanced_metadata.get("entities_locations", [])
+            "entity_people": self._clean_metadata_field(
+                self._extract_list_values(enhanced_metadata.get("entities_people", []))
+            ),
+            "entity_organizations": self._clean_metadata_field(
+                self._extract_list_values(enhanced_metadata.get("entities_organizations", []))
+            ),
+            "entity_locations": self._clean_metadata_field(
+                self._extract_list_values(enhanced_metadata.get("entities_locations", []))
             ),
             
             # === Source & Type ===
@@ -742,6 +756,31 @@ class GmailIndexerV2:
         
         return metadata
 
+    @staticmethod
+    def _clean_metadata_field(text: str) -> str:
+        """
+        Aggressively clean a metadata field value.
+        
+        This removes ALL escape sequences and normalizes text for clean storage.
+        Applied to entity_people, topics, keywords, etc.
+        """
+        if not text:
+            return ""
+        
+        # Remove ALL forms of escape sequences
+        text = text.replace('\\n\\n', ' ')  # Double newline
+        text = text.replace('\\n', ' ')     # Single newline
+        text = text.replace('\\t', ' ')     # Tab
+        text = text.replace('\\r', '')      # Carriage return
+        text = text.replace('\\\\', '')     # Backslash
+        text = text.replace('\\"', '"')     # Escaped quote
+        text = text.replace("\\'", "'")     # Escaped single quote
+        
+        # Normalize whitespace
+        text = re.sub(r'\s+', ' ', text)
+        
+        return text.strip()
+    
     @staticmethod
     def _final_clean_before_metadata(text: str) -> str:
         """
