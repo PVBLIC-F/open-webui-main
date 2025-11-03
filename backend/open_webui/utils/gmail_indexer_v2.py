@@ -182,20 +182,12 @@ class GmailIndexerV2:
         logger.debug(f"  Search text preview: {search_text[:200]}...")
         
         # Step 4: Extract enhanced metadata for filtering/enrichment
-        # CRITICAL: Clean the text one more time before metadata extraction
-        # This ensures extract_enhanced_metadata receives clean text without escape sequences
-        search_text_for_metadata = self._final_clean_before_metadata(search_text)
-        
-        # Remove "Subject:" and "From:" prefixes for better entity extraction
-        # These labels confuse the entity extraction algorithm
-        search_text_for_metadata = re.sub(r'^Subject:\s*', '', search_text_for_metadata)
-        search_text_for_metadata = re.sub(r'\s+From:\s+', '\n', search_text_for_metadata)
-        search_text_for_metadata = search_text_for_metadata.strip()
-        
-        logger.debug(f"  Text for metadata extraction (cleaned): {search_text_for_metadata[:200]}...")
+        # Use just the clean body for metadata extraction (not subject/from labels)
+        # This gives better entity/topic extraction
+        body_for_metadata = self._deep_clean_for_embeddings(parsed["document_text"]) if parsed["document_text"] else ""
         
         # Use LLM=False for speed (rule-based extraction)
-        enhanced_metadata = extract_enhanced_metadata(search_text_for_metadata, use_llm=False)
+        enhanced_metadata = extract_enhanced_metadata(body_for_metadata, use_llm=False) if body_for_metadata else {}
         
         # Debug: Check enhanced metadata quality AND content
         logger.debug(
@@ -359,113 +351,58 @@ class GmailIndexerV2:
         """
         Create optimal text for semantic embedding.
         
-        This is THE most important function for search quality.
-        The text created here directly determines how well semantic search works.
+        SIMPLE APPROACH (Best Practice):
+        - Clean the email body thoroughly
+        - Include subject for context
+        - Include sender for "emails from X" queries
+        - Keep it simple and readable
         
-        Strategy:
-        - Subject gets priority (most semantically important)
-        - From name for "emails from X" queries
-        - Body is deeply cleaned and optimized
-        - Attachments are summarized if present
-        - Final length optimized for embedding model
+        The subject and from_name are already in structured fields,
+        but including them here helps with semantic search.
         
         Returns:
-            Clean, semantically-rich text optimized for neural embeddings
+            Clean, semantically-rich text optimized for embeddings
         """
+        # SIMPLE APPROACH: Just combine clean parts
         parts = []
         
-        # DEBUG: Log inputs
-        logger.debug(f"Creating search text - Subject: {len(subject)} chars, From: {len(from_name)} chars, Body: {len(body)} chars")
+        # 1. Clean subject (remove Re:, Fwd:)
+        subject_clean = re.sub(r'^\s*(Re|RE|Fwd|FW|Fw):\s*', '', subject, flags=re.IGNORECASE).strip()
+        if subject_clean:
+            parts.append(subject_clean)
         
-        # 1. Subject (highest semantic importance)
-        if subject and subject != "(No Subject)":
-            parts.append(f"Subject: {subject}")
-            logger.debug(f"  Added subject: {len(subject)} chars")
-        
-        # 2. From name (important for person-based queries)
+        # 2. From name (for "emails from X" queries)
         if from_name:
-            parts.append(f"From: {from_name}")
-            logger.debug(f"  Added from_name: {len(from_name)} chars")
+            parts.append(f"From {from_name}")
         
-        # 3. Email body (deeply cleaned)
+        # 3. Clean body
         if body:
-            # DEBUG: Check for escape sequences in input
-            has_escapes = '\\n' in body or '\\t' in body or '\\r' in body
-            logger.debug(f"  Body has escape sequences: {has_escapes}, Body preview: {body[:100]}")
-            
             body_clean = self._deep_clean_for_embeddings(body)
             
-            # Debug: Log cleaning impact
-            logger.debug(f"  Body: {len(body)} chars → Cleaned: {len(body_clean)} chars")
-            if len(body) > 0 and len(body_clean) == 0:
-                logger.warning(
-                    f"  ⚠️ Body cleaning removed ALL content! "
-                    f"Original: {len(body)} chars → Cleaned: {len(body_clean)} chars"
-                )
-            
-            # Limit body length intelligently
+            # Limit to optimal length
             if len(body_clean) > self.OPTIMAL_TEXT_LENGTH:
-                # Keep first N chars (usually most important content)
                 body_clean = body_clean[:self.OPTIMAL_TEXT_LENGTH]
-                # Find last complete sentence
+                # Find last sentence
                 last_period = body_clean.rfind('. ')
                 if last_period > self.OPTIMAL_TEXT_LENGTH * 0.8:
                     body_clean = body_clean[:last_period + 1]
             
             if body_clean:
                 parts.append(body_clean)
-            elif body:
-                # Fallback: if cleaning removed everything, use first 800 chars of original
-                logger.warning("Cleaning removed all body text, using original (lightly cleaned)")
-                body_fallback = body[:self.OPTIMAL_TEXT_LENGTH]
-                # Just remove obvious escape sequences
-                body_fallback = body_fallback.replace('\\n', '\n').replace('\\t', ' ')
-                parts.append(body_fallback)
         
-        # 4. Attachment content (if substantive)
+        # 4. Attachments (if present)
         if attachment_texts:
-            combined_attachments = " ".join(attachment_texts)
-            # Clean and limit attachment text (leave room for subject + body)
-            att_clean = self._deep_clean_for_embeddings(combined_attachments)
-            # Limit to 200 chars to ensure total stays under MAX_TEXT_LENGTH
-            if len(att_clean) > 200:
-                att_clean = att_clean[:200] + "..."
-            
+            att_text = " ".join(attachment_texts)
+            att_clean = self._deep_clean_for_embeddings(att_text)[:200]
             if att_clean:
-                parts.append(f"Attachments: {att_clean}")
+                parts.append(att_clean)
         
-        # Debug: Log parts before joining
-        logger.debug(f"  Parts to combine: {len(parts)} parts")
-        for i, part in enumerate(parts):
-            has_escapes = '\\n' in part
-            logger.debug(f"    Part {i}: {len(part)} chars, has escapes: {has_escapes}")
+        # Combine parts
+        final_text = "\n\n".join(parts).strip()
         
-        # Combine with proper spacing
-        final_text = "\n\n".join(parts)
-        
-        has_escapes_after_join = '\\n' in final_text
-        logger.debug(f"  After join: {len(final_text)} chars, has escapes: {has_escapes_after_join}")
-        
-        # Final length check
-        if len(final_text) > self.MAX_TEXT_LENGTH:
-            final_text = final_text[:self.MAX_TEXT_LENGTH]
-        
-        final_text = final_text.strip()
-        
-        # Sanity check: ensure no literal escape sequences remain
-        if '\\n' in final_text or '\\t' in final_text or '\\r' in final_text:
-            logger.warning(f"  ⚠️ Search text has escape sequences! Cleaning now...")
-            logger.debug(f"  Before escape clean: {repr(final_text[:100])}")
-            # One more pass to clean escape sequences
-            final_text = final_text.replace('\\n', '\n').replace('\\t', ' ')
-            final_text = final_text.replace('\\r', '').replace('\\\\', '')
-            # Re-normalize whitespace after converting escapes
-            final_text = re.sub(r'\s+', ' ', final_text)
-            final_text = re.sub(r'\n{3,}', '\n\n', final_text)
-            final_text = final_text.strip()
-            logger.debug(f"  After escape clean: {repr(final_text[:100])}")
-        
-        logger.debug(f"  Final search text: {len(final_text)} chars")
+        # Final escape sequence cleanup
+        if '\\n' in final_text:
+            final_text = final_text.replace('\\n', '\n')
         
         return final_text
 
@@ -647,30 +584,11 @@ class GmailIndexerV2:
             if not text_snippet:
                 text_snippet = f"Email {email_id[:8]}"
         
-        # Apply final Pinecone cleaning (matches chat summary format)
+        # Apply final Pinecone cleaning (single-line, clean text)
         text_snippet_clean = self._clean_for_pinecone(text_snippet)
         
-        # Remove "Subject:" and "From:" prefixes from display text
-        # These are useful for embeddings but clutter display
-        text_snippet_clean = re.sub(r'^Subject:\s*', '', text_snippet_clean)
-        text_snippet_clean = re.sub(r'\s+From:\s+', ' ', text_snippet_clean)
-        
-        # Remove email reply/forward abbreviations
-        # Re:, RE:, Fwd:, FW:, etc. - these are just noise
+        # Simple cleanup: Remove Re:/Fwd: prefixes (already done in search_text creation)
         text_snippet_clean = re.sub(r'\b(Re|RE|Fwd|FW|Fw):\s*', '', text_snippet_clean, flags=re.IGNORECASE)
-        
-        # Clean up any duplicate content (subject appearing twice in some emails)
-        # Split by spaces and remove exact duplicates while preserving order
-        words = text_snippet_clean.split()
-        seen = set()
-        clean_words = []
-        for word in words:
-            word_lower = word.lower()
-            if word_lower not in seen or len(word_lower) <= 3:  # Keep short words even if repeated
-                clean_words.append(word)
-                seen.add(word_lower)
-        text_snippet_clean = ' '.join(clean_words)
-        
         text_snippet_clean = text_snippet_clean.strip()
         
         # Debug: Log text_snippet creation
@@ -773,6 +691,53 @@ class GmailIndexerV2:
         
         return metadata
 
+    @staticmethod
+    def _remove_duplicate_sentences(text: str) -> str:
+        """
+        Remove duplicate phrases while preserving readability.
+        
+        Detects duplicate long phrases (30+ chars) and removes them.
+        Uses sliding window to find duplicates without relying on punctuation.
+        
+        Common in emails where subject line is repeated in the body.
+        """
+        if not text or len(text) < 100:
+            return text
+        
+        # Simple approach: Find long repeated substrings (40+ chars)
+        # If a phrase of 40+ chars appears twice, keep only first occurrence
+        min_phrase_length = 40
+        
+        # Look for long duplicated phrases
+        for length in range(len(text) // 2, min_phrase_length - 1, -10):
+            if length < min_phrase_length:
+                break
+            
+            # Check if first 'length' chars appear again later
+            phrase = text[:length]
+            # Normalize for comparison (remove extra spaces, lowercase)
+            phrase_normalized = re.sub(r'\s+', ' ', phrase).strip().lower()
+            
+            # Search for this phrase later in the text
+            rest_of_text = text[length:]
+            rest_normalized = re.sub(r'\s+', ' ', rest_of_text).strip().lower()
+            
+            if phrase_normalized and phrase_normalized in rest_normalized:
+                # Found duplicate - remove the second occurrence
+                # Find where it starts in original text
+                pattern = re.escape(phrase).replace(r'\ ', r'\s+')
+                # Remove second occurrence only
+                parts = re.split(pattern, text, maxsplit=2, flags=re.IGNORECASE)
+                if len(parts) >= 3:
+                    # Keep first occurrence, skip second, keep rest
+                    text = parts[0] + parts[1] + parts[2]
+                    break
+        
+        # Clean up any resulting double spaces
+        text = re.sub(r'\s+', ' ', text).strip()
+        
+        return text
+    
     @staticmethod
     def _clean_metadata_field(text: str) -> str:
         """
