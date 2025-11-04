@@ -241,35 +241,161 @@ class GCSStorageProvider(StorageProvider):
     def upload_file(
         self, file: BinaryIO, filename: str, tags: Dict[str, str]
     ) -> Tuple[bytes, str]:
-        """Handles uploading of the file to GCS storage."""
+        """Handles uploading of the file to GCS storage with retry logic."""
+        import time
+        from requests.exceptions import ConnectionError, Timeout
+        from open_webui.config import (
+            GCS_UPLOAD_TIMEOUT_SECONDS,
+            GCS_MAX_RETRY_ATTEMPTS,
+            GCS_RETRY_BASE_DELAY_SECONDS,
+        )
+
         contents, file_path = LocalStorageProvider.upload_file(file, filename, tags)
-        try:
-            blob = self.bucket.blob(filename)
-            blob.upload_from_filename(file_path)
-            return contents, "gs://" + self.bucket_name + "/" + filename
-        except GoogleCloudError as e:
-            raise RuntimeError(f"Error uploading file to GCS: {e}")
+
+        # Get configurable retry settings
+        max_retries = GCS_MAX_RETRY_ATTEMPTS
+        base_delay = GCS_RETRY_BASE_DELAY_SECONDS
+        upload_timeout = GCS_UPLOAD_TIMEOUT_SECONDS
+
+        for attempt in range(max_retries):
+            try:
+                blob = self.bucket.blob(filename)
+                # Set timeout for upload (configurable, default 5 minutes)
+                blob.upload_from_filename(file_path, timeout=upload_timeout)
+
+                log.info(f"Successfully uploaded {filename} to GCS")
+                return contents, "gs://" + self.bucket_name + "/" + filename
+
+            except (ConnectionError, Timeout, Exception) as e:
+                is_retryable = (
+                    isinstance(e, (ConnectionError, Timeout))
+                    or "RemoteDisconnected" in str(e)
+                    or "Connection aborted" in str(e)
+                    or "timed out" in str(e).lower()
+                )
+
+                if is_retryable and attempt < max_retries - 1:
+                    # Exponential backoff with jitter
+                    delay = base_delay * (2**attempt) + (time.time() % 1)
+                    log.warning(
+                        f"GCS upload attempt {attempt + 1}/{max_retries} failed for {filename}: {e}. "
+                        f"Retrying in {delay:.1f}s..."
+                    )
+                    time.sleep(delay)
+                    continue
+                else:
+                    # Final attempt failed or non-retryable error
+                    if isinstance(e, GoogleCloudError):
+                        raise RuntimeError(f"Error uploading file to GCS: {e}")
+                    else:
+                        raise RuntimeError(
+                            f"Error uploading file to GCS after {max_retries} attempts: {e}"
+                        )
 
     def get_file(self, file_path: str) -> str:
-        """Handles downloading of the file from GCS storage."""
-        try:
-            filename = file_path.removeprefix("gs://").split("/")[1]
-            local_file_path = f"{UPLOAD_DIR}/{filename}"
-            blob = self.bucket.get_blob(filename)
-            blob.download_to_filename(local_file_path)
+        """Handles downloading of the file from GCS storage with retry logic."""
+        import time
+        from requests.exceptions import ConnectionError, Timeout
+        from open_webui.config import (
+            GCS_DOWNLOAD_TIMEOUT_SECONDS,
+            GCS_MAX_RETRY_ATTEMPTS,
+            GCS_RETRY_BASE_DELAY_SECONDS,
+        )
 
-            return local_file_path
-        except NotFound as e:
-            raise RuntimeError(f"Error downloading file from GCS: {e}")
+        filename = file_path.removeprefix("gs://").split("/")[1]
+        local_file_path = f"{UPLOAD_DIR}/{filename}"
+
+        # Get configurable retry settings
+        max_retries = GCS_MAX_RETRY_ATTEMPTS
+        base_delay = GCS_RETRY_BASE_DELAY_SECONDS
+        download_timeout = GCS_DOWNLOAD_TIMEOUT_SECONDS
+
+        for attempt in range(max_retries):
+            try:
+                blob = self.bucket.get_blob(filename)
+                if not blob:
+                    raise RuntimeError(f"File not found in GCS: {filename}")
+
+                # Set timeout for download (configurable, default 5 minutes)
+                blob.download_to_filename(local_file_path, timeout=download_timeout)
+                log.info(f"Successfully downloaded {filename} from GCS")
+                return local_file_path
+
+            except NotFound as e:
+                # File doesn't exist - don't retry
+                raise RuntimeError(f"File not found in GCS: {filename}")
+
+            except (ConnectionError, Timeout, Exception) as e:
+                is_retryable = (
+                    isinstance(e, (ConnectionError, Timeout))
+                    or "RemoteDisconnected" in str(e)
+                    or "Connection aborted" in str(e)
+                    or "timed out" in str(e).lower()
+                )
+
+                if is_retryable and attempt < max_retries - 1:
+                    delay = base_delay * (2**attempt) + (time.time() % 1)
+                    log.warning(
+                        f"GCS download attempt {attempt + 1}/{max_retries} failed for {filename}: {e}. "
+                        f"Retrying in {delay:.1f}s..."
+                    )
+                    time.sleep(delay)
+                    continue
+                else:
+                    raise RuntimeError(
+                        f"Error downloading file from GCS after {max_retries} attempts: {e}"
+                    )
 
     def delete_file(self, file_path: str) -> None:
-        """Handles deletion of the file from GCS storage."""
-        try:
-            filename = file_path.removeprefix("gs://").split("/")[1]
-            blob = self.bucket.get_blob(filename)
-            blob.delete()
-        except NotFound as e:
-            raise RuntimeError(f"Error deleting file from GCS: {e}")
+        """Handles deletion of the file from GCS storage with retry logic."""
+        import time
+        from requests.exceptions import ConnectionError, Timeout
+        from open_webui.config import (
+            GCS_MAX_RETRY_ATTEMPTS,
+            GCS_RETRY_BASE_DELAY_SECONDS,
+        )
+
+        filename = file_path.removeprefix("gs://").split("/")[1]
+
+        # Get configurable retry settings
+        max_retries = GCS_MAX_RETRY_ATTEMPTS
+        base_delay = GCS_RETRY_BASE_DELAY_SECONDS
+
+        for attempt in range(max_retries):
+            try:
+                blob = self.bucket.get_blob(filename)
+                if blob:
+                    blob.delete(timeout=60)
+                    log.info(f"Successfully deleted {filename} from GCS")
+                else:
+                    log.warning(f"File not found in GCS (already deleted?): {filename}")
+                break  # Success or file doesn't exist - exit retry loop
+
+            except NotFound:
+                # File doesn't exist - not an error
+                log.info(f"File not found in GCS (already deleted): {filename}")
+                break
+
+            except (ConnectionError, Timeout, Exception) as e:
+                is_retryable = (
+                    isinstance(e, (ConnectionError, Timeout))
+                    or "RemoteDisconnected" in str(e)
+                    or "Connection aborted" in str(e)
+                    or "timed out" in str(e).lower()
+                )
+
+                if is_retryable and attempt < max_retries - 1:
+                    delay = base_delay * (2**attempt) + (time.time() % 1)
+                    log.warning(
+                        f"GCS delete attempt {attempt + 1}/{max_retries} failed for {filename}: {e}. "
+                        f"Retrying in {delay:.1f}s..."
+                    )
+                    time.sleep(delay)
+                    continue
+                else:
+                    raise RuntimeError(
+                        f"Error deleting file from GCS after {max_retries} attempts: {e}"
+                    )
 
         # Always delete from local storage
         LocalStorageProvider.delete_file(file_path)
