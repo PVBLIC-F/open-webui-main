@@ -65,7 +65,7 @@ class GmailAutoSync:
             process_attachments: Enable attachment processing
             max_attachment_size_mb: Maximum attachment size in MB
             allowed_attachment_types: Comma-separated allowed extensions
-            
+
         Note: Uses per-user namespaces (email-{user_id}) computed at sync time
         Note: V2 uses single-vector strategy (no chunking needed)
         Note: Respects admin panel RAG/Document settings
@@ -76,7 +76,7 @@ class GmailAutoSync:
             app_config=app_config,
         )
         self.pinecone = pinecone_manager
-        
+
         # Attachment processing config
         self.process_attachments = process_attachments
         self.max_attachment_size_mb = max_attachment_size_mb
@@ -380,9 +380,13 @@ class GmailAutoSync:
                     emails=batch,
                     user_id=user_id,
                     fetcher=fetcher,
-                    process_attachments=getattr(self, 'process_attachments', True),
-                    max_attachment_size_mb=getattr(self, 'max_attachment_size_mb', 10),
-                    allowed_attachment_types=getattr(self, 'allowed_attachment_types', ".pdf,.docx,.doc,.xlsx,.xls,.pptx,.ppt,.txt,.csv,.md,.html,.eml"),
+                    process_attachments=getattr(self, "process_attachments", True),
+                    max_attachment_size_mb=getattr(self, "max_attachment_size_mb", 10),
+                    allowed_attachment_types=getattr(
+                        self,
+                        "allowed_attachment_types",
+                        ".pdf,.docx,.doc,.xlsx,.xls,.pptx,.ppt,.txt,.csv,.md,.html,.eml",
+                    ),
                 )
 
                 upsert_data = result["upsert_data"]
@@ -521,10 +525,12 @@ async def trigger_gmail_sync_if_needed(
     if not user:
         logger.info(f"   ⏭️  SKIP: User {user_id} not found")
         return
-        
+
     # Check admin setting for Gmail sync
-    admin_sync_enabled = getattr(user, 'gmail_sync_enabled', 0) == 1
-    logger.info(f"   ⚙️  Admin Gmail sync setting: gmail_sync_enabled={admin_sync_enabled}")
+    admin_sync_enabled = getattr(user, "gmail_sync_enabled", 0) == 1
+    logger.info(
+        f"   ⚙️  Admin Gmail sync setting: gmail_sync_enabled={admin_sync_enabled}"
+    )
 
     # Check if we should only sync on signup (only applies if admin hasn't explicitly enabled)
     sync_on_signup_only = request.app.state.config.GMAIL_AUTO_SYNC_ON_SIGNUP_ONLY
@@ -536,13 +542,17 @@ async def trigger_gmail_sync_if_needed(
     if not admin_sync_enabled:
         if sync_on_signup_only and not is_new_user:
             logger.info(f"   ⏭️  SKIP: Gmail auto-sync only on signup, user is not new")
-            logger.info(f"      Admin can enable sync in Admin -> Users -> Edit User -> Gmail Email Sync")
+            logger.info(
+                f"      Admin can enable sync in Admin -> Users -> Edit User -> Gmail Email Sync"
+            )
             return
         else:
             logger.info(f"   ⏭️  SKIP: Admin has disabled Gmail sync for this user")
-            logger.info(f"      Enable in Admin -> Users -> Edit User -> Gmail Email Sync")
+            logger.info(
+                f"      Enable in Admin -> Users -> Edit User -> Gmail Email Sync"
+            )
             return
-        
+
     # Check if user has enabled Gmail sync in their settings (additional user preference)
     if user and user.settings:
         settings_dict = (
@@ -553,14 +563,20 @@ async def trigger_gmail_sync_if_needed(
         gmail_settings = (
             settings_dict.get("gmail", {}) if isinstance(settings_dict, dict) else {}
         )
-        user_sync_enabled = gmail_settings.get("sync_enabled", True)  # Default to enabled if admin allows
-        logger.info(f"   ⚙️  User Gmail sync preference: sync_enabled={user_sync_enabled}")
+        user_sync_enabled = gmail_settings.get(
+            "sync_enabled", True
+        )  # Default to enabled if admin allows
+        logger.info(
+            f"   ⚙️  User Gmail sync preference: sync_enabled={user_sync_enabled}"
+        )
 
         if not user_sync_enabled:
             logger.info(f"   ⏭️  SKIP: User has disabled Gmail sync in their settings")
             return
     else:
-        logger.info(f"   ⚙️  No user settings found - will sync (admin enabled, no user preference)")
+        logger.info(
+            f"   ⚙️  No user settings found - will sync (admin enabled, no user preference)"
+        )
 
     logger.info(f"   ✅ ALL CONDITIONS MET - Triggering Gmail sync!")
     logger.info(
@@ -826,7 +842,9 @@ async def _background_gmail_sync(request, user_id: str, oauth_token: dict):
                     if "metadata" not in item:
                         item["metadata"] = {}
                     item["metadata"]["user_id"] = user_id
-                    item["metadata"]["collection_name"] = f"gmail_{user_id}"  # For filtering
+                    item["metadata"][
+                        "collection_name"
+                    ] = f"gmail_{user_id}"  # For filtering
 
                 logger.info(
                     f"📤 Upserting {len(valid_items)} valid vectors to collection: {collection_name}"
@@ -834,23 +852,26 @@ async def _background_gmail_sync(request, user_id: str, oauth_token: dict):
                 logger.info(
                     f"   Namespace: '{user_namespace}' (per-user isolation in Open WebUI)"
                 )
-                logger.info(
-                    f"   User: {user_id}"
-                )
+                logger.info(f"   User: {user_id}")
 
                 try:
                     # Use existing VECTOR_DB_CLIENT.upsert with namespace support
                     # Run in thread executor to avoid blocking async event loop
                     loop = asyncio.get_running_loop()
-                    
+
                     # Check if the vector DB client supports namespace parameter
                     import inspect
+
                     upsert_signature = inspect.signature(VECTOR_DB_CLIENT.upsert)
-                    if 'namespace' in upsert_signature.parameters:
+                    if "namespace" in upsert_signature.parameters:
                         # Vector DB supports namespace (e.g., Pinecone)
                         # Use per-user namespace: email-{user_id}
                         await loop.run_in_executor(
-                            None, VECTOR_DB_CLIENT.upsert, collection_name, valid_items, user_namespace
+                            None,
+                            VECTOR_DB_CLIENT.upsert,
+                            collection_name,
+                            valid_items,
+                            user_namespace,
                         )
                         logger.info(
                             f"✅ Upserted {len(valid_items)} vectors to collection '{collection_name}' in namespace '{user_namespace}'"
@@ -943,7 +964,9 @@ async def test_auto_sync_orchestrator():
 
     class MockPineconeManager:
         async def schedule_upsert(self, data, user_id, namespace=None):
-            logger.info(f"Mock upsert: {len(data)} vectors for user '{user_id}' to namespace '{namespace}'")
+            logger.info(
+                f"Mock upsert: {len(data)} vectors for user '{user_id}' to namespace '{namespace}'"
+            )
             return f"job_{time.time()}"
 
     print("\n✅ TEST 1: Initialize Auto-Sync Orchestrator (V2)")
@@ -1002,7 +1025,7 @@ async def test_auto_sync_orchestrator():
 async def periodic_gmail_sync_scheduler():
     """
     Production-grade periodic Gmail sync scheduler.
-    
+
     Features:
     - Graceful startup with configurable delay
     - Dynamic configuration updates
@@ -1013,33 +1036,68 @@ async def periodic_gmail_sync_scheduler():
     - Distributed system friendly (no race conditions)
     """
     logger.info("🔄 Gmail Periodic Sync Scheduler starting...")
-    
+
     # Graceful startup - wait for application to fully initialize
     startup_delay = 60  # Wait 60 seconds for complete initialization
     await asyncio.sleep(startup_delay)
-    
+
     # Configuration defaults
-    sync_interval_hours = 6
-    check_interval = 30 * 60  # 30 minutes
+    sync_interval_minutes = 15  # Default 15 minutes
+    check_interval_minutes = 5  # Default 5 minutes
     consecutive_errors = 0
     max_consecutive_errors = 5
-    
+
     logger.info("✅ Gmail Periodic Sync Scheduler ready")
-    
+
     while True:
         try:
             # Dynamic configuration reload (supports runtime updates)
             try:
-                from open_webui.config import GMAIL_PERIODIC_SYNC_INTERVAL_HOURS
-                # Extract value from PersistentConfig object using .value attribute
-                sync_interval_hours = GMAIL_PERIODIC_SYNC_INTERVAL_HOURS.value
-                # Ensure it's an integer
-                if not isinstance(sync_interval_hours, int):
-                    sync_interval_hours = int(sync_interval_hours)
+                from open_webui.config import (
+                    GMAIL_PERIODIC_SYNC_INTERVAL_MINUTES,
+                    GMAIL_PERIODIC_SYNC_INTERVAL_HOURS,
+                    GMAIL_PERIODIC_SYNC_CHECK_INTERVAL_MINUTES,
+                )
+
+                # Extract value from PersistentConfig - use minutes if available, otherwise hours
+                interval_hours_value = (
+                    GMAIL_PERIODIC_SYNC_INTERVAL_HOURS.value
+                    if hasattr(GMAIL_PERIODIC_SYNC_INTERVAL_HOURS, "value")
+                    else 0
+                )
+
+                if interval_hours_value and interval_hours_value > 0:
+                    # Legacy hours-based config (backward compatibility)
+                    sync_interval_minutes = interval_hours_value * 60
+                    logger.info(
+                        f"Using legacy GMAIL_PERIODIC_SYNC_INTERVAL_HOURS: {interval_hours_value}h = {sync_interval_minutes}min"
+                    )
+                else:
+                    # New minutes-based config (preferred)
+                    sync_interval_minutes = (
+                        GMAIL_PERIODIC_SYNC_INTERVAL_MINUTES.value
+                        if hasattr(GMAIL_PERIODIC_SYNC_INTERVAL_MINUTES, "value")
+                        else 15
+                    )
+
+                # Check interval (how often to scan for users needing sync)
+                check_interval_minutes = (
+                    GMAIL_PERIODIC_SYNC_CHECK_INTERVAL_MINUTES.value
+                    if hasattr(GMAIL_PERIODIC_SYNC_CHECK_INTERVAL_MINUTES, "value")
+                    else 5
+                )
+
+                # Ensure they're integers
+                sync_interval_minutes = int(sync_interval_minutes)
+                check_interval_minutes = int(check_interval_minutes)
+
             except Exception as e:
-                logger.warning(f"Failed to load sync interval config, using default: {e}")
-                sync_interval_hours = 6
-            
+                logger.warning(
+                    f"Failed to load sync interval config, using defaults: {e}"
+                )
+                sync_interval_minutes = 15
+                check_interval_minutes = 5
+
             # Circuit breaker: back off if too many failures
             if consecutive_errors >= max_consecutive_errors:
                 backoff_time = min(3600, 300 * consecutive_errors)  # Max 1 hour
@@ -1050,41 +1108,43 @@ async def periodic_gmail_sync_scheduler():
                 await asyncio.sleep(backoff_time)
                 consecutive_errors = 0  # Reset after backoff
                 continue
-            
+
             # Query database for users needing sync (indexed query)
+            # Convert minutes to hours for database query
+            sync_interval_hours = sync_interval_minutes / 60.0
             users_needing_sync = gmail_sync_status.get_users_needing_sync(
                 max_hours_since_sync=sync_interval_hours
             )
-            
+
             if users_needing_sync:
                 total_users = len(users_needing_sync)
                 logger.info(
                     f"📧 Periodic sync: {total_users} user(s) need sync "
-                    f"(interval: {sync_interval_hours}h)"
+                    f"(interval: {sync_interval_minutes}min / {sync_interval_hours:.1f}h)"
                 )
-                
+
                 # Adaptive batch sizing based on load
                 batch_size = 2 if total_users > 10 else 3
                 successful_syncs = 0
                 failed_syncs = 0
-                
+
                 # Process users in batches with rate limiting
                 for i in range(0, total_users, batch_size):
-                    batch = users_needing_sync[i:i + batch_size]
+                    batch = users_needing_sync[i : i + batch_size]
                     batch_start = time.time()
-                    
+
                     # Parallel processing within batch
                     tasks = [
                         asyncio.create_task(
                             _sync_user_periodic(user_id),
-                            name=f"periodic_gmail_sync_{user_id}"
+                            name=f"periodic_gmail_sync_{user_id}",
                         )
                         for user_id in batch
                     ]
-                    
+
                     # Wait for batch completion with error isolation
                     results = await asyncio.gather(*tasks, return_exceptions=True)
-                    
+
                     # Track results for monitoring
                     for j, result in enumerate(results):
                         if isinstance(result, Exception):
@@ -1095,22 +1155,22 @@ async def periodic_gmail_sync_scheduler():
                             )
                         elif result:  # Successful sync
                             successful_syncs += 1
-                    
+
                     batch_duration = time.time() - batch_start
-                    
+
                     # Adaptive rate limiting between batches
                     if i + batch_size < total_users:
                         # Add delay based on batch processing time (backpressure)
                         delay = max(10, min(30, batch_duration * 0.5))
                         await asyncio.sleep(delay)
-                
+
                 # Summary logging
                 logger.info(
                     f"✅ Periodic sync cycle complete: "
                     f"{successful_syncs} succeeded, {failed_syncs} failed "
                     f"(total: {total_users})"
                 )
-                
+
                 # Reset error counter on successful cycle
                 if successful_syncs > 0:
                     consecutive_errors = 0
@@ -1118,16 +1178,17 @@ async def periodic_gmail_sync_scheduler():
                     consecutive_errors += 1
             else:
                 logger.debug(
-                    f"📧 No users need sync at this time (interval: {sync_interval_hours}h)"
+                    f"📧 No users need sync at this time (interval: {sync_interval_minutes}min)"
                 )
                 consecutive_errors = 0  # Reset on successful query
-            
+
             # Wait before next check (with jitter to avoid thundering herd)
-            jitter = time.time() % 60  # 0-60 second jitter
-            actual_wait = check_interval + jitter
-            logger.debug(f"⏰ Next sync check in {actual_wait//60:.1f} minutes")
+            check_interval_seconds = check_interval_minutes * 60
+            jitter = time.time() % 30  # 0-30 second jitter
+            actual_wait = check_interval_seconds + jitter
+            logger.debug(f"⏰ Next sync check in {actual_wait/60:.1f} minutes")
             await asyncio.sleep(actual_wait)
-            
+
         except asyncio.CancelledError:
             logger.info("🛑 Gmail Periodic Sync Scheduler shutting down gracefully")
             raise  # Propagate cancellation
@@ -1145,37 +1206,37 @@ async def periodic_gmail_sync_scheduler():
 async def _sync_user_periodic(user_id: str) -> bool:
     """
     Sync Gmail for a single user during periodic sync (production-grade).
-    
+
     Features:
     - Comprehensive validation with early returns
     - Graceful OAuth token handling
     - Timeout protection
     - Memory-efficient processing
     - Detailed error logging
-    
+
     Args:
         user_id: The user ID to sync
-        
+
     Returns:
         bool: True if sync succeeded, False otherwise
     """
     sync_start = time.time()
-    
+
     try:
         logger.debug(f"🔄 Periodic sync starting for user: {user_id}")
-        
+
         # Validation: Check user exists
         user = Users.get_user_by_id(user_id)
         if not user:
             logger.warning(f"⚠️  User {user_id} not found in database, skipping")
             return False
-        
+
         # Validation: Check admin enabled sync
-        admin_sync_enabled = getattr(user, 'gmail_sync_enabled', 0) == 1
+        admin_sync_enabled = getattr(user, "gmail_sync_enabled", 0) == 1
         if not admin_sync_enabled:
             logger.debug(f"⏭️  Gmail sync disabled by admin for user {user_id}")
             return False
-        
+
         # Validation: Check OAuth session exists
         oauth_session = OAuthSessions.get_session_by_provider_and_user_id(
             "google", user_id
@@ -1183,75 +1244,68 @@ async def _sync_user_periodic(user_id: str) -> bool:
         if not oauth_session:
             logger.debug(f"⏭️  No Google OAuth session for user {user_id}")
             return False
-        
+
         # Use OAuth token from session
         # Note: Token refresh happens automatically on next OAuth login
         # If token is expired, Gmail API will fail and we'll retry on next cycle
         oauth_token = oauth_session.token
-        
+
         # Validation: Check OAuth token exists and has access_token
         if not oauth_token or not oauth_token.get("access_token"):
-            logger.warning(f"⚠️  Invalid OAuth token for user {user_id} (may need to re-authenticate)")
+            logger.warning(
+                f"⚠️  Invalid OAuth token for user {user_id} (may need to re-authenticate)"
+            )
             return False
-        
+
         # Check if this is first sync for this user
         sync_status = gmail_sync_status.get_sync_status(user_id)
-        is_first_sync = (sync_status is None or sync_status.last_sync_timestamp is None)
-        
-        # Create sync instance (reuses existing infrastructure)
-        gmail_sync = GmailAutoSync()
-        
-        # Determine timeout based on sync type
+        is_first_sync = sync_status is None or sync_status.last_sync_timestamp is None
+
+        # Determine timeout and email limits based on sync type
         if is_first_sync:
             # First sync: limit emails more aggressively, allow more time
             max_sync_emails = 200  # Conservative for first background sync
             sync_timeout = 600  # 10 minutes for first sync
-            logger.info(f"🆕 First sync for user {user_id} - limiting to {max_sync_emails} emails")
+            logger.info(
+                f"🆕 First sync for user {user_id} - limiting to {max_sync_emails} emails"
+            )
         else:
             # Ongoing sync: normal limits
             max_sync_emails = 500
             sync_timeout = 900  # 15 minutes
-        
+
         # Perform incremental sync with timeout protection
+        # Reuse the background sync infrastructure
         try:
+            # Get app state for services
+            from open_webui.main import app
+
+            # Create a minimal request-like object with app state
+            class AppStateWrapper:
+                def __init__(self, app_state):
+                    self.app = type("obj", (object,), {"state": app_state})()
+
+            request_wrapper = AppStateWrapper(app.state)
+
             # Use asyncio.wait_for to enforce timeout
             result = await asyncio.wait_for(
-                gmail_sync.sync_user_gmail(
-                    user_id=user_id,
-                    oauth_token=oauth_token,
-                    max_emails=max_sync_emails,
-                    skip_spam_trash=True,
-                    incremental=True,  # Always use incremental mode
-                    # incremental=True with last_sync_timestamp=None will do full sync automatically
-                ),
-                timeout=sync_timeout
+                _background_gmail_sync(request_wrapper, user_id, oauth_token),
+                timeout=sync_timeout,
             )
         except asyncio.TimeoutError:
             duration = time.time() - sync_start
             logger.error(
                 f"⏱️  Periodic sync timeout for user {user_id} "
-                f"after {duration:.1f}s (max: 900s)"
+                f"after {duration:.1f}s (max: {sync_timeout}s)"
             )
             return False
-        
-        # Process results
-        if result.get("success"):
-            emails_synced = result.get("emails_synced", 0)
-            duration = time.time() - sync_start
-            logger.info(
-                f"✅ Periodic sync: user {user_id} - "
-                f"{emails_synced} emails synced in {duration:.1f}s"
-            )
-            return True
-        else:
-            error_msg = result.get("error", "Unknown error")
-            duration = time.time() - sync_start
-            logger.error(
-                f"❌ Periodic sync failed for user {user_id} "
-                f"after {duration:.1f}s: {error_msg}"
-            )
-            return False
-            
+
+        # If we reach here, the sync completed successfully
+        # (_background_gmail_sync raises exceptions on failure)
+        duration = time.time() - sync_start
+        logger.info(f"✅ Periodic sync completed for user {user_id} in {duration:.1f}s")
+        return True
+
     except asyncio.CancelledError:
         logger.info(f"🛑 Periodic sync cancelled for user {user_id}")
         raise  # Propagate cancellation

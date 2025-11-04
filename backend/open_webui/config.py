@@ -357,7 +357,7 @@ GOOGLE_OAUTH_SCOPE = PersistentConfig(
     "oauth.google.scope",
     os.environ.get(
         "GOOGLE_OAUTH_SCOPE",
-        "openid email profile https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.modify"
+        "openid email profile https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.modify",
     ),
 )
 
@@ -414,10 +414,27 @@ GMAIL_PERIODIC_SYNC_ENABLED = PersistentConfig(
     os.environ.get("GMAIL_PERIODIC_SYNC_ENABLED", "True").lower() == "true",
 )
 
+# Sync interval in minutes (default: 15 minutes for more responsive updates)
+GMAIL_PERIODIC_SYNC_INTERVAL_MINUTES = PersistentConfig(
+    "GMAIL_PERIODIC_SYNC_INTERVAL_MINUTES",
+    "gmail.periodic_sync.interval_minutes",
+    int(os.environ.get("GMAIL_PERIODIC_SYNC_INTERVAL_MINUTES", "15")),
+)
+
+# How often to check for users needing sync (default: 5 minutes)
+GMAIL_PERIODIC_SYNC_CHECK_INTERVAL_MINUTES = PersistentConfig(
+    "GMAIL_PERIODIC_SYNC_CHECK_INTERVAL_MINUTES",
+    "gmail.periodic_sync.check_interval_minutes",
+    int(os.environ.get("GMAIL_PERIODIC_SYNC_CHECK_INTERVAL_MINUTES", "5")),
+)
+
+# Legacy: Keep for backward compatibility but use minutes instead
 GMAIL_PERIODIC_SYNC_INTERVAL_HOURS = PersistentConfig(
     "GMAIL_PERIODIC_SYNC_INTERVAL_HOURS",
     "gmail.periodic_sync.interval_hours",
-    int(os.environ.get("GMAIL_PERIODIC_SYNC_INTERVAL_HOURS", "6")),
+    int(
+        os.environ.get("GMAIL_PERIODIC_SYNC_INTERVAL_HOURS", "0")
+    ),  # 0 = use minutes instead
 )
 
 # Skip emails in spam and trash folders
@@ -453,8 +470,8 @@ GMAIL_ATTACHMENT_TYPES = PersistentConfig(
     "GMAIL_ATTACHMENT_TYPES",
     "gmail.attachments.allowed_types",
     os.environ.get(
-        "GMAIL_ATTACHMENT_TYPES", 
-        ".pdf,.docx,.doc,.xlsx,.xls,.pptx,.ppt,.txt,.csv,.md,.html,.eml"
+        "GMAIL_ATTACHMENT_TYPES",
+        ".pdf,.docx,.doc,.xlsx,.xls,.pptx,.ppt,.txt,.csv,.md,.html,.eml",
     ),
 )
 
@@ -2241,7 +2258,9 @@ PINECONE_METRIC = os.getenv("PINECONE_METRIC", "cosine")
 PINECONE_CLOUD = os.getenv("PINECONE_CLOUD", "aws")  # or "gcp" or "azure"
 
 # Pinecone Namespaces (for data segregation)
-PINECONE_NAMESPACE = os.environ.get("PINECONE_NAMESPACE", "chat-summary-knowledge")  # Chat summaries & knowledge
+PINECONE_NAMESPACE = os.environ.get(
+    "PINECONE_NAMESPACE", "chat-summary-knowledge"
+)  # Chat summaries & knowledge
 
 # Note: Gmail sync uses per-user namespaces: "email-{user_id}"
 # This provides better isolation and easier user data management
