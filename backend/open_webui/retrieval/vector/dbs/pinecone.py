@@ -49,13 +49,13 @@ class PineconeClient(VectorDBBase):
         # Validate required configuration
         self._validate_config()
 
-        # Store configuration values
-        self.api_key = PINECONE_API_KEY
-        self.environment = PINECONE_ENVIRONMENT
-        self.index_name = PINECONE_INDEX_NAME
-        self.dimension = PINECONE_DIMENSION
-        self.metric = PINECONE_METRIC
-        self.cloud = PINECONE_CLOUD
+        # Store configuration values - extract .value if PersistentConfig
+        self.api_key = self._extract_value(PINECONE_API_KEY)
+        self.environment = self._extract_value(PINECONE_ENVIRONMENT)
+        self.index_name = self._extract_value(PINECONE_INDEX_NAME)
+        self.dimension = int(self._extract_value(PINECONE_DIMENSION))
+        self.metric = self._extract_value(PINECONE_METRIC)
+        self.cloud = self._extract_value(PINECONE_CLOUD)
 
         # Initialize Pinecone client for improved performance
         if GRPC_AVAILABLE:
@@ -83,18 +83,24 @@ class PineconeClient(VectorDBBase):
         # Create index if it doesn't exist
         self._initialize_index()
 
+    def _extract_value(self, config_value):
+        """Extract the actual value from PersistentConfig or return the value as-is."""
+        if hasattr(config_value, "value"):
+            return config_value.value
+        return config_value
+
     def _validate_config(self) -> None:
         """Validate that all required configuration variables are set."""
         missing_vars = []
-        if not PINECONE_API_KEY:
+        if not self._extract_value(PINECONE_API_KEY):
             missing_vars.append("PINECONE_API_KEY")
-        if not PINECONE_ENVIRONMENT:
+        if not self._extract_value(PINECONE_ENVIRONMENT):
             missing_vars.append("PINECONE_ENVIRONMENT")
-        if not PINECONE_INDEX_NAME:
+        if not self._extract_value(PINECONE_INDEX_NAME):
             missing_vars.append("PINECONE_INDEX_NAME")
-        if not PINECONE_DIMENSION:
+        if not self._extract_value(PINECONE_DIMENSION):
             missing_vars.append("PINECONE_DIMENSION")
-        if not PINECONE_CLOUD:
+        if not self._extract_value(PINECONE_CLOUD):
             missing_vars.append("PINECONE_CLOUD")
 
         if missing_vars:
@@ -182,16 +188,27 @@ class PineconeClient(VectorDBBase):
             # CRITICAL: Always add collection_name to metadata for filtering
             # This MUST be set correctly for proper isolation
             metadata["collection_name"] = collection_name_with_prefix
-            
+
             # Extract file_id from collection name if it's a file collection
-            if collection_name_with_prefix.startswith(f"{self.collection_prefix}_file-"):
+            if collection_name_with_prefix.startswith(
+                f"{self.collection_prefix}_file-"
+            ):
                 # Extract the file ID from the collection name
-                file_id_from_collection = collection_name_with_prefix.replace(f"{self.collection_prefix}_file-", "")
-                
+                file_id_from_collection = collection_name_with_prefix.replace(
+                    f"{self.collection_prefix}_file-", ""
+                )
+
                 # Verify consistency: if metadata has file_id, it must match
-                if "file_id" in metadata and metadata["file_id"] != file_id_from_collection:
-                    log.error(f"FILE ID MISMATCH! Metadata file_id: {metadata.get('file_id')}, Collection file_id: {file_id_from_collection}")
-                    log.error(f"This will cause cross-contamination! Full collection name: {collection_name_with_prefix}")
+                if (
+                    "file_id" in metadata
+                    and metadata["file_id"] != file_id_from_collection
+                ):
+                    log.error(
+                        f"FILE ID MISMATCH! Metadata file_id: {metadata.get('file_id')}, Collection file_id: {file_id_from_collection}"
+                    )
+                    log.error(
+                        f"This will cause cross-contamination! Full collection name: {collection_name_with_prefix}"
+                    )
                     # Force correct file_id to prevent contamination
                     metadata["file_id"] = file_id_from_collection
 
@@ -320,13 +337,17 @@ class PineconeClient(VectorDBBase):
         collection_name_with_prefix = self._get_collection_name_with_prefix(
             collection_name
         )
-        
+
         # Log detailed information about what's being upserted
-        log.info(f"Upserting {len(items)} items to Pinecone collection: {collection_name} (with prefix: {collection_name_with_prefix})")
+        log.info(
+            f"Upserting {len(items)} items to Pinecone collection: {collection_name} (with prefix: {collection_name_with_prefix})"
+        )
         if items and items[0].get("metadata"):
             sample_metadata = items[0]["metadata"]
-            log.info(f"Sample metadata - file_id: {sample_metadata.get('file_id')}, name: {sample_metadata.get('name')}")
-        
+            log.info(
+                f"Sample metadata - file_id: {sample_metadata.get('file_id')}, name: {sample_metadata.get('name')}"
+            )
+
         points = self._create_points(items, collection_name_with_prefix)
 
         # Parallelize batch upserts for performance
@@ -494,7 +515,9 @@ class PineconeClient(VectorDBBase):
                     if key != "collection_name":
                         pinecone_filter[key] = value
                     else:
-                        log.warning(f"Attempted to override collection_name filter! Ignoring.")
+                        log.warning(
+                            f"Attempted to override collection_name filter! Ignoring."
+                        )
 
             # Perform metadata-only query
             query_response = self.index.query(
