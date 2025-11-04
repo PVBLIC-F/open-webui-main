@@ -919,6 +919,16 @@ GOOGLE_APPLICATION_CREDENTIALS_JSON = os.environ.get(
     "GOOGLE_APPLICATION_CREDENTIALS_JSON", None
 )
 
+# GCS Retry Configuration (for handling transient network errors)
+GCS_UPLOAD_TIMEOUT_SECONDS = int(
+    os.environ.get("GCS_UPLOAD_TIMEOUT_SECONDS", "300")
+)  # 5 minutes
+GCS_DOWNLOAD_TIMEOUT_SECONDS = int(
+    os.environ.get("GCS_DOWNLOAD_TIMEOUT_SECONDS", "300")
+)  # 5 minutes
+GCS_MAX_RETRY_ATTEMPTS = int(os.environ.get("GCS_MAX_RETRY_ATTEMPTS", "3"))
+GCS_RETRY_BASE_DELAY_SECONDS = int(os.environ.get("GCS_RETRY_BASE_DELAY_SECONDS", "1"))
+
 AZURE_STORAGE_ENDPOINT = os.environ.get("AZURE_STORAGE_ENDPOINT", None)
 AZURE_STORAGE_CONTAINER_NAME = os.environ.get("AZURE_STORAGE_CONTAINER_NAME", None)
 AZURE_STORAGE_KEY = os.environ.get("AZURE_STORAGE_KEY", None)
