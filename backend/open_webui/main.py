@@ -451,6 +451,8 @@ from open_webui.config import (
     GMAIL_SEARCH_TOOL_ENABLED,
     GMAIL_PERIODIC_SYNC_ENABLED,
     GMAIL_PERIODIC_SYNC_INTERVAL_HOURS,
+    GMAIL_PERIODIC_SYNC_INTERVAL_MINUTES,
+    GMAIL_PERIODIC_SYNC_CHECK_INTERVAL_MINUTES,
     GMAIL_PROCESS_ATTACHMENTS,
     GMAIL_MAX_ATTACHMENT_SIZE_MB,
     GMAIL_ATTACHMENT_TYPES,
@@ -624,8 +626,12 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(periodic_usage_pool_cleanup())
 
     # Start Gmail periodic sync if enabled
-    if app.state.config.ENABLE_GMAIL_AUTO_SYNC and app.state.config.GMAIL_PERIODIC_SYNC_ENABLED:
+    if (
+        app.state.config.ENABLE_GMAIL_AUTO_SYNC
+        and app.state.config.GMAIL_PERIODIC_SYNC_ENABLED
+    ):
         from open_webui.utils.gmail_auto_sync import periodic_gmail_sync_scheduler
+
         asyncio.create_task(periodic_gmail_sync_scheduler())
         log.info("🔄 Gmail periodic sync scheduler started")
 
@@ -938,6 +944,12 @@ app.state.config.GMAIL_SKIP_SPAM_AND_TRASH = GMAIL_SKIP_SPAM_AND_TRASH
 app.state.config.GMAIL_SEARCH_TOOL_ENABLED = GMAIL_SEARCH_TOOL_ENABLED
 app.state.config.GMAIL_PERIODIC_SYNC_ENABLED = GMAIL_PERIODIC_SYNC_ENABLED
 app.state.config.GMAIL_PERIODIC_SYNC_INTERVAL_HOURS = GMAIL_PERIODIC_SYNC_INTERVAL_HOURS
+app.state.config.GMAIL_PERIODIC_SYNC_INTERVAL_MINUTES = (
+    GMAIL_PERIODIC_SYNC_INTERVAL_MINUTES
+)
+app.state.config.GMAIL_PERIODIC_SYNC_CHECK_INTERVAL_MINUTES = (
+    GMAIL_PERIODIC_SYNC_CHECK_INTERVAL_MINUTES
+)
 app.state.config.GMAIL_PROCESS_ATTACHMENTS = GMAIL_PROCESS_ATTACHMENTS
 app.state.config.GMAIL_MAX_ATTACHMENT_SIZE_MB = GMAIL_MAX_ATTACHMENT_SIZE_MB
 app.state.config.GMAIL_ATTACHMENT_TYPES = GMAIL_ATTACHMENT_TYPES
