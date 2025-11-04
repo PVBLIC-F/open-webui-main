@@ -476,6 +476,21 @@ GMAIL_ATTACHMENT_TYPES = PersistentConfig(
 )
 
 
+####################################
+# GCS Storage Configuration
+####################################
+
+# GCS Retry Configuration (for handling transient network errors)
+GCS_UPLOAD_TIMEOUT_SECONDS = int(
+    os.environ.get("GCS_UPLOAD_TIMEOUT_SECONDS", "300")
+)  # 5 minutes
+GCS_DOWNLOAD_TIMEOUT_SECONDS = int(
+    os.environ.get("GCS_DOWNLOAD_TIMEOUT_SECONDS", "300")
+)  # 5 minutes
+GCS_MAX_RETRY_ATTEMPTS = int(os.environ.get("GCS_MAX_RETRY_ATTEMPTS", "3"))
+GCS_RETRY_BASE_DELAY_SECONDS = int(os.environ.get("GCS_RETRY_BASE_DELAY_SECONDS", "1"))
+
+
 MICROSOFT_CLIENT_ID = PersistentConfig(
     "MICROSOFT_CLIENT_ID",
     "oauth.microsoft.client_id",
