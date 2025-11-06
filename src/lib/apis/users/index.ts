@@ -436,6 +436,7 @@ type UserUpdateForm = {
 	email: string;
 	name: string;
 	password: string;
+	gmail_sync_enabled?: number;
 };
 
 export const updateUserById = async (token: string, userId: string, user: UserUpdateForm) => {
@@ -452,7 +453,8 @@ export const updateUserById = async (token: string, userId: string, user: UserUp
 			role: user.role,
 			email: user.email,
 			name: user.name,
-			password: user.password !== '' ? user.password : undefined
+			password: user.password !== '' ? user.password : undefined,
+			gmail_sync_enabled: user.gmail_sync_enabled
 		})
 	})
 		.then(async (res) => {
@@ -477,6 +479,33 @@ export const getUserGroupsById = async (token: string, userId: string) => {
 
 	const res = await fetch(`${WEBUI_API_BASE_URL}/users/${userId}/groups`, {
 		method: 'GET',
+		headers: {
+			'Content-Type': 'application/json',
+			Authorization: `Bearer ${token}`
+		}
+	})
+		.then(async (res) => {
+			if (!res.ok) throw await res.json();
+			return res.json();
+		})
+		.catch((err) => {
+			console.error(err);
+			error = err.detail;
+			return null;
+		});
+
+	if (error) {
+		throw error;
+	}
+
+	return res;
+};
+
+export const forceGmailSync = async (token: string, userId: string) => {
+	let error = null;
+
+	const res = await fetch(`${WEBUI_API_BASE_URL}/users/${userId}/gmail-sync/force`, {
+		method: 'POST',
 		headers: {
 			'Content-Type': 'application/json',
 			Authorization: `Bearer ${token}`

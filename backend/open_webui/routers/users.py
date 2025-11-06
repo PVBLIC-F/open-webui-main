@@ -433,6 +433,8 @@ async def update_user_by_id(
     form_data: UserUpdateForm,
     session_user=Depends(get_admin_user),
 ):
+    log.info(f"Updating user {user_id} with data: {form_data.model_dump()}")
+    log.info(f"Gmail sync enabled value: {form_data.gmail_sync_enabled}")
     # Prevent modification of the primary admin user by other admins
     try:
         first_user = Users.get_first_user()
@@ -476,15 +478,20 @@ async def update_user_by_id(
             Auths.update_user_password_by_id(user_id, hashed)
 
         Auths.update_email_by_id(user_id, form_data.email.lower())
-        updated_user = Users.update_user_by_id(
-            user_id,
-            {
-                "role": form_data.role,
-                "name": form_data.name,
-                "email": form_data.email.lower(),
-                "profile_image_url": form_data.profile_image_url,
-            },
-        )
+        # Prepare update data
+        update_data = {
+            "role": form_data.role,
+            "name": form_data.name,
+            "email": form_data.email.lower(),
+            "profile_image_url": form_data.profile_image_url,
+        }
+        
+        # Add gmail_sync_enabled if provided
+        if form_data.gmail_sync_enabled is not None:
+            update_data["gmail_sync_enabled"] = form_data.gmail_sync_enabled
+            log.info(f"Updating gmail_sync_enabled for user {user_id}: {form_data.gmail_sync_enabled}")
+        
+        updated_user = Users.update_user_by_id(user_id, update_data)
 
         if updated_user:
             return updated_user
@@ -548,3 +555,219 @@ async def delete_user_by_id(user_id: str, user=Depends(get_admin_user)):
 @router.get("/{user_id}/groups")
 async def get_user_groups_by_id(user_id: str, user=Depends(get_admin_user)):
     return Groups.get_groups_by_member_id(user_id)
+
+
+@router.post("/{user_id}/gmail-sync/reset")
+async def reset_user_gmail_sync(user_id: str, user=Depends(get_admin_user)):
+    """
+    Reset Gmail sync status for a user (admin only).
+    
+    This will trigger a full sync on the next periodic sync cycle.
+    Use this when a user has deleted their Pinecone records or needs to rebuild their index.
+    """
+    from open_webui.models.gmail_sync import gmail_sync_status
+    
+    sync_status = gmail_sync_status.get_sync_status(user_id)
+    if not sync_status:
+        return {
+            "success": False,
+            "message": "No sync status found for this user"
+        }
+    
+    # Reset sync status to trigger full sync
+    updated = gmail_sync_status.update_sync_status(
+        user_id=user_id,
+        last_sync_timestamp=None,
+        sync_status="never",
+        total_emails_synced=0,
+        last_sync_count=0,
+        error_count=0,
+        last_error=None
+    )
+    
+    if updated:
+        return {
+            "success": True,
+            "message": f"Gmail sync reset for user {user_id}. Full sync will occur on next cycle.",
+            "user_id": user_id,
+            "next_sync": "Will be triggered by periodic scheduler (within 30 minutes)"
+        }
+    else:
+        return {
+            "success": False,
+            "message": "Failed to reset sync status"
+        }
+
+
+@router.get("/{user_id}/gmail-sync-status")
+async def get_user_gmail_sync_status(user_id: str, user=Depends(get_admin_user)):
+    """
+    Get Gmail sync status and metrics for a user (admin only).
+    
+    Returns comprehensive sync information including:
+    - Current sync status and configuration
+    - Performance metrics (emails synced, duration)
+    - Error tracking and diagnostics
+    - Next sync prediction
+    """
+    from open_webui.models.gmail_sync import gmail_sync_status
+    from datetime import datetime, timedelta
+    import time
+    
+    sync_status = gmail_sync_status.get_sync_status(user_id)
+    if not sync_status:
+        return {
+            "user_id": user_id,
+            "sync_enabled": False,
+            "status": "never",
+            "message": "No sync status found - user may not have Gmail connected",
+            "last_sync": None,
+            "next_sync_estimate": None
+        }
+    
+    # Calculate human-readable last sync time
+    last_sync_human = None
+    next_sync_estimate = None
+    if sync_status.last_sync_timestamp:
+        last_sync_dt = datetime.fromtimestamp(sync_status.last_sync_timestamp)
+        last_sync_human = last_sync_dt.isoformat()
+        
+        # Estimate next sync time based on frequency
+        next_sync_dt = last_sync_dt + timedelta(hours=sync_status.sync_frequency_hours)
+        next_sync_estimate = next_sync_dt.isoformat()
+        time_until_sync = (next_sync_dt - datetime.now()).total_seconds()
+        hours_until = max(0, time_until_sync / 3600)
+    else:
+        hours_until = 0
+    
+    # Calculate sync health score (0-100)
+    health_score = 100
+    if sync_status.error_count > 0:
+        health_score -= min(50, sync_status.error_count * 10)  # -10 per error, max -50
+    if sync_status.sync_status == "error":
+        health_score -= 30
+    if sync_status.sync_status == "paused":
+        health_score = 0
+    
+    return {
+        "user_id": user_id,
+        "sync_enabled": sync_status.sync_enabled,
+        "auto_sync_enabled": sync_status.auto_sync_enabled,
+        "status": sync_status.sync_status,
+        
+        # Timestamps
+        "last_sync_timestamp": sync_status.last_sync_timestamp,
+        "last_sync": last_sync_human,
+        "next_sync_estimate": next_sync_estimate,
+        "hours_until_next_sync": round(hours_until, 1) if next_sync_estimate else None,
+        
+        # Performance metrics
+        "last_sync_count": sync_status.last_sync_count,
+        "last_sync_duration_seconds": sync_status.last_sync_duration,
+        "total_emails_synced": sync_status.total_emails_synced,
+        
+        # Error tracking
+        "error_count": sync_status.error_count,
+        "last_error": sync_status.last_error,
+        "health_score": max(0, health_score),
+        
+        # Configuration
+        "sync_frequency_hours": sync_status.sync_frequency_hours,
+        "max_emails_per_sync": sync_status.max_emails_per_sync,
+        
+        # Diagnostics
+        "created_at": sync_status.created_at,
+        "updated_at": sync_status.updated_at
+    }
+
+
+@router.post("/{user_id}/gmail-sync/force")
+async def force_gmail_sync(user_id: str, request: Request, user=Depends(get_admin_user)):
+    """
+    Force a full Gmail sync for a user (admin only).
+    
+    This will:
+    1. Reset the sync status to trigger a full sync
+    2. Start a background sync task immediately
+    3. Sync all emails (not just new ones)
+    
+    Use this when:
+    - User wants to re-index all their emails
+    - Sync status is stuck or corrupted
+    - User deleted their vector DB data
+    """
+    from open_webui.models.gmail_sync import gmail_sync_status
+    from open_webui.models.oauth_sessions import OAuthSessions
+    from open_webui.utils.gmail_auto_sync import trigger_gmail_sync_if_needed
+    
+    # Validate user exists
+    target_user = Users.get_user_by_id(user_id)
+    if not target_user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    
+    # Check if user has Gmail sync enabled
+    if not getattr(target_user, 'gmail_sync_enabled', 0):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Gmail sync is not enabled for this user"
+        )
+    
+    # Check if user has Google OAuth session
+    oauth_session = OAuthSessions.get_session_by_provider_and_user_id("google", user_id)
+    if not oauth_session:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User has not connected their Google account"
+        )
+    
+    # Get or refresh OAuth token using Open WebUI's OAuth manager
+    oauth_token = await request.app.state.oauth_manager.get_oauth_token(
+        user_id=user_id,
+        session_id=oauth_session.id,
+        force_refresh=False  # Will auto-refresh if expired
+    )
+    
+    if not oauth_token or not oauth_token.get("access_token"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unable to obtain valid OAuth token (may need to re-authenticate)"
+        )
+    
+    # Reset sync status to force full sync
+    sync_status = gmail_sync_status.get_sync_status(user_id)
+    if sync_status:
+        gmail_sync_status.update_sync_status(
+            user_id=user_id,
+            last_sync_timestamp=None,  # Reset to trigger full sync
+            last_sync_history_id=None,
+            sync_status="pending",
+            last_sync_count=0,
+        )
+        log.info(f"Reset Gmail sync status for user {user_id} - will do full sync")
+    
+    # Trigger sync immediately in background
+    try:
+        await trigger_gmail_sync_if_needed(
+            request=request,
+            user_id=user_id,
+            provider="google",
+            token=oauth_token,
+            is_new_user=False
+        )
+        
+        return {
+            "success": True,
+            "message": "Full Gmail sync started in background",
+            "user_id": user_id,
+            "sync_type": "full",
+            "note": "This may take several minutes. Check sync status for progress."
+        }
+    except Exception as e:
+        log.error(f"Error triggering Gmail sync for user {user_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to start Gmail sync: {str(e)}"
+        )
