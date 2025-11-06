@@ -1,6 +1,7 @@
 import json
 import logging
-from typing import Optional
+import time
+from typing import Optional, Tuple
 
 
 from open_webui.socket.main import get_event_emitter
@@ -10,6 +11,7 @@ from open_webui.models.chats import (
     ChatResponse,
     Chats,
     ChatTitleIdResponse,
+    ChatModel,
 )
 from open_webui.models.tags import TagModel, Tags
 from open_webui.models.folders import Folders
@@ -28,6 +30,51 @@ log = logging.getLogger(__name__)
 log.setLevel(SRC_LOG_LEVELS["MODELS"])
 
 router = APIRouter()
+
+############################
+# Simple TTL Cache for Chats
+############################
+
+# Cache to reduce database hits for frequently accessed chats
+# Particularly important for remote databases (e.g., Render) with network latency
+_chat_cache: dict[str, Tuple[ChatModel, float]] = {}
+_CACHE_TTL = 60  # seconds - cache for 1 minute
+_MAX_CACHE_SIZE = 1000  # Maximum cached chats
+
+
+def _get_cached_chat(chat_id: str, user_id: str) -> Optional[ChatModel]:
+    """Get chat from cache if available and not expired"""
+    cache_key = f"{chat_id}:{user_id}"
+    if cache_key in _chat_cache:
+        cached_chat, timestamp = _chat_cache[cache_key]
+        if time.time() - timestamp < _CACHE_TTL:
+            log.debug(f"Cache HIT for chat {chat_id}")
+            return cached_chat
+        else:
+            # Expired - remove from cache
+            del _chat_cache[cache_key]
+    return None
+
+
+def _cache_chat(chat_id: str, user_id: str, chat: ChatModel):
+    """Store chat in cache with automatic cleanup"""
+    cache_key = f"{chat_id}:{user_id}"
+    _chat_cache[cache_key] = (chat, time.time())
+    
+    # Simple cleanup: if cache grows too large, remove oldest 20%
+    if len(_chat_cache) > _MAX_CACHE_SIZE:
+        sorted_items = sorted(_chat_cache.items(), key=lambda x: x[1][1])
+        for key, _ in sorted_items[:200]:
+            del _chat_cache[key]
+        log.debug(f"Cache cleanup: removed 200 oldest entries")
+
+
+def _invalidate_chat_cache(chat_id: str, user_id: str):
+    """Invalidate cache entry when chat is updated"""
+    cache_key = f"{chat_id}:{user_id}"
+    if cache_key in _chat_cache:
+        del _chat_cache[cache_key]
+        log.debug(f"Cache invalidated for chat {chat_id}")
 
 ############################
 # GetChatList
@@ -436,9 +483,17 @@ async def get_user_chat_list_by_tag_name(
 
 @router.get("/{id}", response_model=Optional[ChatResponse])
 async def get_chat_by_id(id: str, user=Depends(get_verified_user)):
+    # Try cache first (eliminates duplicate request overhead for remote databases)
+    cached_chat = _get_cached_chat(id, user.id)
+    if cached_chat:
+        return ChatResponse(**cached_chat.model_dump())
+    
+    # Cache miss - fetch from database
     chat = Chats.get_chat_by_id_and_user_id(id, user.id)
 
     if chat:
+        # Store in cache for future requests
+        _cache_chat(id, user.id, chat)
         return ChatResponse(**chat.model_dump())
 
     else:
@@ -456,6 +511,9 @@ async def get_chat_by_id(id: str, user=Depends(get_verified_user)):
 async def update_chat_by_id(
     id: str, form_data: ChatForm, user=Depends(get_verified_user)
 ):
+    # Invalidate cache since we're updating
+    _invalidate_chat_cache(id, user.id)
+    
     chat = Chats.get_chat_by_id_and_user_id(id, user.id)
     if chat:
         updated_chat = {**chat.chat, **form_data.chat}
