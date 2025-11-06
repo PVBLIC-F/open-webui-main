@@ -546,12 +546,27 @@ def remove_file_from_knowledge_by_id(
 
     # Remove content from the vector database
     try:
+        log.info(f"Attempting to delete vectors for file_id: {form_data.file_id} from collection: {knowledge.id}")
+        
+        # First, let's check if there are any vectors with this file_id
+        result = VECTOR_DB_CLIENT.query(
+            collection_name=knowledge.id, 
+            filter={"file_id": form_data.file_id}
+        )
+        
+        if result and result.ids and result.ids[0]:
+            log.info(f"Found {len(result.ids[0])} vectors to delete for file_id: {form_data.file_id}")
+        else:
+            log.warning(f"No vectors found for file_id: {form_data.file_id} in collection: {knowledge.id}")
+        
         VECTOR_DB_CLIENT.delete(
             collection_name=knowledge.id, filter={"file_id": form_data.file_id}
         )
+        log.info(f"Successfully deleted vectors for file_id: {form_data.file_id}")
+        
     except Exception as e:
+        log.error(f"Error deleting vectors for file_id {form_data.file_id}: {e}")
         log.debug("This was most likely caused by bypassing embedding processing")
-        log.debug(e)
         pass
 
     if delete_file:
@@ -657,10 +672,19 @@ async def delete_knowledge_by_id(id: str, user=Depends(get_verified_user)):
 
     # Clean up vector DB
     try:
-        VECTOR_DB_CLIENT.delete_collection(collection_name=id)
+        log.info(f"Attempting to delete vector collection: {id}")
+        
+        # Check if collection exists before trying to delete
+        if VECTOR_DB_CLIENT.has_collection(collection_name=id):
+            VECTOR_DB_CLIENT.delete_collection(collection_name=id)
+            log.info(f"Successfully deleted vector collection: {id}")
+        else:
+            log.warning(f"Vector collection {id} does not exist, skipping deletion")
+            
     except Exception as e:
-        log.debug(e)
-        pass
+        log.error(f"Error deleting vector collection {id}: {e}")
+        # Don't pass silently - this is important for cleanup
+        # But don't fail the entire operation if vector cleanup fails
     result = Knowledges.delete_knowledge_by_id(id=id)
     return result
 
@@ -690,10 +714,19 @@ async def reset_knowledge_by_id(id: str, user=Depends(get_verified_user)):
         )
 
     try:
-        VECTOR_DB_CLIENT.delete_collection(collection_name=id)
+        log.info(f"Attempting to reset vector collection: {id}")
+        
+        # Check if collection exists before trying to delete
+        if VECTOR_DB_CLIENT.has_collection(collection_name=id):
+            VECTOR_DB_CLIENT.delete_collection(collection_name=id)
+            log.info(f"Successfully reset vector collection: {id}")
+        else:
+            log.warning(f"Vector collection {id} does not exist, skipping reset")
+            
     except Exception as e:
-        log.debug(e)
-        pass
+        log.error(f"Error resetting vector collection {id}: {e}")
+        # Don't pass silently - this is important for cleanup
+        # But don't fail the entire operation if vector cleanup fails
 
     knowledge = Knowledges.update_knowledge_data_by_id(id=id, data={"file_ids": []})
 

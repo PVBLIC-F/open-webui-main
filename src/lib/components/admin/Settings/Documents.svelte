@@ -351,7 +351,7 @@
 									class="dark:bg-gray-900 w-fit pr-8 rounded-sm px-2 text-xs bg-transparent outline-hidden text-right"
 									bind:value={RAGConfig.CONTENT_EXTRACTION_ENGINE}
 								>
-									<option value="">{$i18n.t('Default')}</option>
+									<option value="">{$i18n.t('Default (Unstructured)')}</option>
 									<option value="external">{$i18n.t('External')}</option>
 									<option value="tika">{$i18n.t('Tika')}</option>
 									<option value="docling">{$i18n.t('Docling')}</option>
@@ -878,7 +878,8 @@
 									class="dark:bg-gray-900 w-fit pr-8 rounded-sm px-2 text-xs bg-transparent outline-hidden text-right"
 									bind:value={RAGConfig.TEXT_SPLITTER}
 								>
-									<option value="">{$i18n.t('Default')} ({$i18n.t('Character')})</option>
+									<option value="">{$i18n.t('Default (Unstructured)')} ({$i18n.t('Semantic')})</option>
+									<option value="character">{$i18n.t('Character')}</option>
 									<option value="token">{$i18n.t('Token')} ({$i18n.t('Tiktoken')})</option>
 									<option value="markdown_header">{$i18n.t('Markdown (Header)')}</option>
 								</select>
@@ -1144,16 +1145,20 @@
 												on:change={(e) => {
 													if (e.target.value === 'external') {
 														RAGConfig.RAG_RERANKING_MODEL = '';
+													} else if (e.target.value === 'pinecone') {
+														RAGConfig.RAG_RERANKING_MODEL = 'pinecone-rerank-v0';
 													} else if (e.target.value === '') {
 														RAGConfig.RAG_RERANKING_MODEL = 'BAAI/bge-reranker-v2-m3';
 													}
 												}}
 											>
 												<option value="">{$i18n.t('Default (SentenceTransformers)')}</option>
+												<option value="pinecone">{$i18n.t('Pinecone')}</option>
 												<option value="external">{$i18n.t('External')}</option>
 											</select>
 										</div>
 									</div>
+
 
 									{#if RAGConfig.RAG_RERANKING_ENGINE === 'external'}
 										<div class="my-0.5 flex gap-2 pr-2">

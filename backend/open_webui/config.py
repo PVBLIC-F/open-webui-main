@@ -917,6 +917,16 @@ GOOGLE_APPLICATION_CREDENTIALS_JSON = os.environ.get(
     "GOOGLE_APPLICATION_CREDENTIALS_JSON", None
 )
 
+# GCS Retry Configuration (for handling transient network errors)
+GCS_UPLOAD_TIMEOUT_SECONDS = int(
+    os.environ.get("GCS_UPLOAD_TIMEOUT_SECONDS", "300")
+)  # 5 minutes
+GCS_DOWNLOAD_TIMEOUT_SECONDS = int(
+    os.environ.get("GCS_DOWNLOAD_TIMEOUT_SECONDS", "300")
+)  # 5 minutes
+GCS_MAX_RETRY_ATTEMPTS = int(os.environ.get("GCS_MAX_RETRY_ATTEMPTS", "3"))
+GCS_RETRY_BASE_DELAY_SECONDS = int(os.environ.get("GCS_RETRY_BASE_DELAY_SECONDS", "1"))
+
 AZURE_STORAGE_ENDPOINT = os.environ.get("AZURE_STORAGE_ENDPOINT", None)
 AZURE_STORAGE_CONTAINER_NAME = os.environ.get("AZURE_STORAGE_CONTAINER_NAME", None)
 AZURE_STORAGE_KEY = os.environ.get("AZURE_STORAGE_KEY", None)
@@ -2234,7 +2244,7 @@ ONEDRIVE_SHAREPOINT_TENANT_ID = PersistentConfig(
 CONTENT_EXTRACTION_ENGINE = PersistentConfig(
     "CONTENT_EXTRACTION_ENGINE",
     "rag.CONTENT_EXTRACTION_ENGINE",
-    os.environ.get("CONTENT_EXTRACTION_ENGINE", "").lower(),
+    os.environ.get("CONTENT_EXTRACTION_ENGINE", "unstructured").lower(),
 )
 
 DATALAB_MARKER_API_KEY = PersistentConfig(
@@ -2634,6 +2644,7 @@ RAG_RERANKING_MODEL_TRUST_REMOTE_CODE = (
     os.environ.get("RAG_RERANKING_MODEL_TRUST_REMOTE_CODE", "True").lower() == "true"
 )
 
+
 RAG_EXTERNAL_RERANKER_URL = PersistentConfig(
     "RAG_EXTERNAL_RERANKER_URL",
     "rag.external_reranker_url",
@@ -2650,7 +2661,7 @@ RAG_EXTERNAL_RERANKER_API_KEY = PersistentConfig(
 RAG_TEXT_SPLITTER = PersistentConfig(
     "RAG_TEXT_SPLITTER",
     "rag.text_splitter",
-    os.environ.get("RAG_TEXT_SPLITTER", ""),
+    os.environ.get("RAG_TEXT_SPLITTER", "unstructured"),
 )
 
 
@@ -2672,34 +2683,49 @@ CHUNK_OVERLAP = PersistentConfig(
 )
 
 DEFAULT_RAG_TEMPLATE = """### Task:
-Respond to the user query using the provided context, incorporating inline citations in the format [id] **only when the <source> tag includes an explicit id attribute** (e.g., <source id="1">).
+Provide an accurate, well-sourced response to the user's query using the provided context. Base your response primarily on the context provided, and use inline citations [id] when referencing information from sources that have an explicit id attribute.
 
-### Guidelines:
-- If you don't know the answer, clearly state that.
-- If uncertain, ask the user for clarification.
-- Respond in the same language as the user's query.
-- If the context is unreadable or of poor quality, inform the user and provide the best possible answer.
-- If the answer isn't present in the context but you possess the knowledge, explain this to the user and provide the answer using your own understanding.
-- **Only include inline citations using [id] (e.g., [1], [2]) when the <source> tag includes an id attribute.**
-- Do not cite if the <source> tag does not contain an id attribute.
-- Do not use XML tags in your response.
-- Ensure citations are concise and directly related to the information provided.
+### Core Principles:
+1. **Accuracy First**: Base your response on the provided context. If information is missing, unclear, or contradictory, acknowledge these limitations.
+2. **Professional Tone**: Maintain a clear, professional, and respectful communication style appropriate for institutional use.
+3. **Transparency**: Clearly distinguish between information from the provided context and general knowledge you may possess.
+4. **Proper Attribution**: Cite all factual claims, statistics, and specific information using inline citations [id] when source tags include id attributes.
 
-### Example of Citation:
-If the user asks about a specific topic and the information is found in a source with a provided id attribute, the response should include the citation like in the following example:
-* "According to the study, the proposed method increases efficiency by 20% [1]."
+### Response Guidelines:
+- **Language**: Respond in the same language as the user's query.
+- **Citations**: 
+  - Include inline citations [id] (e.g., [1], [2]) **only** when the <source> tag includes an explicit id attribute.
+  - Place citations immediately after the relevant claim or statement.
+  - Do not cite if the <source> tag does not contain an id attribute.
+  - When multiple sources support the same claim, cite all relevant sources: [1][2].
+- **Handling Uncertainty**:
+  - If the answer isn't fully available in the context, state this clearly and indicate what information is missing.
+  - If context contains conflicting information, acknowledge the conflict and present both perspectives with their respective citations.
+  - If the context is unreadable or of poor quality, inform the user and provide the best interpretation possible, noting the quality limitation.
+  - If you must rely on knowledge outside the context, explicitly state this: "While not present in the provided documents, [general knowledge statement]."
+- **When You Don't Know**: Clearly state "I cannot find this information in the provided context." Do not guess or fabricate information.
+- **Formatting**: 
+  - Do not include XML tags (<source>, <context>, etc.) in your response.
+  - Write in clear, well-structured paragraphs.
+  - Use bullet points or numbered lists when presenting multiple items.
 
-### Output:
-Provide a clear and direct response to the user's query, including inline citations in the format [id] only when the <source> tag with id attribute is present in the context.
+### Citation Examples:
+- Single source: "The program reached over 5,000 beneficiaries in 2024 [1]."
+- Multiple sources: "Multiple studies confirm this trend [1][2][3]."
+- Partial context: "Based on the available documentation [1], the initiative began in 2023, though specific start dates are not provided in the context."
 
+### Context:
 <context>
 {{CONTEXT}}
 </context>
 
+### User Query:
 <user_query>
 {{QUERY}}
 </user_query>
-"""
+
+### Your Response:
+Provide your response here, following all guidelines above."""
 
 RAG_TEMPLATE = PersistentConfig(
     "RAG_TEMPLATE",

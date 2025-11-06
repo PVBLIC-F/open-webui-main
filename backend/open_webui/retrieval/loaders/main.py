@@ -24,6 +24,7 @@ from langchain_community.document_loaders import (
 from langchain_core.documents import Document
 
 from open_webui.retrieval.loaders.external_document import ExternalDocumentLoader
+from open_webui.retrieval.loaders.unstructured_loader import UnstructuredUnifiedLoader
 
 from open_webui.retrieval.loaders.mistral import MistralLoader
 from open_webui.retrieval.loaders.datalab_marker import DatalabMarkerLoader
@@ -252,6 +253,22 @@ class Loader:
             and not file_content_type.find("html") >= 0
         )
 
+    def _create_unstructured_loader(self, file_path: str) -> UnstructuredUnifiedLoader:
+        """Helper method to create UnstructuredUnifiedLoader with consistent configuration"""
+        return UnstructuredUnifiedLoader(
+            file_path=file_path,
+            strategy=self.kwargs.get("UNSTRUCTURED_STRATEGY", "hi_res"),
+            include_metadata=self.kwargs.get("UNSTRUCTURED_INCLUDE_METADATA", True),
+            clean_text=self.kwargs.get("UNSTRUCTURED_CLEAN_TEXT", True),
+            chunk_by_semantic=self.kwargs.get("UNSTRUCTURED_SEMANTIC_CHUNKING", True),
+            chunking_strategy=self.kwargs.get("UNSTRUCTURED_CHUNKING_STRATEGY", "by_title"),
+            max_characters=self.kwargs.get("CHUNK_SIZE", 1000),
+            chunk_overlap=self.kwargs.get("CHUNK_OVERLAP", 200),
+            cleaning_level=self.kwargs.get("UNSTRUCTURED_CLEANING_LEVEL", "standard"),
+            infer_table_structure=self.kwargs.get("UNSTRUCTURED_INFER_TABLE_STRUCTURE", False),
+            extract_images_in_pdf=self.kwargs.get("UNSTRUCTURED_EXTRACT_IMAGES_IN_PDF", False),
+        )
+
     def _get_loader(self, filename: str, file_content_type: str, file_path: str):
         file_ext = filename.split(".")[-1].lower()
 
@@ -390,46 +407,13 @@ class Loader:
                 api_key=self.kwargs.get("MISTRAL_OCR_API_KEY"),
                 file_path=file_path,
             )
+        elif self.engine in ["", "unstructured"]:
+            # Use Unstructured.io as the default unified loader
+            loader = self._create_unstructured_loader(file_path)
         else:
-            if file_ext == "pdf":
-                loader = PyPDFLoader(
-                    file_path, extract_images=self.kwargs.get("PDF_EXTRACT_IMAGES")
-                )
-            elif file_ext == "csv":
-                loader = CSVLoader(file_path, autodetect_encoding=True)
-            elif file_ext == "rst":
-                loader = UnstructuredRSTLoader(file_path, mode="elements")
-            elif file_ext == "xml":
-                loader = UnstructuredXMLLoader(file_path)
-            elif file_ext in ["htm", "html"]:
-                loader = BSHTMLLoader(file_path, open_encoding="unicode_escape")
-            elif file_ext == "md":
-                loader = TextLoader(file_path, autodetect_encoding=True)
-            elif file_content_type == "application/epub+zip":
-                loader = UnstructuredEPubLoader(file_path)
-            elif (
-                file_content_type
-                == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                or file_ext == "docx"
-            ):
-                loader = Docx2txtLoader(file_path)
-            elif file_content_type in [
-                "application/vnd.ms-excel",
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            ] or file_ext in ["xls", "xlsx"]:
-                loader = UnstructuredExcelLoader(file_path)
-            elif file_content_type in [
-                "application/vnd.ms-powerpoint",
-                "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-            ] or file_ext in ["ppt", "pptx"]:
-                loader = UnstructuredPowerPointLoader(file_path)
-            elif file_ext == "msg":
-                loader = OutlookMessageLoader(file_path)
-            elif file_ext == "odt":
-                loader = UnstructuredODTLoader(file_path)
-            elif self._is_text_file(file_ext, file_content_type):
-                loader = TextLoader(file_path, autodetect_encoding=True)
-            else:
-                loader = TextLoader(file_path, autodetect_encoding=True)
+            # Fallback: Use Unstructured.io for all file types
+            # This ensures we support ALL Unstructured file types
+            log.info(f"Using Unstructured.io fallback for file type: {file_ext}")
+            loader = self._create_unstructured_loader(file_path)
 
         return loader
