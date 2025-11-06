@@ -22,7 +22,8 @@
 		settings,
 		temporaryChatEnabled,
 		TTSWorker,
-		user
+		user,
+		mobile
 	} from '$lib/stores';
 	import { synthesizeOpenAISpeech } from '$lib/apis/audio';
 	import { imageGenerations } from '$lib/apis/images';
@@ -588,14 +589,34 @@
 		</div>
 
 		<div class="flex-auto w-0 pl-1 relative">
-			<Name>
-				<Tooltip content={model?.name ?? message.model} placement="top-start">
-					<span id="response-message-model-name" class="line-clamp-1 text-black dark:text-white">
-						{model?.name ?? message.model}
-					</span>
-				</Tooltip>
+			{#if $mobile}
+				<!-- Mobile: Split model name at colon - Provider on top, Model underneath -->
+				{@const modelNameFull = model?.name ?? message.model}
+				{@const modelParts = modelNameFull.includes(':') ? modelNameFull.split(':', 2) : [modelNameFull]}
+				{@const provider = modelParts[0]?.trim() || modelNameFull}
+				{@const modelName = modelParts[1]?.trim() || ''}
+				<div class="flex flex-col items-start gap-0">
+					<div class="text-sm font-semibold text-black dark:text-white">
+						{provider}
+					</div>
+					{#if modelName}
+						<div class="text-xs text-gray-600 dark:text-gray-400">
+							{modelName}
+						</div>
+					{/if}
+				</div>
+			{:else}
+				<!-- Desktop: Original behavior with model name -->
+				<Name>
+					<Tooltip content={model?.name ?? message.model} placement="top-start">
+						<span id="response-message-model-name" class="line-clamp-1 text-black dark:text-white">
+							{model?.name ?? message.model}
+						</span>
+					</Tooltip>
+				</Name>
+			{/if}
 
-				{#if message.timestamp}
+					{#if message.timestamp}
 					<div
 						class="self-center text-xs font-medium first-letter:capitalize ml-0.5 translate-y-[1px] {($settings?.highContrastMode ??
 						false)
@@ -611,8 +632,9 @@
 							>
 						</Tooltip>
 					</div>
-				{/if}
-			</Name>
+					{/if}
+				</Name>
+			{/if}
 
 			<div>
 				<div class="chat-{message.role} w-full min-w-full markdown-prose">

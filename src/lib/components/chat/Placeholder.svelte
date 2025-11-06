@@ -17,7 +17,8 @@
 		temporaryChatEnabled,
 		selectedFolder,
 		chats,
-		currentChatPage
+		currentChatPage,
+		mobile
 	} from '$lib/stores';
 	import { sanitizeResponseContent, extractCurlyBraceWords } from '$lib/utils';
 	import { WEBUI_BASE_URL } from '$lib/constants';
@@ -69,11 +70,11 @@
 	$: models = selectedModels.map((id) => $_models.find((m) => m.id === id));
 </script>
 
-<div class="m-auto w-full max-w-6xl px-2 @2xl:px-20 translate-y-6 py-24 text-center">
+<div class="m-auto w-full max-w-6xl px-2 @2xl:px-20 translate-y-6 py-24 {$mobile ? 'text-left' : 'text-center'}">
 	{#if $temporaryChatEnabled}
 		<Tooltip
 			content={$i18n.t("This chat won't appear in history and your messages will not be saved.")}
-			className="w-full flex justify-center mb-0.5"
+			className="w-full flex {$mobile ? 'justify-start' : 'justify-center'} mb-0.5"
 			placement="top"
 		>
 			<div class="flex items-center gap-2 text-gray-500 text-base my-2 w-fit">
@@ -83,9 +84,9 @@
 	{/if}
 
 	<div
-		class="w-full text-3xl text-gray-800 dark:text-gray-100 text-center flex items-center gap-4 font-primary"
+		class="w-full text-3xl text-gray-800 dark:text-gray-100 {$mobile ? 'text-left' : 'text-center'} flex items-center gap-4 font-primary"
 	>
-		<div class="w-full flex flex-col justify-center items-center">
+		<div class="w-full flex flex-col {$mobile ? 'justify-start items-start' : 'justify-center items-center'}">
 			{#if $selectedFolder}
 				<FolderTitle
 					folder={$selectedFolder}
@@ -101,8 +102,8 @@
 					}}
 				/>
 			{:else}
-				<div class="flex flex-row justify-center gap-3 @sm:gap-3.5 w-fit px-5 max-w-xl">
-					<div class="flex shrink-0 justify-center">
+				<div class="flex flex-row {$mobile ? 'justify-start' : 'justify-center'} gap-3 @sm:gap-3.5 w-fit px-5 max-w-xl">
+					<div class="flex shrink-0 {$mobile ? 'justify-start' : 'justify-center'}">
 						<div class="flex -space-x-4 mb-0.5" in:fade={{ duration: 100 }}>
 							{#each models as model, modelIdx}
 								<Tooltip
@@ -137,10 +138,27 @@
 					</div>
 
 					<div
-						class=" text-3xl @sm:text-3xl line-clamp-1 flex items-center"
+						class=" text-3xl @sm:text-3xl line-clamp-1 flex {$mobile ? 'items-start' : 'items-center'}"
 						in:fade={{ duration: 100 }}
 					>
-						{#if models[selectedModelIdx]?.name}
+						{#if $mobile && models[selectedModelIdx]?.name}
+							<!-- Mobile: Split model name at colon -->
+							{@const modelNameFull = models[selectedModelIdx]?.name}
+							{@const modelParts = modelNameFull.includes(':') ? modelNameFull.split(':', 2) : [modelNameFull]}
+							{@const provider = modelParts[0]?.trim() || modelNameFull}
+							{@const modelName = modelParts[1]?.trim() || ''}
+							<div class="flex flex-col items-start gap-0">
+								<div class="text-2xl font-semibold text-gray-800 dark:text-gray-100">
+									{provider}
+								</div>
+								{#if modelName}
+									<div class="text-base text-gray-600 dark:text-gray-400">
+										{modelName}
+									</div>
+								{/if}
+							</div>
+						{:else if models[selectedModelIdx]?.name}
+							<!-- Desktop: Original single-line display -->
 							<Tooltip
 								content={models[selectedModelIdx]?.name}
 								placement="top"
