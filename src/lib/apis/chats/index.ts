@@ -598,9 +598,12 @@ export const getChatById = async (token: string, id: string) => {
 	
 	// Deduplication: reuse in-flight request if exists
 	if (pendingChatRequests.has(requestKey)) {
-		console.log(`[Dedup] Reusing in-flight request for chat ${id}`);
+		console.log(`[Dedup] Reusing in-flight request for chat ${id.substring(0, 8)}... (saves ~300ms)`);
 		return pendingChatRequests.get(requestKey)!;
 	}
+	
+	console.log(`[API] Fetching chat ${id.substring(0, 8)}... from network`);
+	const startTime = performance.now();
 	
 	// Create new request with automatic cleanup
 	const requestPromise = fetch(`${WEBUI_API_BASE_URL}/chats/${id}`, {
@@ -614,6 +617,11 @@ export const getChatById = async (token: string, id: string) => {
 		.then(async (res) => {
 			if (!res.ok) throw await res.json();
 			return res.json();
+		})
+		.then((result) => {
+			const elapsed = performance.now() - startTime;
+			console.log(`[API] Chat ${id.substring(0, 8)}... loaded in ${elapsed.toFixed(0)}ms`);
+			return result;
 		})
 		.catch((err) => {
 			console.error('[getChatById] Error:', err);
