@@ -155,7 +155,10 @@
 	let files = [];
 	let params = {};
 
-	$: if (chatIdProp) {
+	// Track previous chatId to prevent duplicate navigateHandler calls
+	let previousChatIdProp = '';
+	$: if (chatIdProp && chatIdProp !== previousChatIdProp) {
+		previousChatIdProp = chatIdProp;
 		navigateHandler();
 	}
 
@@ -390,7 +393,11 @@
 					currentChatPage.set(1);
 					await chats.set(await getChatList(localStorage.token, $currentChatPage));
 				} else if (type === 'chat:tags') {
-					chat = await getChatById(localStorage.token, $chatId);
+					// Update tags directly instead of refetching entire chat
+					// Prevents unnecessary 300ms+ network request
+					if (data?.tags && chat) {
+						chat = { ...chat, meta: { ...chat.meta, tags: data.tags } };
+					}
 					allTags.set(await getAllTags(localStorage.token));
 				} else if (type === 'source' || type === 'citation') {
 					if (data?.type === 'code_execution') {
