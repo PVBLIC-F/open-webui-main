@@ -622,7 +622,7 @@ class ChatTable:
             result = db.execute(
                 text(
                     """
-                    SELECT column_name, data_type 
+                    SELECT column_name, data_type, udt_name
                     FROM information_schema.columns 
                     WHERE table_name = 'chat' 
                     AND column_name IN (:chat_col, :meta_col)
@@ -632,7 +632,10 @@ class ChatTable:
 
             columns = {}
             for row in result:
-                columns[row[0]] = row[1].lower()
+                # Prefer udt_name when available on Postgres to distinguish json vs jsonb
+                # Fallback to data_type for other dialects
+                detected_type = (row[2] or row[1]).lower() if len(row) > 2 else row[1].lower()
+                columns[row[0]] = detected_type
 
             # Handle new installations where table might not exist yet
             # Default to JSON for safety and consistency
