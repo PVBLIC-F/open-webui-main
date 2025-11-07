@@ -28,6 +28,7 @@ peewee-migrate==1.12.2
 
 pycrdt==0.12.25
 redis
+rq
 
 APScheduler==3.10.4
 RestrictedPython==8.0
@@ -63,7 +64,7 @@ fpdf2==2.8.2
 pymdown-extensions==10.14.2
 docx2txt==0.8
 python-pptx==1.0.2
-unstructured==0.18.15
+unstructured[all-docs]==0.18.15
 nltk==3.9.1
 Markdown==3.9
 pypandoc==1.15

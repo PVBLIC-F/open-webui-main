@@ -93,6 +93,7 @@ from open_webui.routers import (
     users,
     utils,
     scim,
+    gmail,
 )
 
 from open_webui.routers.retrieval import (
@@ -246,6 +247,15 @@ from open_webui.config import (
     RAG_OLLAMA_API_KEY,
     CHUNK_OVERLAP,
     CHUNK_SIZE,
+    ENABLE_HIERARCHICAL_CHUNKING,
+    PARENT_CHUNK_SIZE,
+    PARENT_CHUNK_OVERLAP,
+    CHILD_CHUNK_SIZE,
+    CHILD_CHUNK_OVERLAP,
+    ENABLE_SEMANTIC_CHUNKING,
+    SEMANTIC_SIMILARITY_THRESHOLD,
+    SEMANTIC_MIN_CHUNK_SIZE,
+    SEMANTIC_MAX_CHUNK_SIZE,
     CONTENT_EXTRACTION_ENGINE,
     DATALAB_MARKER_API_KEY,
     DATALAB_MARKER_API_BASE_URL,
@@ -431,6 +441,23 @@ from open_webui.config import (
     QUERY_GENERATION_PROMPT_TEMPLATE,
     AUTOCOMPLETE_GENERATION_PROMPT_TEMPLATE,
     AUTOCOMPLETE_GENERATION_INPUT_MAX_LENGTH,
+    # Gmail
+    ENABLE_GMAIL_AUTO_SYNC,
+    GMAIL_AUTO_SYNC_MAX_EMAILS,
+    GMAIL_AUTO_SYNC_ON_SIGNUP_ONLY,
+    GMAIL_SYNC_BATCH_SIZE,
+    GMAIL_API_RATE_LIMIT_DELAY,
+    GMAIL_SKIP_SPAM_AND_TRASH,
+    GMAIL_SEARCH_TOOL_ENABLED,
+    GMAIL_PERIODIC_SYNC_ENABLED,
+    GMAIL_PERIODIC_SYNC_INTERVAL_HOURS,
+    GMAIL_PERIODIC_SYNC_INTERVAL_MINUTES,
+    GMAIL_PERIODIC_SYNC_CHECK_INTERVAL_MINUTES,
+    GMAIL_PROCESS_ATTACHMENTS,
+    GMAIL_MAX_ATTACHMENT_SIZE_MB,
+    GMAIL_ATTACHMENT_TYPES,
+    # Pinecone dimension (needed for embeddings)
+    PINECONE_DIMENSION,
     AppConfig,
     reset_config,
 )
@@ -597,6 +624,16 @@ async def lifespan(app: FastAPI):
         limiter.total_tokens = THREAD_POOL_SIZE
 
     asyncio.create_task(periodic_usage_pool_cleanup())
+
+    # Start Gmail periodic sync if enabled
+    if (
+        app.state.config.ENABLE_GMAIL_AUTO_SYNC
+        and app.state.config.GMAIL_PERIODIC_SYNC_ENABLED
+    ):
+        from open_webui.utils.gmail_auto_sync import periodic_gmail_sync_scheduler
+
+        asyncio.create_task(periodic_gmail_sync_scheduler())
+        log.info("🔄 Gmail periodic sync scheduler started")
 
     if app.state.config.ENABLE_BASE_MODELS_CACHE:
         await get_all_models(
@@ -885,6 +922,39 @@ app.state.config.TIKTOKEN_ENCODING_NAME = TIKTOKEN_ENCODING_NAME
 
 app.state.config.CHUNK_SIZE = CHUNK_SIZE
 app.state.config.CHUNK_OVERLAP = CHUNK_OVERLAP
+
+app.state.config.ENABLE_HIERARCHICAL_CHUNKING = ENABLE_HIERARCHICAL_CHUNKING
+app.state.config.PARENT_CHUNK_SIZE = PARENT_CHUNK_SIZE
+app.state.config.PARENT_CHUNK_OVERLAP = PARENT_CHUNK_OVERLAP
+app.state.config.CHILD_CHUNK_SIZE = CHILD_CHUNK_SIZE
+app.state.config.CHILD_CHUNK_OVERLAP = CHILD_CHUNK_OVERLAP
+
+app.state.config.ENABLE_SEMANTIC_CHUNKING = ENABLE_SEMANTIC_CHUNKING
+app.state.config.SEMANTIC_SIMILARITY_THRESHOLD = SEMANTIC_SIMILARITY_THRESHOLD
+app.state.config.SEMANTIC_MIN_CHUNK_SIZE = SEMANTIC_MIN_CHUNK_SIZE
+app.state.config.SEMANTIC_MAX_CHUNK_SIZE = SEMANTIC_MAX_CHUNK_SIZE
+
+# Gmail Integration
+app.state.config.ENABLE_GMAIL_AUTO_SYNC = ENABLE_GMAIL_AUTO_SYNC
+app.state.config.GMAIL_AUTO_SYNC_MAX_EMAILS = GMAIL_AUTO_SYNC_MAX_EMAILS
+app.state.config.GMAIL_AUTO_SYNC_ON_SIGNUP_ONLY = GMAIL_AUTO_SYNC_ON_SIGNUP_ONLY
+app.state.config.GMAIL_SYNC_BATCH_SIZE = GMAIL_SYNC_BATCH_SIZE
+app.state.config.GMAIL_API_RATE_LIMIT_DELAY = GMAIL_API_RATE_LIMIT_DELAY
+app.state.config.GMAIL_SKIP_SPAM_AND_TRASH = GMAIL_SKIP_SPAM_AND_TRASH
+app.state.config.GMAIL_SEARCH_TOOL_ENABLED = GMAIL_SEARCH_TOOL_ENABLED
+app.state.config.GMAIL_PERIODIC_SYNC_ENABLED = GMAIL_PERIODIC_SYNC_ENABLED
+app.state.config.GMAIL_PERIODIC_SYNC_INTERVAL_HOURS = GMAIL_PERIODIC_SYNC_INTERVAL_HOURS
+app.state.config.GMAIL_PERIODIC_SYNC_INTERVAL_MINUTES = (
+    GMAIL_PERIODIC_SYNC_INTERVAL_MINUTES
+)
+app.state.config.GMAIL_PERIODIC_SYNC_CHECK_INTERVAL_MINUTES = (
+    GMAIL_PERIODIC_SYNC_CHECK_INTERVAL_MINUTES
+)
+app.state.config.GMAIL_PROCESS_ATTACHMENTS = GMAIL_PROCESS_ATTACHMENTS
+app.state.config.GMAIL_MAX_ATTACHMENT_SIZE_MB = GMAIL_MAX_ATTACHMENT_SIZE_MB
+app.state.config.GMAIL_ATTACHMENT_TYPES = GMAIL_ATTACHMENT_TYPES
+app.state.config.PINECONE_DIMENSION = PINECONE_DIMENSION
+# Note: Gmail now uses per-user namespaces (email-{user_id}), no shared namespace
 
 app.state.config.RAG_EMBEDDING_ENGINE = RAG_EMBEDDING_ENGINE
 app.state.config.RAG_EMBEDDING_MODEL = RAG_EMBEDDING_MODEL
@@ -1324,6 +1394,7 @@ app.include_router(openai.router, prefix="/openai", tags=["openai"])
 app.include_router(pipelines.router, prefix="/api/v1/pipelines", tags=["pipelines"])
 app.include_router(tasks.router, prefix="/api/v1/tasks", tags=["tasks"])
 app.include_router(images.router, prefix="/api/v1/images", tags=["images"])
+app.include_router(gmail.router, tags=["gmail"])
 
 app.include_router(audio.router, prefix="/api/v1/audio", tags=["audio"])
 app.include_router(retrieval.router, prefix="/api/v1/retrieval", tags=["retrieval"])
