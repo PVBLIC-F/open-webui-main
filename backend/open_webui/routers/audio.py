@@ -2,9 +2,11 @@ import hashlib
 import json
 import logging
 import os
+import time
 import uuid
 import html
-import base64
+import subprocess
+import tempfile
 from functools import lru_cache
 from pydub import AudioSegment
 from pydub.silence import split_on_silence
@@ -28,6 +30,9 @@ from fastapi import (
     UploadFile,
     status,
     APIRouter,
+    Query,
+    BackgroundTasks,
+    Response,
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -35,6 +40,8 @@ from pydantic import BaseModel
 
 
 from open_webui.utils.auth import get_admin_user, get_verified_user
+from open_webui.models.files import Files
+from open_webui.storage.provider import Storage
 from open_webui.config import (
     WHISPER_MODEL_AUTO_UPDATE,
     WHISPER_MODEL_DIR,
@@ -81,9 +88,15 @@ from pydub.utils import mediainfo
 
 def is_audio_conversion_required(file_path):
     """
-    Check if the given audio file needs conversion to mp3.
+    Check if the given audio/video file needs conversion to mp3.
+    Note: Video files are automatically handled - ffmpeg extracts the audio track.
     """
-    SUPPORTED_FORMATS = {"flac", "m4a", "mp3", "mp4", "mpeg", "wav", "webm"}
+    SUPPORTED_FORMATS = {
+        # Audio formats
+        "flac", "m4a", "mp3", "mpeg", "wav", "webm", "aac", "ogg", "opus",
+        # Video formats (audio track will be extracted)
+        "mp4", "avi", "mov", "mkv", "wmv", "flv", "m4v"
+    }
 
     if not os.path.isfile(file_path):
         log.error(f"File not found: {file_path}")
@@ -594,14 +607,50 @@ def transcription_handler(request, file_path, metadata):
             beam_size=5,
             vad_filter=request.app.state.config.WHISPER_VAD_FILTER,
             language=languages[0],
+            word_timestamps=True,  # Enable word-level timestamps
         )
         log.info(
             "Detected language '%s' with probability %f"
             % (info.language, info.language_probability)
         )
 
-        transcript = "".join([segment.text for segment in list(segments)])
-        data = {"text": transcript.strip()}
+        # Collect segments with timestamps for enrichment
+        segments_list = []
+        transcript_parts = []
+        
+        for segment in segments:
+            segment_data = {
+                "id": segment.id,
+                "start": segment.start,
+                "end": segment.end,
+                "text": segment.text,
+                "words": []
+            }
+            
+            # Capture word-level timestamps if available
+            if hasattr(segment, 'words') and segment.words:
+                segment_data["words"] = [
+                    {
+                        "word": word.word,
+                        "start": word.start,
+                        "end": word.end,
+                        "probability": word.probability
+                    }
+                    for word in segment.words
+                ]
+            
+            segments_list.append(segment_data)
+            transcript_parts.append(segment.text)
+        
+        transcript = "".join(transcript_parts)
+        
+        data = {
+            "text": transcript.strip(),
+            "segments": segments_list,  # Include segment data with timestamps
+            "language": info.language,
+            "language_probability": info.language_probability,
+            "duration": segments_list[-1]["end"] if segments_list else 0
+        }
 
         # save the transcript to a json file
         transcript_file = f"{file_dir}/{id}.json"
@@ -616,6 +665,8 @@ def transcription_handler(request, file_path, metadata):
             for language in languages:
                 payload = {
                     "model": request.app.state.config.STT_MODEL,
+                    "response_format": "verbose_json",  # Request detailed response with timestamps
+                    "timestamp_granularities[]": "segment",  # Request segment-level timestamps
                 }
 
                 if language:
@@ -635,7 +686,44 @@ def transcription_handler(request, file_path, metadata):
                     break
 
             r.raise_for_status()
-            data = r.json()
+            response = r.json()
+            
+            # Parse verbose_json response to extract text and segments
+            # Format: {text, language, duration, segments: [{id, start, end, text}]}
+            transcript_text = response.get("text", "")
+            segments_list = []
+            
+            # Extract segments if available (OpenAI/Groq verbose_json format)
+            if "segments" in response:
+                for segment in response["segments"]:
+                    segment_data = {
+                        "id": segment.get("id", len(segments_list)),
+                        "start": segment.get("start", 0),
+                        "end": segment.get("end", 0),
+                        "text": segment.get("text", ""),
+                        "words": []  # OpenAI/Groq may include words if word_granularity requested
+                    }
+                    
+                    # Include word-level timestamps if available
+                    if "words" in segment:
+                        segment_data["words"] = [
+                            {
+                                "word": word.get("word", ""),
+                                "start": word.get("start", 0),
+                                "end": word.get("end", 0),
+                            }
+                            for word in segment["words"]
+                        ]
+                    
+                    segments_list.append(segment_data)
+            
+            # Build standardized response matching faster-whisper format
+            data = {
+                "text": transcript_text.strip(),
+                "segments": segments_list,
+                "language": response.get("language"),
+                "duration": segments_list[-1]["end"] if segments_list else 0
+            }
 
             # save the transcript to a json file
             transcript_file = f"{file_dir}/{id}.json"
@@ -1075,8 +1163,42 @@ def transcribe(request: Request, file_path: str, metadata: Optional[dict] = None
                 except Exception:
                     pass
 
+    # Merge results from all chunks
+    combined_text = " ".join([result["text"] for result in results])
+    
+    # Merge segments with time offset for chunks
+    combined_segments = []
+    time_offset = 0
+    
+    for result in results:
+        if "segments" in result:
+            for segment in result["segments"]:
+                adjusted_segment = {
+                    **segment,
+                    "start": segment["start"] + time_offset,
+                    "end": segment["end"] + time_offset,
+                }
+                # Adjust word timestamps if present
+                if "words" in adjusted_segment and adjusted_segment["words"]:
+                    adjusted_segment["words"] = [
+                        {
+                            **word,
+                            "start": word["start"] + time_offset,
+                            "end": word["end"] + time_offset,
+                        }
+                        for word in adjusted_segment["words"]
+                    ]
+                combined_segments.append(adjusted_segment)
+            
+            # Update time offset for next chunk
+            if result["segments"]:
+                time_offset = result["segments"][-1]["end"] + time_offset
+    
     return {
-        "text": " ".join([result["text"] for result in results]),
+        "text": combined_text,
+        "segments": combined_segments,  # Include enriched segment data
+        "language": results[0].get("language") if results else None,
+        "duration": time_offset if combined_segments else 0,
     }
 
 
@@ -1161,7 +1283,10 @@ def transcription(
             stt_supported_content_types
             if stt_supported_content_types
             and any(t.strip() for t in stt_supported_content_types)
-            else ["audio/*", "video/webm"]
+            else [
+                "audio/*",  # All audio formats
+                "video/*",  # All video formats (expanded from webm only)
+            ]
         )
     ):
         raise HTTPException(
@@ -1366,3 +1491,358 @@ async def get_voices(request: Request, user=Depends(get_verified_user)):
             {"id": k, "name": v} for k, v in get_available_voices(request).items()
         ]
     }
+
+
+############################
+# Audio Segment Extraction
+############################
+
+
+@router.get("/files/{file_id}/segment")
+async def get_audio_segment(
+    file_id: str,
+    background_tasks: BackgroundTasks,
+    user=Depends(get_verified_user),
+    start: float = Query(..., description="Start timestamp in seconds"),
+    end: float = Query(..., description="End timestamp in seconds"),
+):
+    """
+    Extract and stream a specific audio segment from a file based on timestamps.
+    Used for RAG responses to provide playable audio clips of relevant segments.
+    
+    Args:
+        file_id: The file ID to extract audio from
+        start: Start timestamp in seconds (e.g., 1379.54)
+        end: End timestamp in seconds (e.g., 1502.68)
+    
+    Returns:
+        Streamable MP3 audio file of the requested segment
+    """
+    try:
+        # Validate timestamps
+        if start < 0 or end <= start:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid timestamp range. End must be greater than start, and both must be non-negative."
+            )
+        
+        # Get file and verify access
+        file = Files.get_file_by_id(file_id)
+        if not file:
+            raise HTTPException(
+                status_code=404,
+                detail="File not found"
+            )
+        
+        # Check user has access to this file
+        if file.user_id != user.id and user.role != "admin":
+            raise HTTPException(
+                status_code=403,
+                detail="Access denied"
+            )
+        
+        # Get original file path
+        file_path = Storage.get_file(file.path)
+        if not os.path.exists(file_path):
+            raise HTTPException(
+                status_code=404,
+                detail="Original file not found on storage"
+            )
+        
+        # Create temporary output file with cache key
+        cache_key = f"{file_id}_{int(start)}_{int(end)}"
+        output_filename = f"segment_{cache_key}.mp3"
+        output_path = os.path.join(tempfile.gettempdir(), output_filename)
+        
+        # Check if cached version exists and is recent (within 1 hour)
+        if os.path.exists(output_path):
+            file_age = time.time() - os.path.getmtime(output_path)
+            if file_age < 3600:  # 1 hour cache
+                log.debug(f"Using cached audio segment: {output_filename}")
+                with open(output_path, "rb") as f:
+                    content = f.read()
+                
+                return Response(
+                    content=content,
+                    media_type="audio/mpeg",
+                    headers={
+                        "Accept-Ranges": "bytes",
+                        "Cache-Control": "public, max-age=3600",
+                        "Content-Disposition": f'inline; filename="{output_filename}"',
+                        "Content-Length": str(len(content)),
+                        "X-Cache": "HIT"
+                    }
+                )
+        
+        # Extract audio segment using ffmpeg with optimized parameters
+        # -ss BEFORE -i: input seeking (much faster - seeks before decoding)
+        # -to: end time
+        # -c:a copy: copy codec without re-encoding (fastest, if possible)
+        # -y: overwrite output file if exists
+        cmd = [
+            "ffmpeg",
+            "-ss", str(start),  # Seek BEFORE input for speed
+            "-i", file_path,
+            "-to", str(end - start),  # Duration from start (after input seek)
+            "-c:a", "copy",  # Try codec copy first (no re-encoding)
+            "-y",
+            output_path
+        ]
+        
+        # Try codec copy first (fastest)
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True
+        )
+        
+        # If codec copy failed, fallback to re-encoding with optimized settings
+        if result.returncode != 0 or not os.path.exists(output_path):
+            log.debug(f"Codec copy failed, falling back to re-encoding: {result.stderr[:200]}")
+            cmd = [
+                "ffmpeg",
+                "-ss", str(start),  # Seek BEFORE input (fast)
+                "-i", file_path,
+                "-to", str(end - start),
+                "-c:a", "libmp3lame",
+                "-q:a", "4",  # Variable quality (faster than constant bitrate)
+                "-y",
+                output_path
+            ]
+            result = subprocess.run(
+                cmd,
+                check=True,
+                capture_output=True,
+                text=True
+            )
+        
+        # Verify output file was created
+        if not os.path.exists(output_path):
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to create audio segment"
+            )
+        
+        # Read file content (keep cached file for future requests)
+        with open(output_path, "rb") as f:
+            content = f.read()
+        
+        log.debug(f"Created and cached audio segment: {output_filename} ({len(content)} bytes)")
+        
+        # Return audio content as streaming response with range request support
+        return Response(
+            content=content,
+            media_type="audio/mpeg",
+            headers={
+                "Accept-Ranges": "bytes",  # Enable HTTP range requests for streaming
+                "Cache-Control": "public, max-age=3600",  # Cache for 1 hour
+                "Content-Disposition": f'inline; filename="{output_filename}"',
+                "Content-Length": str(len(content)),
+                "X-Cache": "MISS"  # First time generation
+            }
+        )
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions (400, 403, 404) without modification
+        raise
+    except subprocess.CalledProcessError as e:
+        log.error(f"ffmpeg extraction failed: {e.stderr}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Audio extraction failed: {e.stderr[:200]}"
+        )
+    except Exception as e:
+        log.exception(f"Error extracting audio segment: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error processing audio segment: {str(e)}"
+        )
+
+
+@router.get("/video/files/{file_id}/segment")
+async def get_video_segment(
+    file_id: str,
+    background_tasks: BackgroundTasks,
+    user=Depends(get_verified_user),
+    start: float = Query(..., description="Start timestamp in seconds"),
+    end: float = Query(..., description="End timestamp in seconds"),
+):
+    """
+    Extract and stream a video segment from a video file.
+    
+    This endpoint extracts a specific time range from a video file and returns it
+    as a streamable MP4 video. Supports caching for improved performance.
+    
+    Args:
+        file_id: ID of the video file
+        start: Start timestamp in seconds
+        end: End timestamp in seconds
+        
+    Returns:
+        Streamable MP4 video file of the requested segment
+    """
+    try:
+        # Validate timestamps
+        if start < 0 or end <= start:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid timestamp range. End must be greater than start, and both must be non-negative."
+            )
+        
+        # Get file and verify access
+        file = Files.get_file_by_id(file_id)
+        if not file:
+            raise HTTPException(
+                status_code=404,
+                detail="File not found"
+            )
+        
+        # Check user has access to this file
+        if file.user_id != user.id and user.role != "admin":
+            raise HTTPException(
+                status_code=403,
+                detail="Access denied"
+            )
+        
+        # Get original file path
+        file_path = Storage.get_file(file.path)
+        if not os.path.exists(file_path):
+            raise HTTPException(
+                status_code=404,
+                detail="Original file not found on storage"
+            )
+        
+        # Create temporary output file with cache key
+        cache_key = f"{file_id}_{int(start)}_{int(end)}"
+        output_filename = f"video_segment_{cache_key}.mp4"
+        output_path = os.path.join(tempfile.gettempdir(), output_filename)
+        
+        # Check if cached version exists and is recent (within 1 hour)
+        if os.path.exists(output_path):
+            file_age = time.time() - os.path.getmtime(output_path)
+            if file_age < 3600:  # 1 hour cache
+                log.debug(f"Using cached video segment: {output_filename}")
+                
+                return FileResponse(
+                    path=output_path,
+                    media_type="video/mp4",
+                    filename=output_filename,
+                    headers={
+                        "Accept-Ranges": "bytes",
+                        "Cache-Control": "public, max-age=3600",
+                        "X-Cache": "HIT"
+                    }
+                )
+        
+        # Extract video segment using ffmpeg with optimized parameters
+        # -ss BEFORE -i: input seeking (much faster - seeks before decoding)
+        # -to: duration from start
+        # -c:v copy: copy video codec without re-encoding (fastest)
+        # -c:a copy: copy audio codec (no re-encoding, fastest)
+        # -movflags +frag_keyframe+empty_moov: optimize for streaming (no faststart needed)
+        # -threads 0: use all available CPU cores
+        # -y: overwrite output file if exists
+        cmd = [
+            "ffmpeg",
+            "-ss", str(start),  # Seek BEFORE input for speed
+            "-i", file_path,
+            "-to", str(end - start),  # Duration from start
+            "-c:v", "copy",  # Copy video stream (no re-encoding, fast)
+            "-c:a", "copy",  # Copy audio stream (no re-encoding, fastest)
+            "-movflags", "+frag_keyframe+empty_moov+default_base_moof",  # Fragment MP4 for streaming
+            "-threads", "0",  # Use all CPU cores
+            "-y",
+            output_path
+        ]
+        
+        # Try video extraction
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True
+        )
+        
+        # If codec copy failed, fallback to AAC audio (video copy)
+        if result.returncode != 0 or not os.path.exists(output_path):
+            log.debug(f"Video/audio codec copy failed, trying video copy with AAC audio: {result.stderr[:200]}")
+            cmd = [
+                "ffmpeg",
+                "-ss", str(start),
+                "-i", file_path,
+                "-to", str(end - start),
+                "-c:v", "copy",  # Keep video copy
+                "-c:a", "aac",  # Re-encode audio to AAC for compatibility
+                "-b:a", "192k",  # High quality audio
+                "-movflags", "+frag_keyframe+empty_moov+default_base_moof",
+                "-threads", "0",
+                "-y",
+                output_path
+            ]
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True
+            )
+            
+            # If that still failed, do full re-encode as last resort
+            if result.returncode != 0 or not os.path.exists(output_path):
+                log.debug(f"Video copy with AAC failed, falling back to full re-encode: {result.stderr[:200]}")
+                cmd = [
+                    "ffmpeg",
+                    "-ss", str(start),
+                    "-i", file_path,
+                    "-to", str(end - start),
+                    "-c:v", "libx264",  # Re-encode video with H.264
+                    "-preset", "veryfast",  # Fast encoding
+                    "-crf", "23",  # Good quality
+                    "-c:a", "aac",
+                    "-b:a", "192k",
+                    "-movflags", "+frag_keyframe+empty_moov+default_base_moof",
+                    "-threads", "0",
+                    "-y",
+                    output_path
+                ]
+                result = subprocess.run(
+                    cmd,
+                    check=True,
+                    capture_output=True,
+                    text=True
+                )
+        
+        # Verify output file was created
+        if not os.path.exists(output_path):
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to create video segment"
+            )
+        
+        # Get file size for headers
+        file_size = os.path.getsize(output_path)
+        log.debug(f"Created and cached video segment: {output_filename} ({file_size} bytes)")
+        
+        # Return video as streaming FileResponse (no memory loading)
+        return FileResponse(
+            path=output_path,
+            media_type="video/mp4",
+            filename=output_filename,
+            headers={
+                "Accept-Ranges": "bytes",
+                "Cache-Control": "public, max-age=3600",
+                "X-Cache": "MISS"
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except subprocess.CalledProcessError as e:
+        log.error(f"ffmpeg video extraction failed: {e.stderr}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Video extraction failed: {e.stderr[:200]}"
+        )
+    except Exception as e:
+        log.exception(f"Error extracting video segment: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error processing video segment: {str(e)}"
+        )
