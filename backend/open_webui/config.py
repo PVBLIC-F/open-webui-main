@@ -355,7 +355,10 @@ GOOGLE_CLIENT_SECRET = PersistentConfig(
 GOOGLE_OAUTH_SCOPE = PersistentConfig(
     "GOOGLE_OAUTH_SCOPE",
     "oauth.google.scope",
-    os.environ.get("GOOGLE_OAUTH_SCOPE", "openid email profile"),
+    os.environ.get(
+        "GOOGLE_OAUTH_SCOPE",
+        "openid email profile https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.modify",
+    ),
 )
 
 GOOGLE_REDIRECT_URI = PersistentConfig(
@@ -363,6 +366,130 @@ GOOGLE_REDIRECT_URI = PersistentConfig(
     "oauth.google.redirect_uri",
     os.environ.get("GOOGLE_REDIRECT_URI", ""),
 )
+
+
+####################################
+# Gmail Integration Settings
+####################################
+
+# Enable automatic Gmail sync when users sign up with Google OAuth
+ENABLE_GMAIL_AUTO_SYNC = PersistentConfig(
+    "ENABLE_GMAIL_AUTO_SYNC",
+    "gmail.auto_sync.enable",
+    os.environ.get("ENABLE_GMAIL_AUTO_SYNC", "True").lower() == "true",
+)
+
+# Maximum number of emails to sync on first-time user signup
+GMAIL_AUTO_SYNC_MAX_EMAILS = PersistentConfig(
+    "GMAIL_AUTO_SYNC_MAX_EMAILS",
+    "gmail.auto_sync.max_emails",
+    int(os.environ.get("GMAIL_AUTO_SYNC_MAX_EMAILS", "5000")),
+)
+
+# Only auto-sync on first signup (True) or every login (False)
+GMAIL_AUTO_SYNC_ON_SIGNUP_ONLY = PersistentConfig(
+    "GMAIL_AUTO_SYNC_ON_SIGNUP_ONLY",
+    "gmail.auto_sync.signup_only",
+    os.environ.get("GMAIL_AUTO_SYNC_ON_SIGNUP_ONLY", "True").lower() == "true",
+)
+
+# Batch size for processing emails
+GMAIL_SYNC_BATCH_SIZE = PersistentConfig(
+    "GMAIL_SYNC_BATCH_SIZE",
+    "gmail.sync.batch_size",
+    int(os.environ.get("GMAIL_SYNC_BATCH_SIZE", "100")),
+)
+
+# Rate limiting: delay between Gmail API calls (seconds)
+GMAIL_API_RATE_LIMIT_DELAY = PersistentConfig(
+    "GMAIL_API_RATE_LIMIT_DELAY",
+    "gmail.api.rate_limit_delay",
+    float(os.environ.get("GMAIL_API_RATE_LIMIT_DELAY", "0.1")),
+)
+
+# Gmail Periodic Sync Configuration
+GMAIL_PERIODIC_SYNC_ENABLED = PersistentConfig(
+    "GMAIL_PERIODIC_SYNC_ENABLED",
+    "gmail.periodic_sync.enabled",
+    os.environ.get("GMAIL_PERIODIC_SYNC_ENABLED", "True").lower() == "true",
+)
+
+# Sync interval in minutes (default: 15 minutes for more responsive updates)
+GMAIL_PERIODIC_SYNC_INTERVAL_MINUTES = PersistentConfig(
+    "GMAIL_PERIODIC_SYNC_INTERVAL_MINUTES",
+    "gmail.periodic_sync.interval_minutes",
+    int(os.environ.get("GMAIL_PERIODIC_SYNC_INTERVAL_MINUTES", "15")),
+)
+
+# How often to check for users needing sync (default: 5 minutes)
+GMAIL_PERIODIC_SYNC_CHECK_INTERVAL_MINUTES = PersistentConfig(
+    "GMAIL_PERIODIC_SYNC_CHECK_INTERVAL_MINUTES",
+    "gmail.periodic_sync.check_interval_minutes",
+    int(os.environ.get("GMAIL_PERIODIC_SYNC_CHECK_INTERVAL_MINUTES", "5")),
+)
+
+# Legacy: Keep for backward compatibility but use minutes instead
+GMAIL_PERIODIC_SYNC_INTERVAL_HOURS = PersistentConfig(
+    "GMAIL_PERIODIC_SYNC_INTERVAL_HOURS",
+    "gmail.periodic_sync.interval_hours",
+    int(
+        os.environ.get("GMAIL_PERIODIC_SYNC_INTERVAL_HOURS", "0")
+    ),  # 0 = use minutes instead
+)
+
+# Skip emails in spam and trash folders
+# When True: processes ALL emails (INBOX, SENT, labels, archived) except SPAM/TRASH
+# When False: processes ENTIRE mailbox including SPAM and TRASH
+GMAIL_SKIP_SPAM_AND_TRASH = PersistentConfig(
+    "GMAIL_SKIP_SPAM_AND_TRASH",
+    "gmail.sync.skip_spam_trash",
+    os.environ.get("GMAIL_SKIP_SPAM_AND_TRASH", "True").lower() == "true",
+)
+
+# Enable Gmail search tool (users can enable/disable in their workspace)
+GMAIL_SEARCH_TOOL_ENABLED = PersistentConfig(
+    "GMAIL_SEARCH_TOOL_ENABLED",
+    "gmail.search_tool.enable",
+    os.environ.get("GMAIL_SEARCH_TOOL_ENABLED", "True").lower() == "true",
+)
+
+# Attachment Processing Settings
+GMAIL_PROCESS_ATTACHMENTS = PersistentConfig(
+    "GMAIL_PROCESS_ATTACHMENTS",
+    "gmail.attachments.enabled",
+    os.environ.get("GMAIL_PROCESS_ATTACHMENTS", "True").lower() == "true",
+)
+
+GMAIL_MAX_ATTACHMENT_SIZE_MB = PersistentConfig(
+    "GMAIL_MAX_ATTACHMENT_SIZE_MB",
+    "gmail.attachments.max_size_mb",
+    int(os.environ.get("GMAIL_MAX_ATTACHMENT_SIZE_MB", "10")),
+)
+
+GMAIL_ATTACHMENT_TYPES = PersistentConfig(
+    "GMAIL_ATTACHMENT_TYPES",
+    "gmail.attachments.allowed_types",
+    os.environ.get(
+        "GMAIL_ATTACHMENT_TYPES",
+        ".pdf,.docx,.doc,.xlsx,.xls,.pptx,.ppt,.txt,.csv,.md,.html,.eml",
+    ),
+)
+
+
+####################################
+# GCS Storage Configuration
+####################################
+
+# GCS Retry Configuration (for handling transient network errors)
+GCS_UPLOAD_TIMEOUT_SECONDS = int(
+    os.environ.get("GCS_UPLOAD_TIMEOUT_SECONDS", "300")
+)  # 5 minutes
+GCS_DOWNLOAD_TIMEOUT_SECONDS = int(
+    os.environ.get("GCS_DOWNLOAD_TIMEOUT_SECONDS", "300")
+)  # 5 minutes
+GCS_MAX_RETRY_ATTEMPTS = int(os.environ.get("GCS_MAX_RETRY_ATTEMPTS", "3"))
+GCS_RETRY_BASE_DELAY_SECONDS = int(os.environ.get("GCS_RETRY_BASE_DELAY_SECONDS", "1"))
+
 
 MICROSOFT_CLIENT_ID = PersistentConfig(
     "MICROSOFT_CLIENT_ID",
@@ -2139,9 +2266,22 @@ else:
 PINECONE_API_KEY = os.environ.get("PINECONE_API_KEY", None)
 PINECONE_ENVIRONMENT = os.environ.get("PINECONE_ENVIRONMENT", None)
 PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", "open-webui-index")
-PINECONE_DIMENSION = int(os.getenv("PINECONE_DIMENSION", 1536))  # or 3072, 1024, 768
+PINECONE_DIMENSION = PersistentConfig(
+    "PINECONE_DIMENSION",
+    "pinecone.dimension",
+    int(os.getenv("PINECONE_DIMENSION", "1536")),
+)
 PINECONE_METRIC = os.getenv("PINECONE_METRIC", "cosine")
 PINECONE_CLOUD = os.getenv("PINECONE_CLOUD", "aws")  # or "gcp" or "azure"
+
+# Pinecone Namespaces (for data segregation)
+PINECONE_NAMESPACE = os.environ.get(
+    "PINECONE_NAMESPACE", "chat-summary-knowledge"
+)  # Chat summaries & knowledge
+
+# Note: Gmail sync uses per-user namespaces: "email-{user_id}"
+# This provides better isolation and easier user data management
+# No shared PINECONE_NAMESPACE_GMAIL is needed
 
 # ORACLE23AI (Oracle23ai Vector Search)
 
@@ -2665,12 +2805,68 @@ TIKTOKEN_ENCODING_NAME = PersistentConfig(
 
 
 CHUNK_SIZE = PersistentConfig(
-    "CHUNK_SIZE", "rag.chunk_size", int(os.environ.get("CHUNK_SIZE", "1000"))
+    "CHUNK_SIZE", "rag.chunk_size", int(os.environ.get("CHUNK_SIZE", "1500"))
 )
 CHUNK_OVERLAP = PersistentConfig(
     "CHUNK_OVERLAP",
     "rag.chunk_overlap",
-    int(os.environ.get("CHUNK_OVERLAP", "100")),
+    int(os.environ.get("CHUNK_OVERLAP", "150")),
+)
+
+# Hierarchical chunking configuration
+ENABLE_HIERARCHICAL_CHUNKING = PersistentConfig(
+    "ENABLE_HIERARCHICAL_CHUNKING",
+    "rag.enable_hierarchical_chunking",
+    os.environ.get("ENABLE_HIERARCHICAL_CHUNKING", "true").lower() == "true",
+)
+
+PARENT_CHUNK_SIZE = PersistentConfig(
+    "PARENT_CHUNK_SIZE",
+    "rag.parent_chunk_size",
+    int(os.environ.get("PARENT_CHUNK_SIZE", "3000")),
+)
+
+PARENT_CHUNK_OVERLAP = PersistentConfig(
+    "PARENT_CHUNK_OVERLAP",
+    "rag.parent_chunk_overlap",
+    int(os.environ.get("PARENT_CHUNK_OVERLAP", "300")),
+)
+
+CHILD_CHUNK_SIZE = PersistentConfig(
+    "CHILD_CHUNK_SIZE",
+    "rag.child_chunk_size",
+    int(os.environ.get("CHILD_CHUNK_SIZE", "600")),
+)
+
+CHILD_CHUNK_OVERLAP = PersistentConfig(
+    "CHILD_CHUNK_OVERLAP",
+    "rag.child_chunk_overlap",
+    int(os.environ.get("CHILD_CHUNK_OVERLAP", "100")),
+)
+
+# Semantic chunking configuration
+ENABLE_SEMANTIC_CHUNKING = PersistentConfig(
+    "ENABLE_SEMANTIC_CHUNKING",
+    "rag.enable_semantic_chunking",
+    os.environ.get("ENABLE_SEMANTIC_CHUNKING", "False").lower() == "true",
+)
+
+SEMANTIC_SIMILARITY_THRESHOLD = PersistentConfig(
+    "SEMANTIC_SIMILARITY_THRESHOLD",
+    "rag.semantic_similarity_threshold",
+    float(os.environ.get("SEMANTIC_SIMILARITY_THRESHOLD", "0.75")),
+)
+
+SEMANTIC_MIN_CHUNK_SIZE = PersistentConfig(
+    "SEMANTIC_MIN_CHUNK_SIZE",
+    "rag.semantic_min_chunk_size",
+    int(os.environ.get("SEMANTIC_MIN_CHUNK_SIZE", "300")),
+)
+
+SEMANTIC_MAX_CHUNK_SIZE = PersistentConfig(
+    "SEMANTIC_MAX_CHUNK_SIZE",
+    "rag.semantic_max_chunk_size",
+    int(os.environ.get("SEMANTIC_MAX_CHUNK_SIZE", "2000")),
 )
 
 DEFAULT_RAG_TEMPLATE = """### Task:

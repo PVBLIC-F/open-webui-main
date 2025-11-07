@@ -44,6 +44,9 @@ class User(Base):
     oauth_sub = Column(Text, unique=True)
 
     last_active_at = Column(BigInteger)
+    
+    # Gmail sync settings
+    gmail_sync_enabled = Column(BigInteger, default=0)  # 0 = disabled, 1 = enabled
 
     updated_at = Column(BigInteger)
     created_at = Column(BigInteger)
@@ -76,6 +79,10 @@ class UserModel(BaseModel):
     oauth_sub: Optional[str] = None
 
     last_active_at: int  # timestamp in epoch
+    
+    # Gmail sync settings
+    gmail_sync_enabled: int = 0  # 0 = disabled, 1 = enabled
+    
     updated_at: int  # timestamp in epoch
     created_at: int  # timestamp in epoch
 
@@ -148,6 +155,7 @@ class UserUpdateForm(BaseModel):
     email: str
     profile_image_url: str
     password: Optional[str] = None
+    gmail_sync_enabled: Optional[int] = None  # 0 = disabled, 1 = enabled
 
 
 class UsersTable:
@@ -172,6 +180,7 @@ class UsersTable:
                     "created_at": int(time.time()),
                     "updated_at": int(time.time()),
                     "oauth_sub": oauth_sub,
+                    "gmail_sync_enabled": 0,  # Default to disabled
                 }
             )
             result = User(**user.model_dump())
