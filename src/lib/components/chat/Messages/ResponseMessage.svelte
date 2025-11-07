@@ -426,13 +426,8 @@
 			}
 		};
 
-		const chat = await getChatById(localStorage.token, chatId).catch((error) => {
-			toast.error(`${error}`);
-		});
-		if (!chat) {
-			return;
-		}
-
+		// No need to fetch chat - we already have history as a prop
+		// This eliminates an unnecessary 300ms+ network request
 		const messages = createMessagesList(history, message.id);
 
 		let feedbackItem = {
