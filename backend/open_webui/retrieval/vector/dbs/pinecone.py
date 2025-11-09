@@ -305,31 +305,25 @@ class PineconeClient(VectorDBBase):
         )
 
     def has_collection(self, collection_name: str) -> bool:
-        """Check if a collection exists using index stats (no dummy vector needed)."""
+        """Check if a collection exists by querying for at least one item."""
         collection_name_with_prefix = self._get_collection_name_with_prefix(
             collection_name
         )
 
         try:
-            # Use describe_index_stats with filter - more efficient than dummy vector query
-            stats = self._retry_pinecone_operation(
-                lambda: self.index.describe_index_stats(
-                    filter={"collection_name": collection_name_with_prefix}
+            # Note: describe_index_stats with filter doesn't work on serverless indexes
+            # Using query with dummy vector instead (works for all index types)
+            response = self._retry_pinecone_operation(
+                lambda: self.index.query(
+                    vector=[0.0] * self.dimension,
+                    top_k=1,
+                    filter={"collection_name": collection_name_with_prefix},
+                    include_metadata=False,
+                    include_values=False,  # Don't need vector values
                 )
             )
-
-            # Check if any vectors exist with this collection_name
-            # Note: Stats are returned per namespace; check all namespaces
-            namespaces = getattr(stats, "namespaces", {})
-            if namespaces:
-                # Serverless indexes: check namespace vector counts
-                return any(
-                    ns_stats.vector_count > 0 for ns_stats in namespaces.values()
-                )
-            else:
-                # Pod-based indexes: check total_vector_count
-                total_vectors = getattr(stats, "total_vector_count", 0)
-                return total_vectors > 0
+            matches = getattr(response, "matches", []) or []
+            return len(matches) > 0
 
         except Exception as e:
             log.exception(
