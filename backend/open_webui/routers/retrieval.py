@@ -97,6 +97,7 @@ from open_webui.config import (
     DEFAULT_LOCALE,
     RAG_EMBEDDING_CONTENT_PREFIX,
     RAG_EMBEDDING_QUERY_PREFIX,
+    VECTOR_DB,
 )
 from open_webui.env import (
     SRC_LOG_LEVELS,
@@ -120,19 +121,62 @@ log.setLevel(SRC_LOG_LEVELS["RAG"])
 ##########################################
 
 
+def get_namespace_for_collection(collection_name: str) -> Optional[str]:
+    """
+    Get the appropriate namespace for a collection based on vector DB type.
+
+    Pinecone Best Practice: Use collection name as namespace for logical isolation.
+    This provides better performance by limiting query scope to specific collections
+    and prevents cross-collection interference.
+
+    For other vector databases (Chroma, Qdrant, etc.), namespaces aren't used;
+    instead, they rely on collection-based isolation.
+
+    Args:
+        collection_name: Name of the collection (e.g., "file-abc123", "knowledge-xyz")
+
+    Returns:
+        - For Pinecone: collection_name (enables per-collection namespace isolation)
+        - For other DBs: None (use default behavior)
+
+    Performance Impact:
+        - Pinecone queries only scan the specific namespace
+        - Reduces query latency for large deployments with many collections
+        - Better scalability as collections grow
+
+    Example:
+        namespace = get_namespace_for_collection("file-abc123")
+        VECTOR_DB_CLIENT.insert(
+            collection_name="file-abc123",
+            items=vectors,
+            namespace=namespace  # "file-abc123" for Pinecone, None for others
+        )
+    """
+    # Extract actual value if VECTOR_DB is a PersistentConfig object
+    vector_db_type = VECTOR_DB.value if hasattr(VECTOR_DB, "value") else VECTOR_DB
+
+    if vector_db_type == "pinecone":
+        # Use collection name as namespace for logical isolation
+        # This aligns with Gmail sync pattern (email-{user_id} namespaces)
+        return collection_name
+
+    # Other vector DBs (Chroma, Qdrant, Milvus, etc.) use collections directly
+    return None
+
+
 def extract_enhanced_metadata(text: str, use_llm: bool = False) -> dict:
     """
     Extract comprehensive metadata from text for improved RAG retrieval.
-    
+
     High-Impact Features:
     1. Chunk Summary & Title (helps users understand relevance)
     2. Enhanced Entity Extraction (people, orgs, locations)
     3. Question Generation (improves question-based retrieval)
-    
+
     Args:
         text: Text to analyze
         use_llm: If True, use LLM for extraction (more accurate but slower)
-        
+
     Returns:
         Dictionary with summary, title, topics, entities, keywords, questions
     """
@@ -145,65 +189,223 @@ def extract_enhanced_metadata(text: str, use_llm: bool = False) -> dict:
             "entities_organizations": [],
             "entities_locations": [],
             "keywords": [],
-            "potential_questions": []
+            "potential_questions": [],
         }
-    
+
     # Compile regex patterns once (performance optimization)
     # These are stateless and can be reused
     text_length = len(text)
-    
+
     # === FEATURE 1: CHUNK SUMMARY & TITLE ===
     chunk_summary, chunk_title = _generate_summary_and_title(text)
-    
+
     # === FEATURE 2: ENHANCED ENTITY EXTRACTION ===
     entities = _extract_enhanced_entities(text)
-    
+
     # === FEATURE 3: QUESTION GENERATION ===
     questions = _generate_potential_questions(text)
-    
+
     # Extract keywords (words longer than 5 chars, frequent)
     # Performance: Use Counter for better performance than manual dict
     from collections import Counter
-    words = re.findall(r'\b[a-z]{6,}\b', text.lower())
+
+    words = re.findall(r"\b[a-z]{6,}\b", text.lower())
     word_freq = Counter(words)
-    
+
     # Get top keywords by frequency (minimum 2 occurrences)
     keywords = [word for word, freq in word_freq.most_common(10) if freq > 1]
-    
+
     # Extract potential topics (capitalized phrases) with comprehensive stopword filtering
     # Comprehensive English stopwords that should never be topics
     STOPWORDS = {
         # Articles & Demonstratives
-        'A', 'An', 'The', 'This', 'That', 'These', 'Those',
+        "A",
+        "An",
+        "The",
+        "This",
+        "That",
+        "These",
+        "Those",
         # Pronouns
-        'I', 'You', 'He', 'She', 'It', 'We', 'They', 'Me', 'Him', 'Her', 'Us', 'Them',
-        'My', 'Your', 'His', 'Her', 'Its', 'Our', 'Their', 'Mine', 'Yours', 'Hers', 'Ours', 'Theirs',
-        'Myself', 'Yourself', 'Himself', 'Herself', 'Itself', 'Ourselves', 'Yourselves', 'Themselves',
+        "I",
+        "You",
+        "He",
+        "She",
+        "It",
+        "We",
+        "They",
+        "Me",
+        "Him",
+        "Her",
+        "Us",
+        "Them",
+        "My",
+        "Your",
+        "His",
+        "Her",
+        "Its",
+        "Our",
+        "Their",
+        "Mine",
+        "Yours",
+        "Hers",
+        "Ours",
+        "Theirs",
+        "Myself",
+        "Yourself",
+        "Himself",
+        "Herself",
+        "Itself",
+        "Ourselves",
+        "Yourselves",
+        "Themselves",
         # Conjunctions
-        'And', 'But', 'Or', 'Nor', 'For', 'Yet', 'So', 'Because', 'Since', 'Unless', 'Although', 'Though',
+        "And",
+        "But",
+        "Or",
+        "Nor",
+        "For",
+        "Yet",
+        "So",
+        "Because",
+        "Since",
+        "Unless",
+        "Although",
+        "Though",
         # Prepositions
-        'In', 'On', 'At', 'To', 'For', 'Of', 'From', 'By', 'With', 'About', 'Against', 'Between',
-        'Into', 'Through', 'During', 'Before', 'After', 'Above', 'Below', 'Up', 'Down', 'Out', 'Off',
-        'Over', 'Under', 'Again', 'Further', 'Then', 'Once', 'Here', 'There', 'Where', 'When',
+        "In",
+        "On",
+        "At",
+        "To",
+        "For",
+        "Of",
+        "From",
+        "By",
+        "With",
+        "About",
+        "Against",
+        "Between",
+        "Into",
+        "Through",
+        "During",
+        "Before",
+        "After",
+        "Above",
+        "Below",
+        "Up",
+        "Down",
+        "Out",
+        "Off",
+        "Over",
+        "Under",
+        "Again",
+        "Further",
+        "Then",
+        "Once",
+        "Here",
+        "There",
+        "Where",
+        "When",
         # Common Verbs
-        'Am', 'Is', 'Are', 'Was', 'Were', 'Be', 'Been', 'Being', 'Have', 'Has', 'Had', 'Having',
-        'Do', 'Does', 'Did', 'Doing', 'Will', 'Would', 'Should', 'Could', 'Might', 'May', 'Can', 'Must',
-        'Shall', 'Get', 'Gets', 'Got', 'Getting', 'Make', 'Makes', 'Made', 'Making', 'Go', 'Goes', 'Went',
+        "Am",
+        "Is",
+        "Are",
+        "Was",
+        "Were",
+        "Be",
+        "Been",
+        "Being",
+        "Have",
+        "Has",
+        "Had",
+        "Having",
+        "Do",
+        "Does",
+        "Did",
+        "Doing",
+        "Will",
+        "Would",
+        "Should",
+        "Could",
+        "Might",
+        "May",
+        "Can",
+        "Must",
+        "Shall",
+        "Get",
+        "Gets",
+        "Got",
+        "Getting",
+        "Make",
+        "Makes",
+        "Made",
+        "Making",
+        "Go",
+        "Goes",
+        "Went",
         # Interrogatives
-        'Who', 'What', 'Which', 'When', 'Where', 'Why', 'How', 'Whose', 'Whom',
-        # Quantifiers & Adjectives  
-        'All', 'Any', 'Both', 'Each', 'Few', 'More', 'Most', 'Other', 'Some', 'Such', 'No',
-        'Only', 'Own', 'Same', 'Than', 'Too', 'Very', 'Just', 'Now', 'Even', 'Also', 'Well',
-        'Many', 'Much', 'Every', 'Another', 'Still', 'Back', 'New', 'Old', 'Good', 'Bad', 'Great',
+        "Who",
+        "What",
+        "Which",
+        "When",
+        "Where",
+        "Why",
+        "How",
+        "Whose",
+        "Whom",
+        # Quantifiers & Adjectives
+        "All",
+        "Any",
+        "Both",
+        "Each",
+        "Few",
+        "More",
+        "Most",
+        "Other",
+        "Some",
+        "Such",
+        "No",
+        "Only",
+        "Own",
+        "Same",
+        "Than",
+        "Too",
+        "Very",
+        "Just",
+        "Now",
+        "Even",
+        "Also",
+        "Well",
+        "Many",
+        "Much",
+        "Every",
+        "Another",
+        "Still",
+        "Back",
+        "New",
+        "Old",
+        "Good",
+        "Bad",
+        "Great",
         # Negations & Modals
-        'Not', 'Never', 'Nothing', 'Nobody', 'None', 'Neither', 'Nowhere',
+        "Not",
+        "Never",
+        "Nothing",
+        "Nobody",
+        "None",
+        "Neither",
+        "Nowhere",
         # Common sentence starters
-        'If', 'Whether', 'As', 'Like', 'Unlike'
+        "If",
+        "Whether",
+        "As",
+        "Like",
+        "Unlike",
     }
-    
+
     # Extract all capitalized phrases
-    topics_raw = re.findall(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b', text)
-    
+    topics_raw = re.findall(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b", text)
+
     # Apply comprehensive filtering
     topics_filtered = []
     for topic in topics_raw:
@@ -218,10 +420,10 @@ def extract_enhanced_metadata(text: str, use_llm: bool = False) -> dict:
             continue
         # Add to filtered list
         topics_filtered.append(topic)
-    
+
     # Remove duplicates, sort for consistency, limit to top 5
     topics = sorted(set(topics_filtered))[:5]
-    
+
     return {
         "chunk_summary": chunk_summary,
         "chunk_title": chunk_title,
@@ -230,7 +432,7 @@ def extract_enhanced_metadata(text: str, use_llm: bool = False) -> dict:
         "entities_organizations": entities["organizations"][:5],
         "entities_locations": entities["locations"][:5],
         "keywords": keywords,
-        "potential_questions": questions
+        "potential_questions": questions,
     }
 
 
@@ -238,48 +440,58 @@ def _generate_summary_and_title(text: str) -> tuple:
     """
     Generate a concise summary and title for a text chunk.
     Uses extractive summarization (first + important sentences).
-    
+
     Returns:
         Tuple of (summary, title)
     """
-    sentences = re.split(r'[.!?]+', text)
+    sentences = re.split(r"[.!?]+", text)
     sentences = [s.strip() for s in sentences if len(s.strip()) > 20]
-    
+
     if not sentences:
         return "", ""
-    
+
     # Title: Extract from first sentence or use key phrases
     first_sentence = sentences[0]
     title_words = first_sentence.split()[:8]  # First 8 words
     title = " ".join(title_words)
     if len(first_sentence) > len(title):
         title += "..."
-    
+
     # Summary: Use first sentence + most informative sentence
     summary = sentences[0]
-    
+
     # Find sentence with most keywords/numbers (likely most informative)
     if len(sentences) > 1:
         scored_sentences = []
         for sent in sentences[1:4]:  # Check next 3 sentences
             # Score based on: numbers, question words, key phrases
             score = 0
-            score += len(re.findall(r'\d+', sent)) * 2  # Numbers are informative
-            score += len(re.findall(r'\b[A-Z][a-z]+\b', sent))  # Proper nouns
-            if any(word in sent.lower() for word in ['important', 'key', 'main', 'significant', 'shows', 'found']):
+            score += len(re.findall(r"\d+", sent)) * 2  # Numbers are informative
+            score += len(re.findall(r"\b[A-Z][a-z]+\b", sent))  # Proper nouns
+            if any(
+                word in sent.lower()
+                for word in [
+                    "important",
+                    "key",
+                    "main",
+                    "significant",
+                    "shows",
+                    "found",
+                ]
+            ):
                 score += 3
             scored_sentences.append((score, sent))
-        
+
         if scored_sentences:
             scored_sentences.sort(reverse=True, key=lambda x: x[0])
             best_sentence = scored_sentences[0][1]
             if best_sentence != summary:
                 summary = f"{summary}. {best_sentence}"
-    
+
     # Limit summary length
     if len(summary) > 250:
         summary = summary[:247] + "..."
-    
+
     return summary, title
 
 
@@ -287,59 +499,89 @@ def _extract_enhanced_entities(text: str) -> dict:
     """
     Enhanced entity extraction using multiple patterns and heuristics.
     Extracts: people, organizations, locations.
-    
+
     Returns:
         Dictionary with lists of entities by type
     """
     # ===== PEOPLE EXTRACTION =====
     people = set()
-    
+
     # Pattern 1: Full names (First Last, First Middle Last)
-    people.update(re.findall(r'\b[A-Z][a-z]+\s+(?:[A-Z][a-z]+\s+)?[A-Z][a-z]+\b', text))
-    
+    people.update(re.findall(r"\b[A-Z][a-z]+\s+(?:[A-Z][a-z]+\s+)?[A-Z][a-z]+\b", text))
+
     # Pattern 2: Names with titles (Dr., Mr., Ms., Prof., etc.)
-    people.update(re.findall(r'\b(?:Dr|Mr|Ms|Mrs|Prof|Professor|Rev)\.?\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\b', text))
-    
+    people.update(
+        re.findall(
+            r"\b(?:Dr|Mr|Ms|Mrs|Prof|Professor|Rev)\.?\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\b",
+            text,
+        )
+    )
+
     # ===== ORGANIZATION EXTRACTION =====
     organizations = set()
-    
+
     # Pattern 1: Organizations with explicit keywords (combined into single regex for performance)
-    org_suffix = r'(?:Inc|Corp|Corporation|Company|LLC|Ltd|Institute|Foundation|Organization|Association|University|College|Agency|Department|Bureau|Commission|Council|Center|Centre|Group|Team|Network|Alliance|Coalition|Initiative|Project|Program)'
-    organizations.update(re.findall(rf'\b(?:The\s+)?[A-Z][A-Za-z\s&]+{org_suffix}\b', text))
-    
+    org_suffix = r"(?:Inc|Corp|Corporation|Company|LLC|Ltd|Institute|Foundation|Organization|Association|University|College|Agency|Department|Bureau|Commission|Council|Center|Centre|Group|Team|Network|Alliance|Coalition|Initiative|Project|Program)"
+    organizations.update(
+        re.findall(rf"\b(?:The\s+)?[A-Z][A-Za-z\s&]+{org_suffix}\b", text)
+    )
+
     # Pattern 2: All-caps acronyms (3-6 letters, likely organizations)
-    common_words = {'US', 'UK', 'EU', 'UN', 'OK', 'PDF', 'CEO', 'CFO', 'CTO', 'AI', 'IT', 'HR', 'FAQ', 'DIY'}
-    acronyms = [a for a in re.findall(r'\b[A-Z]{3,6}\b', text) if a not in common_words]
+    common_words = {
+        "US",
+        "UK",
+        "EU",
+        "UN",
+        "OK",
+        "PDF",
+        "CEO",
+        "CFO",
+        "CTO",
+        "AI",
+        "IT",
+        "HR",
+        "FAQ",
+        "DIY",
+    }
+    acronyms = [a for a in re.findall(r"\b[A-Z]{3,6}\b", text) if a not in common_words]
     organizations.update(acronyms)
-    
+
     # Pattern 3: Media organizations
-    media_suffix = r'(?:Media|News|Press|Journal|Times|Post|Tribune|Herald|Gazette|Network|Channel|Radio|TV|Broadcasting)'
-    organizations.update(re.findall(rf'\b[A-Z][A-Za-z\s]+{media_suffix}\b', text))
-    
+    media_suffix = r"(?:Media|News|Press|Journal|Times|Post|Tribune|Herald|Gazette|Network|Channel|Radio|TV|Broadcasting)"
+    organizations.update(re.findall(rf"\b[A-Z][A-Za-z\s]+{media_suffix}\b", text))
+
     # ===== LOCATION EXTRACTION =====
     locations = set()
-    
+
     # Pattern 1: City, State/Country patterns
-    locations.update(re.findall(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*,\s+[A-Z]{2}\b', text))  # City, ST
-    locations.update(re.findall(r'\b[A-Z][a-z]+,\s+[A-Z][a-z]+\b', text))  # City, Country
-    
+    locations.update(
+        re.findall(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*,\s+[A-Z]{2}\b", text)
+    )  # City, ST
+    locations.update(
+        re.findall(r"\b[A-Z][a-z]+,\s+[A-Z][a-z]+\b", text)
+    )  # City, Country
+
     # Pattern 2: Preposition + location (in/at/from/to Location)
-    prep_locations = re.findall(r'\b(?:in|at|from|to)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b', text)
+    prep_locations = re.findall(
+        r"\b(?:in|at|from|to)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b", text
+    )
     locations.update([loc for loc in prep_locations if len(loc) > 2])
-    
+
     # Pattern 3: Geographic keywords
-    geo_suffix = r'(?:City|County|State|Province|Region|District|Area|Zone|Bay|Valley|Mountain|River|Lake|Ocean|Sea|Island|Peninsula)'
-    locations.update(re.findall(rf'\b[A-Z][a-z]+\s+{geo_suffix}\b', text))
-    
+    geo_suffix = r"(?:City|County|State|Province|Region|District|Area|Zone|Bay|Valley|Mountain|River|Lake|Ocean|Sea|Island|Peninsula)"
+    locations.update(re.findall(rf"\b[A-Z][a-z]+\s+{geo_suffix}\b", text))
+
     # ===== CLEANUP & FILTERING =====
     # Remove people names that appear in organizations (keep most specific)
     people_clean = [p for p in people if not any(p in org for org in organizations)]
-    
+
     # Filter by minimum length and convert to sorted lists for consistency
     return {
         "people": sorted([p.strip() for p in people_clean if len(p.strip()) > 2]),
-        "organizations": sorted([o.strip() for o in organizations if len(o.strip()) > 2]),
-        "locations": sorted([loc.strip() for loc in locations if len(loc.strip()) > 2])
+        "organizations": sorted(
+            [o.strip() for o in organizations if len(o.strip()) > 2]
+        ),
+        "locations": sorted([loc.strip() for loc in locations if len(loc.strip()) > 2]),
     }
 
 
@@ -347,39 +589,47 @@ def _generate_potential_questions(text: str) -> list:
     """
     Generate potential questions that this text chunk could answer.
     Uses pattern matching and heuristics for 6 question types.
-    
+
     Returns:
         List of up to 5 unique questions
     """
     questions = []
-    
+
     # Extract and filter sentences once for reuse
-    sentences = [s.strip() for s in re.split(r'[.!?]+', text) if len(s.strip()) > 10]
-    
+    sentences = [s.strip() for s in re.split(r"[.!?]+", text) if len(s.strip()) > 10]
+
     if not sentences:
         return []
-    
+
     # Pattern 1: Extract explicit questions from text (only if they're not rhetorical)
     # Filter out rhetorical questions like "guess what?", "you know what?", "right?"
     rhetorical_patterns = [
-        r'guess what\?', r'you know what\?', r'know what\?', r'right\?', 
-        r'okay\?', r'yeah\?', r'see\?', r'get it\?'
+        r"guess what\?",
+        r"you know what\?",
+        r"know what\?",
+        r"right\?",
+        r"okay\?",
+        r"yeah\?",
+        r"see\?",
+        r"get it\?",
     ]
-    explicit_questions = re.findall(r'[A-Z][^.!?]*\?', text)
+    explicit_questions = re.findall(r"[A-Z][^.!?]*\?", text)
     for q in explicit_questions[:3]:
         # Skip if it's a rhetorical question or too short
-        if len(q) > 15 and not any(re.search(pattern, q, re.IGNORECASE) for pattern in rhetorical_patterns):
+        if len(q) > 15 and not any(
+            re.search(pattern, q, re.IGNORECASE) for pattern in rhetorical_patterns
+        ):
             questions.append(q)
-    
+
     # Limit sentence processing to first 5 for performance
     sentences_subset = sentences[:5]
-    
+
     # Pattern 2: Generate questions from statements with numbers/statistics
     for sentence in sentences_subset:
-        numbers = re.findall(r'\d+(?:\.\d+)?%?', sentence)
+        numbers = re.findall(r"\d+(?:\.\d+)?%?", sentence)
         if not numbers:
             continue
-            
+
         for num in numbers[:2]:  # Limit to 2 numbers per sentence
             words = sentence.split()
             # Find word index containing the number
@@ -389,54 +639,73 @@ def _generate_potential_questions(text: str) -> list:
                 context_start = max(0, num_idx - 3)
                 context_end = min(len(words), num_idx + 4)
                 context = " ".join(words[context_start:context_end])
-                
-                question_type = "What percentage" if '%' in num else "What are the numbers related to"
+
+                question_type = (
+                    "What percentage"
+                    if "%" in num
+                    else "What are the numbers related to"
+                )
                 questions.append(f"{question_type} {context.lower()}?")
-    
+
     # Pattern 3: Generate "What is..." questions for definitions
     for sentence in sentences_subset:
         sentence_lower = sentence.lower()
-        if not any(word in sentence_lower for word in [' is ', ' are ', ' means ', ' refers to ']):
-                    continue
+        if not any(
+            word in sentence_lower
+            for word in [" is ", " are ", " means ", " refers to "]
+        ):
+            continue
 
         # Try to extract subject (the thing being defined)
-        match = re.search(r'^((?:a|an|the)?\s*[A-Z][^,]+?)\s+(?:is|are|means|refers to)\s+', sentence, re.IGNORECASE)
+        match = re.search(
+            r"^((?:a|an|the)?\s*[A-Z][^,]+?)\s+(?:is|are|means|refers to)\s+",
+            sentence,
+            re.IGNORECASE,
+        )
         if match:
             subject = match.group(1).strip()
             # Clean up articles and check length
-            subject = re.sub(r'^(a|an|the)\s+', '', subject, flags=re.IGNORECASE).strip()
+            subject = re.sub(
+                r"^(a|an|the)\s+", "", subject, flags=re.IGNORECASE
+            ).strip()
             # Check if subject is reasonable (proper noun or important term)
-            if 3 < len(subject) < 50 and (subject[0].isupper() or any(word in subject.lower() for word in ['approach', 'method', 'process', 'system', 'model'])):
+            if 3 < len(subject) < 50 and (
+                subject[0].isupper()
+                or any(
+                    word in subject.lower()
+                    for word in ["approach", "method", "process", "system", "model"]
+                )
+            ):
                 # Capitalize first letter for consistency
                 subject = subject[0].upper() + subject[1:]
                 questions.append(f"What is {subject}?")
-    
+
     # Pattern 4: Generate "Who..." questions for people mentions
-    people_names = re.findall(r'\b[A-Z][a-z]+\s+[A-Z][a-z]+\b', text)[:2]
+    people_names = re.findall(r"\b[A-Z][a-z]+\s+[A-Z][a-z]+\b", text)[:2]
     for name in people_names:
         # Find action verb following the name
-        match = re.search(rf'{re.escape(name)}\s+([a-z]+(?:\s+[a-z]+){{0,4}})', text)
+        match = re.search(rf"{re.escape(name)}\s+([a-z]+(?:\s+[a-z]+){{0,4}})", text)
         if match:
             questions.append(f"Who {match.group(1)}?")
-    
+
     # Pattern 5: Generate "How..." questions for process/method descriptions
-    how_keywords = ['how', 'process', 'method', 'way', 'approach', 'technique']
+    how_keywords = ["how", "process", "method", "way", "approach", "technique"]
     for sentence in sentences_subset:
         if any(word in sentence.lower() for word in how_keywords):
-            verbs = re.findall(r'\b(?:to\s+)?([a-z]+(?:ing|ed)?)\b', sentence.lower())
+            verbs = re.findall(r"\b(?:to\s+)?([a-z]+(?:ing|ed)?)\b", sentence.lower())
             if verbs:
                 questions.append(f"How to {verbs[0]}?")
                 break  # Only one "how" question needed
-    
+
     # Pattern 6: Generate "Why..." questions for causal/explanatory statements
-    causal_keywords = ['because', 'since', 'reason', 'cause', 'due to', 'result']
+    causal_keywords = ["because", "since", "reason", "cause", "due to", "result"]
     for sentence in sentences_subset:
         if any(word in sentence.lower() for word in causal_keywords):
             topic = " ".join(sentence.split()[:10])
             if len(topic) > 10:
                 questions.append(f"Why {topic.lower()}?")
                 break  # Only one "why" question needed
-    
+
     # Deduplicate while preserving order and limit to 5 questions
     seen = set()
     unique_questions = []
@@ -448,11 +717,13 @@ def _generate_potential_questions(text: str) -> list:
             unique_questions.append(q_clean)
             if len(unique_questions) >= 5:
                 break
-    
+
     return unique_questions
 
 
-def align_chunk_with_timestamps(chunk_text: str, segments: list, chunk_start_char: int, full_text: str) -> dict:
+def align_chunk_with_timestamps(
+    chunk_text: str, segments: list, chunk_start_char: int, full_text: str
+) -> dict:
     """
     Find the timestamps that align with a text chunk from the full transcript.
 
@@ -470,41 +741,47 @@ def align_chunk_with_timestamps(chunk_text: str, segments: list, chunk_start_cha
             "timestamp_start": None,
             "timestamp_end": None,
             "segment_ids": [],
-            "duration": None
+            "duration": None,
         }
-    
+
     # Find which segments overlap with this chunk based on text matching
     chunk_words = set(chunk_text.lower().split())
     chunk_length = len(chunk_text)
     chunk_end_char = chunk_start_char + chunk_length
-    
+
     matching_segments = []
     current_char_pos = 0
-    
+
     for segment in segments:
         segment_text = segment.get("text", "")
         segment_start_char = current_char_pos
         segment_end_char = current_char_pos + len(segment_text)
-        
+
         # Check if this segment overlaps with the chunk
-        if not (segment_end_char < chunk_start_char or segment_start_char > chunk_end_char):
+        if not (
+            segment_end_char < chunk_start_char or segment_start_char > chunk_end_char
+        ):
             matching_segments.append(segment)
-        
+
         current_char_pos = segment_end_char + 1  # +1 for space between segments
-    
+
     if matching_segments:
         return {
             "timestamp_start": round(matching_segments[0]["start"], 2),
             "timestamp_end": round(matching_segments[-1]["end"], 2),
-            "segment_ids": [seg.get("id", i) for i, seg in enumerate(matching_segments)],
-            "duration": round(matching_segments[-1]["end"] - matching_segments[0]["start"], 2)
+            "segment_ids": [
+                seg.get("id", i) for i, seg in enumerate(matching_segments)
+            ],
+            "duration": round(
+                matching_segments[-1]["end"] - matching_segments[0]["start"], 2
+            ),
         }
-    
+
     return {
         "timestamp_start": None,
         "timestamp_end": None,
         "segment_ids": [],
-        "duration": None
+        "duration": None,
     }
 
 
@@ -555,7 +832,9 @@ def get_rf(
         else:
             if engine == "pinecone":
                 try:
-                    from open_webui.retrieval.models.pinecone_reranker import PineconeReranker
+                    from open_webui.retrieval.models.pinecone_reranker import (
+                        PineconeReranker,
+                    )
 
                     rf = PineconeReranker(
                         api_key=None,  # Will use PINECONE_API_KEY from environment
@@ -1715,20 +1994,26 @@ def save_docs_to_vector_db(
         result = VECTOR_DB_CLIENT.query(
             collection_name=collection_name,
             filter={"hash": metadata["hash"]},
+            namespace=namespace,
         )
 
         if result is not None:
             existing_doc_ids = result.ids[0]
             if existing_doc_ids:
-                log.info(f"Document with hash {metadata['hash']} already exists in collection {collection_name}")
-                
+                log.info(
+                    f"Document with hash {metadata['hash']} already exists in collection {collection_name}"
+                )
+
                 # If overwrite is True, delete existing documents first
                 if overwrite:
-                    log.info(f"Overwriting existing documents with hash {metadata['hash']}")
+                    log.info(
+                        f"Overwriting existing documents with hash {metadata['hash']}"
+                    )
                     try:
                         VECTOR_DB_CLIENT.delete(
                             collection_name=collection_name,
-                            ids=existing_doc_ids
+                            ids=existing_doc_ids,
+                            namespace=namespace,
                         )
                         log.info(f"Deleted {len(existing_doc_ids)} existing documents")
                     except Exception as e:
@@ -1737,7 +2022,9 @@ def save_docs_to_vector_db(
                 else:
                     # Provide more informative error message
                     filename = metadata.get("name", "Unknown file")
-                    raise ValueError(f"File '{filename}' with identical content already exists in this knowledge base. To replace it, please delete the existing file first or use the overwrite option.")
+                    raise ValueError(
+                        f"File '{filename}' with identical content already exists in this knowledge base. To replace it, please delete the existing file first or use the overwrite option."
+                    )
 
     if split:
         if request.app.state.config.TEXT_SPLITTER in ["", "unstructured"]:
@@ -1815,70 +2102,115 @@ def save_docs_to_vector_db(
 
     # Filter out empty documents and validate content
     docs = [doc for doc in docs if doc.page_content and doc.page_content.strip()]
-    
+
     if len(docs) == 0:
-        log.warning(f"No valid content found in documents for collection {collection_name}")
+        log.warning(
+            f"No valid content found in documents for collection {collection_name}"
+        )
         raise ValueError(ERROR_MESSAGES.EMPTY_CONTENT)
 
     texts = [doc.page_content for doc in docs]
-    
+
     # Additional validation: ensure texts are not just whitespace
     texts = [text.strip() for text in texts if text.strip()]
-    
+
     if len(texts) == 0:
-        log.warning(f"No valid text content found after filtering for collection {collection_name}")
+        log.warning(
+            f"No valid text content found after filtering for collection {collection_name}"
+        )
         raise ValueError(ERROR_MESSAGES.EMPTY_CONTENT)
+
     # Optimize metadata for better performance and lower storage costs
     def optimize_metadata(doc_metadata, additional_metadata):
         """Optimize metadata by removing large/unnecessary fields and consolidating data"""
         optimized = {}
-        
+
         # Copy essential fields
         essential_fields = [
-            "file_id", "filename", "filetype", "hash", "created_by", "chunk_index", 
-            "total_chunks", "page_number", "processing_engine", "strategy", 
-            "chunking_strategy", "cleaning_level", "element_type", "source", "languages", "last_modified",
+            "file_id",
+            "filename",
+            "filetype",
+            "hash",
+            "created_by",
+            "chunk_index",
+            "total_chunks",
+            "page_number",
+            "processing_engine",
+            "strategy",
+            "chunking_strategy",
+            "cleaning_level",
+            "element_type",
+            "source",
+            "languages",
+            "last_modified",
             # High-Impact Enrichment Fields
-            "chunk_summary", "chunk_title", "potential_questions",
+            "chunk_summary",
+            "chunk_title",
+            "potential_questions",
             # Enhanced Entity Extraction
-            "topics", "entities_people", "entities_organizations", "entities_locations", "keywords",
+            "topics",
+            "entities_people",
+            "entities_organizations",
+            "entities_locations",
+            "keywords",
             # Audio/Video Timestamp Fields
-            "timestamp_start", "timestamp_end", "duration", "audio_segment_url", "video_segment_url",
-            "transcript_language", "transcript_duration"
+            "timestamp_start",
+            "timestamp_end",
+            "duration",
+            "audio_segment_url",
+            "video_segment_url",
+            "transcript_language",
+            "transcript_duration",
         ]
-        
+
         for field in essential_fields:
             if field in doc_metadata and doc_metadata[field] is not None:
                 optimized[field] = doc_metadata[field]
-        
+
         # Add additional metadata (filtering out None values)
         if additional_metadata:
             for key, value in additional_metadata.items():
                 if value is not None:
                     optimized[key] = value
-        
+
         # Add compact embedding config (single string instead of object)
-        optimized["embedding"] = f"{request.app.state.config.RAG_EMBEDDING_ENGINE}:{request.app.state.config.RAG_EMBEDDING_MODEL}"
-        
+        optimized["embedding"] = (
+            f"{request.app.state.config.RAG_EMBEDDING_ENGINE}:{request.app.state.config.RAG_EMBEDDING_MODEL}"
+        )
+
         # Validate metadata size (Pinecone has limits)
         metadata_size = len(str(optimized))
         if metadata_size > 40000:  # Pinecone limit is ~40KB
-            log.warning(f"Metadata size ({metadata_size} bytes) is close to Pinecone limit")
-        
+            log.warning(
+                f"Metadata size ({metadata_size} bytes) is close to Pinecone limit"
+            )
+
         return optimized
 
     metadatas = [
-        optimize_metadata(doc.metadata, metadata if metadata else {})
-        for doc in docs
+        optimize_metadata(doc.metadata, metadata if metadata else {}) for doc in docs
     ]
 
     try:
-        if VECTOR_DB_CLIENT.has_collection(collection_name=collection_name):
-            log.info(f"collection {collection_name} already exists")
+        # Get namespace for Pinecone isolation (None for other DBs)
+        namespace = get_namespace_for_collection(collection_name)
+
+        if VECTOR_DB_CLIENT.has_collection(
+            collection_name=collection_name, namespace=namespace
+        ):
+            log.info(
+                f"collection {collection_name} already exists"
+                + (f" in namespace '{namespace}'" if namespace else "")
+            )
 
             if overwrite:
-                VECTOR_DB_CLIENT.delete_collection(collection_name=collection_name)
-                log.info(f"deleting existing collection {collection_name}")
+                VECTOR_DB_CLIENT.delete_collection(
+                    collection_name=collection_name, namespace=namespace
+                )
+                log.info(
+                    f"deleting existing collection {collection_name}"
+                    + (f" from namespace '{namespace}'" if namespace else "")
+                )
             elif add is False:
                 log.info(
                     f"collection {collection_name} already exists, overwrite is False and add is False"
@@ -1921,30 +2253,30 @@ def save_docs_to_vector_db(
             prefix=RAG_EMBEDDING_CONTENT_PREFIX,
             user=user,
         )
-        
+
         if embeddings is None:
             log.error("Embedding generation failed")
             return False
-        
+
         # Filter out None embeddings and corresponding texts/metadatas
         valid_embeddings = []
         valid_texts = []
         valid_metadatas = []
-        
+
         for i, embedding in enumerate(embeddings):
             if embedding is not None:
                 valid_embeddings.append(embedding)
                 valid_texts.append(texts[i])
                 valid_metadatas.append(metadatas[i])
-        
+
         if len(valid_embeddings) == 0:
             log.error("No valid embeddings generated")
             return False
-        
+
         embeddings = valid_embeddings
         texts = valid_texts
         metadatas = valid_metadatas
-        
+
         log.info(f"embeddings generated {len(embeddings)} for {len(texts)} items")
 
         items = [
@@ -1962,16 +2294,20 @@ def save_docs_to_vector_db(
         if items and "file_id" in metadatas[0]:
             log.info(f"File ID in metadata: {metadatas[0].get('file_id')}")
             log.info(f"File name in metadata: {metadatas[0].get('name', 'Unknown')}")
-        
+
         # Process in batches for better performance (especially for large documents)
         batch_size = 100  # Optimal batch size for most vector databases
         total_added = 0
-        
+
+        # Get namespace for Pinecone isolation (None for other DBs)
+        namespace = get_namespace_for_collection(collection_name)
+
         for i in range(0, len(items), batch_size):
-            batch = items[i:i + batch_size]
+            batch = items[i : i + batch_size]
             VECTOR_DB_CLIENT.insert(
                 collection_name=collection_name,
                 items=batch,
+                namespace=namespace,
             )
             total_added += len(batch)
             log.debug(f"Added batch {i//batch_size + 1}: {len(batch)} items")
@@ -1995,8 +2331,10 @@ def process_file(
     form_data: ProcessFileForm,
     user=Depends(get_verified_user),
 ):
-    log.info(f"Processing file: file_id={form_data.file_id}, has_content={bool(form_data.content)}, collection_name={form_data.collection_name}")
-    
+    log.info(
+        f"Processing file: file_id={form_data.file_id}, has_content={bool(form_data.content)}, collection_name={form_data.collection_name}"
+    )
+
     if user.role == "admin":
         file = Files.get_file_by_id(form_data.file_id)
     else:
@@ -2009,19 +2347,23 @@ def process_file(
 
             if collection_name is None:
                 collection_name = f"file-{file.id}"
-            
+
             # CRITICAL: Ensure file.id is unique and correct
             if not file.id or len(file.id) < 10:
                 log.error(f"Invalid file ID: {file.id} for file {file.filename}")
                 raise ValueError(f"Invalid file ID: {file.id}")
-            
-            log.info(f"File {file.id} ({file.filename}) will be saved to collection: {collection_name}")
-            
+
+            log.info(
+                f"File {file.id} ({file.filename}) will be saved to collection: {collection_name}"
+            )
+
             # Double-check that we're not accidentally using the wrong collection
             if form_data.content and not form_data.collection_name:
                 expected_collection = f"file-{file.id}"
                 if collection_name != expected_collection:
-                    log.error(f"Collection name mismatch! Expected: {expected_collection}, Got: {collection_name}")
+                    log.error(
+                        f"Collection name mismatch! Expected: {expected_collection}, Got: {collection_name}"
+                    )
                     raise ValueError(f"Collection name mismatch for file {file.id}")
 
             # When adding to knowledge base, reuse existing file-{id} vectors (same as text files)
@@ -2034,22 +2376,33 @@ def process_file(
 
                 # Only delete existing collection if it exists (for updates)
                 # For new uploads, the collection won't exist yet
-                if VECTOR_DB_CLIENT.has_collection(collection_name=f"file-{file.id}"):
+                file_collection = f"file-{file.id}"
+                file_namespace = get_namespace_for_collection(file_collection)
+
+                if VECTOR_DB_CLIENT.has_collection(
+                    collection_name=file_collection, namespace=file_namespace
+                ):
                     try:
                         # This is an update operation - delete the old collection
                         log.info(f"Updating existing collection for file {file.id}")
                         VECTOR_DB_CLIENT.delete_collection(
-                            collection_name=f"file-{file.id}"
+                            collection_name=file_collection,
+                            namespace=file_namespace,
                         )
                     except Exception as e:
-                        log.warning(f"Failed to delete existing collection for file {file.id}: {e}")
+                        log.warning(
+                            f"Failed to delete existing collection for file {file.id}: {e}"
+                        )
                         # Continue processing even if deletion fails
 
                 # Create single document with full transcript
                 full_transcript = form_data.content.replace("<br/>", "\n")
                 # Filter out potentially contaminated file-specific URLs from metadata
-                filtered_meta = {k: v for k, v in file.meta.items() 
-                               if k not in ["video_segment_url", "audio_segment_url"]}
+                filtered_meta = {
+                    k: v
+                    for k, v in file.meta.items()
+                    if k not in ["video_segment_url", "audio_segment_url"]
+                }
                 docs = [
                     Document(
                         page_content=full_transcript,
@@ -2062,17 +2415,17 @@ def process_file(
                         },
                     )
                 ]
-                
+
                 # Get transcript segments from file metadata (if available)
                 transcript_segments = file.meta.get("transcript_segments", [])
                 transcript_duration = file.meta.get("transcript_duration")
                 transcript_language = file.meta.get("transcript_language")
-                
+
                 # Manually chunk audio/video transcripts since they bypass the Loader
-                # For unstructured TEXT_SPLITTER, force character splitting since 
+                # For unstructured TEXT_SPLITTER, force character splitting since
                 # Unstructured.io requires file paths (not raw text)
                 text_splitter_config = request.app.state.config.TEXT_SPLITTER
-                
+
                 if text_splitter_config in ["", "unstructured", "character"]:
                     # Use RecursiveCharacterTextSplitter for transcripts
                     text_splitter = RecursiveCharacterTextSplitter(
@@ -2084,15 +2437,21 @@ def process_file(
                     log.info(f"Split audio/video transcript into {len(docs)} chunks")
                 elif text_splitter_config == "token":
                     # Use token-based splitting
-                    tiktoken.get_encoding(str(request.app.state.config.TIKTOKEN_ENCODING_NAME))
+                    tiktoken.get_encoding(
+                        str(request.app.state.config.TIKTOKEN_ENCODING_NAME)
+                    )
                     text_splitter = TokenTextSplitter(
-                        encoding_name=str(request.app.state.config.TIKTOKEN_ENCODING_NAME),
+                        encoding_name=str(
+                            request.app.state.config.TIKTOKEN_ENCODING_NAME
+                        ),
                         chunk_size=request.app.state.config.CHUNK_SIZE,
                         chunk_overlap=request.app.state.config.CHUNK_OVERLAP,
                         add_start_index=True,
                     )
                     docs = text_splitter.split_documents(docs)
-                    log.info(f"Split audio/video transcript into {len(docs)} chunks using token splitter")
+                    log.info(
+                        f"Split audio/video transcript into {len(docs)} chunks using token splitter"
+                    )
                 elif text_splitter_config == "markdown_header":
                     # Use markdown header splitting
                     headers_to_split_on = [
@@ -2111,26 +2470,32 @@ def process_file(
                         add_start_index=True,
                     )
                     docs = text_splitter.split_documents(md_splits)
-                    log.info(f"Split audio/video transcript into {len(docs)} chunks using markdown splitter")
+                    log.info(
+                        f"Split audio/video transcript into {len(docs)} chunks using markdown splitter"
+                    )
                 else:
                     # Fallback to character splitting for unknown TEXT_SPLITTER values
-                    log.warning(f"Unknown TEXT_SPLITTER '{text_splitter_config}', using character splitter as fallback")
+                    log.warning(
+                        f"Unknown TEXT_SPLITTER '{text_splitter_config}', using character splitter as fallback"
+                    )
                     text_splitter = RecursiveCharacterTextSplitter(
                         chunk_size=request.app.state.config.CHUNK_SIZE,
                         chunk_overlap=request.app.state.config.CHUNK_OVERLAP,
                         add_start_index=True,
                     )
                     docs = text_splitter.split_documents(docs)
-                    log.info(f"Split audio/video transcript into {len(docs)} chunks using fallback character splitter")
-                
+                    log.info(
+                        f"Split audio/video transcript into {len(docs)} chunks using fallback character splitter"
+                    )
+
                 # Enrich each chunk with timestamps and topics/entities
                 enriched_docs = []
                 for idx, doc in enumerate(docs):
                     chunk_start_char = doc.metadata.get("start_index", 0)
-                    
+
                     # Extract enhanced metadata (summary, title, entities, questions)
                     enrichment = extract_enhanced_metadata(doc.page_content)
-                    
+
                     # Align chunk with timestamps from Whisper segments
                     timestamp_data = {}
                     if transcript_segments:
@@ -2138,9 +2503,9 @@ def process_file(
                             doc.page_content,
                             transcript_segments,
                             chunk_start_char,
-                            full_transcript
+                            full_transcript,
                         )
-                    
+
                     # Create enriched document with all metadata
                     # Build metadata dict, only including non-None values
                     enriched_metadata = {
@@ -2148,89 +2513,120 @@ def process_file(
                         # High-Impact Features
                         "chunk_summary": enrichment.get("chunk_summary", ""),
                         "chunk_title": enrichment.get("chunk_title", ""),
-                        "potential_questions": enrichment.get("potential_questions", []),
+                        "potential_questions": enrichment.get(
+                            "potential_questions", []
+                        ),
                         # Enhanced Entity Extraction
                         "topics": enrichment.get("topics", []),
                         "entities_people": enrichment.get("entities_people", []),
-                        "entities_organizations": enrichment.get("entities_organizations", []),
+                        "entities_organizations": enrichment.get(
+                            "entities_organizations", []
+                        ),
                         "entities_locations": enrichment.get("entities_locations", []),
                         "keywords": enrichment.get("keywords", []),
                         # Chunk position metadata
                         "chunk_index": idx,
                         "total_chunks": len(docs),
                     }
-                    
+
                     # Add timestamp metadata only if available
                     if timestamp_data.get("timestamp_start") is not None:
-                        enriched_metadata["timestamp_start"] = timestamp_data["timestamp_start"]
+                        enriched_metadata["timestamp_start"] = timestamp_data[
+                            "timestamp_start"
+                        ]
                     if timestamp_data.get("timestamp_end") is not None:
-                        enriched_metadata["timestamp_end"] = timestamp_data["timestamp_end"]
+                        enriched_metadata["timestamp_end"] = timestamp_data[
+                            "timestamp_end"
+                        ]
                     if timestamp_data.get("duration") is not None:
                         enriched_metadata["duration"] = timestamp_data["duration"]
-                    
+
                     # Add media URLs for playback
-                    if (timestamp_data.get("timestamp_start") is not None and 
-                        timestamp_data.get("timestamp_end") is not None):
+                    if (
+                        timestamp_data.get("timestamp_start") is not None
+                        and timestamp_data.get("timestamp_end") is not None
+                    ):
                         # Check if source is video or audio
-                        is_video = file.meta.get("content_type", "").startswith("video/")
-                        
+                        is_video = file.meta.get("content_type", "").startswith(
+                            "video/"
+                        )
+
                         if is_video:
                             # For video files, provide both full video URL and audio URL/segment
-                            enriched_metadata["video_url"] = f"/api/v1/files/{file.id}/video"
+                            enriched_metadata["video_url"] = (
+                                f"/api/v1/files/{file.id}/video"
+                            )
                             enriched_metadata["video_segment_url"] = (
                                 f"/api/v1/audio/video/files/{file.id}/segment"
                                 f"?start={timestamp_data['timestamp_start']}"
                                 f"&end={timestamp_data['timestamp_end']}"
                             )
-                        
+
                         # Always provide audio URL (works for both audio and video files)
                         enriched_metadata["audio_segment_url"] = (
                             f"/api/v1/audio/files/{file.id}/segment"
                             f"?start={timestamp_data['timestamp_start']}"
                             f"&end={timestamp_data['timestamp_end']}"
                         )
-                    
+
                     # Add transcript metadata only if available
                     if transcript_language is not None:
                         enriched_metadata["transcript_language"] = transcript_language
                     if transcript_duration is not None:
                         enriched_metadata["transcript_duration"] = transcript_duration
-                    
+
                     enriched_doc = Document(
-                        page_content=doc.page_content,
-                        metadata=enriched_metadata
+                        page_content=doc.page_content, metadata=enriched_metadata
                     )
                     enriched_docs.append(enriched_doc)
-                
+
                 docs = enriched_docs
-                log.info(f"Enriched {len(docs)} chunks with timestamps and topics/entities")
+                log.info(
+                    f"Enriched {len(docs)} chunks with timestamps and topics/entities"
+                )
 
                 text_content = form_data.content
             elif form_data.collection_name:
                 # Check if the file has already been processed and reuse vectors
                 # Usage: /knowledge/{id}/file/add, /knowledge/{id}/file/update
-                log.info(f"Checking if file {file.id} already processed in collection file-{file.id}")
-                
+                log.info(
+                    f"Checking if file {file.id} already processed in collection file-{file.id}"
+                )
+
                 # Query with retry to handle Pinecone's eventual consistency
                 # After upsert, vectors may not be immediately queryable (1-15s delay)
                 max_retries = 6
                 retry_delay = 3  # seconds
                 result = None
-                
+
+                # Get namespace for file collection
+                file_collection = f"file-{file.id}"
+                file_namespace = get_namespace_for_collection(file_collection)
+
                 for attempt in range(max_retries):
                     try:
                         result = VECTOR_DB_CLIENT.query(
-                            collection_name=f"file-{file.id}", 
-                            filter={"file_id": file.id}
+                            collection_name=file_collection,
+                            filter={"file_id": file.id},
+                            namespace=file_namespace,
                         )
-                        
+
                         # Check if result has vectors (safely check nested structure)
-                        if result is not None and result.ids and len(result.ids) > 0 and len(result.ids[0]) > 0:
-                            log.info(f"Found {len(result.ids[0])} existing vectors for file {file.id} on attempt {attempt + 1}")
+                        if (
+                            result is not None
+                            and result.ids
+                            and len(result.ids) > 0
+                            and len(result.ids[0]) > 0
+                        ):
+                            log.info(
+                                f"Found {len(result.ids[0])} existing vectors for file {file.id} on attempt {attempt + 1}"
+                            )
                             break
-                        
+
                         if attempt < max_retries - 1:
-                            log.warning(f"No vectors found yet for file {file.id}, retrying in {retry_delay}s (attempt {attempt + 1}/{max_retries})")
+                            log.warning(
+                                f"No vectors found yet for file {file.id}, retrying in {retry_delay}s (attempt {attempt + 1}/{max_retries})"
+                            )
                             time.sleep(retry_delay)
                     except Exception as e:
                         log.error(f"Error querying collection file-{file.id}: {e}")
@@ -2238,38 +2634,55 @@ def process_file(
                             time.sleep(retry_delay)
 
                 # Check if we successfully found vectors
-                if result is not None and result.ids and len(result.ids) > 0 and len(result.ids[0]) > 0:
-                    log.info(f"Reusing {len(result.ids[0])} existing vectors for file {file.id}")
+                if (
+                    result is not None
+                    and result.ids
+                    and len(result.ids) > 0
+                    and len(result.ids[0]) > 0
+                ):
+                    log.info(
+                        f"Reusing {len(result.ids[0])} existing vectors for file {file.id}"
+                    )
                     docs = []
                     for idx, id in enumerate(result.ids[0]):
                         existing_metadata = result.metadatas[0][idx]
-                        
+
                         # Filter out file-specific URLs that might be from other files
                         # and regenerate them with the correct file ID
-                        filtered_metadata = {k: v for k, v in existing_metadata.items() 
-                                           if k not in ["video_segment_url", "audio_segment_url"]}
-                        
+                        filtered_metadata = {
+                            k: v
+                            for k, v in existing_metadata.items()
+                            if k not in ["video_segment_url", "audio_segment_url"]
+                        }
+
                         # Regenerate URLs if timestamps are available
-                        if "timestamp_start" in filtered_metadata and "timestamp_end" in filtered_metadata:
+                        if (
+                            "timestamp_start" in filtered_metadata
+                            and "timestamp_end" in filtered_metadata
+                        ):
                             # Check if source is video or audio
-                            is_video = file.meta.get("content_type", "").startswith("video/")
-                            
+                            is_video = file.meta.get("content_type", "").startswith(
+                                "video/"
+                            )
+
                             if is_video:
                                 # For video files, provide both full video URL and audio URL/segment
-                                filtered_metadata["video_url"] = f"/api/v1/files/{file.id}/video"
+                                filtered_metadata["video_url"] = (
+                                    f"/api/v1/files/{file.id}/video"
+                                )
                                 filtered_metadata["video_segment_url"] = (
                                     f"/api/v1/audio/video/files/{file.id}/segment"
                                     f"?start={filtered_metadata['timestamp_start']}"
                                     f"&end={filtered_metadata['timestamp_end']}"
                                 )
-                            
+
                             # Always provide audio URL (works for both audio and video files)
                             filtered_metadata["audio_segment_url"] = (
                                 f"/api/v1/audio/files/{file.id}/segment"
                                 f"?start={filtered_metadata['timestamp_start']}"
                                 f"&end={filtered_metadata['timestamp_end']}"
                             )
-                        
+
                         doc = Document(
                             page_content=result.documents[0][idx],
                             metadata={
@@ -2284,10 +2697,15 @@ def process_file(
                         )
                         docs.append(doc)
                 else:
-                    log.warning(f"No existing vectors found for file {file.id} after {max_retries} retries, falling back to content field")
+                    log.warning(
+                        f"No existing vectors found for file {file.id} after {max_retries} retries, falling back to content field"
+                    )
                     # Filter out potentially contaminated file-specific URLs from metadata
-                    filtered_meta = {k: v for k, v in file.meta.items() 
-                                   if k not in ["video_segment_url", "audio_segment_url"]}
+                    filtered_meta = {
+                        k: v
+                        for k, v in file.meta.items()
+                        if k not in ["video_segment_url", "audio_segment_url"]
+                    }
                     # If this is a video, include the full video URL for client-side seeking
                     if file.meta.get("content_type", "").startswith("video/"):
                         filtered_meta["video_url"] = f"/api/v1/files/{file.id}/video"
@@ -2321,14 +2739,42 @@ def process_file(
                         user=user,
                         CHUNK_SIZE=request.app.state.config.CHUNK_SIZE,
                         CHUNK_OVERLAP=request.app.state.config.CHUNK_OVERLAP,
-                        UNSTRUCTURED_STRATEGY=getattr(request.app.state.config, "UNSTRUCTURED_STRATEGY", "hi_res"),
-                        UNSTRUCTURED_CHUNKING_STRATEGY=getattr(request.app.state.config, "UNSTRUCTURED_CHUNKING_STRATEGY", "by_title"),
-                        UNSTRUCTURED_CLEANING_LEVEL=getattr(request.app.state.config, "UNSTRUCTURED_CLEANING_LEVEL", "standard"),
-                        UNSTRUCTURED_INCLUDE_METADATA=getattr(request.app.state.config, "UNSTRUCTURED_INCLUDE_METADATA", True),
-                        UNSTRUCTURED_CLEAN_TEXT=getattr(request.app.state.config, "UNSTRUCTURED_CLEAN_TEXT", True),
-                        UNSTRUCTURED_SEMANTIC_CHUNKING=getattr(request.app.state.config, "UNSTRUCTURED_SEMANTIC_CHUNKING", True),
-                        UNSTRUCTURED_INFER_TABLE_STRUCTURE=getattr(request.app.state.config, "UNSTRUCTURED_INFER_TABLE_STRUCTURE", False),
-                        UNSTRUCTURED_EXTRACT_IMAGES_IN_PDF=getattr(request.app.state.config, "UNSTRUCTURED_EXTRACT_IMAGES_IN_PDF", False),
+                        UNSTRUCTURED_STRATEGY=getattr(
+                            request.app.state.config, "UNSTRUCTURED_STRATEGY", "hi_res"
+                        ),
+                        UNSTRUCTURED_CHUNKING_STRATEGY=getattr(
+                            request.app.state.config,
+                            "UNSTRUCTURED_CHUNKING_STRATEGY",
+                            "by_title",
+                        ),
+                        UNSTRUCTURED_CLEANING_LEVEL=getattr(
+                            request.app.state.config,
+                            "UNSTRUCTURED_CLEANING_LEVEL",
+                            "standard",
+                        ),
+                        UNSTRUCTURED_INCLUDE_METADATA=getattr(
+                            request.app.state.config,
+                            "UNSTRUCTURED_INCLUDE_METADATA",
+                            True,
+                        ),
+                        UNSTRUCTURED_CLEAN_TEXT=getattr(
+                            request.app.state.config, "UNSTRUCTURED_CLEAN_TEXT", True
+                        ),
+                        UNSTRUCTURED_SEMANTIC_CHUNKING=getattr(
+                            request.app.state.config,
+                            "UNSTRUCTURED_SEMANTIC_CHUNKING",
+                            True,
+                        ),
+                        UNSTRUCTURED_INFER_TABLE_STRUCTURE=getattr(
+                            request.app.state.config,
+                            "UNSTRUCTURED_INFER_TABLE_STRUCTURE",
+                            False,
+                        ),
+                        UNSTRUCTURED_EXTRACT_IMAGES_IN_PDF=getattr(
+                            request.app.state.config,
+                            "UNSTRUCTURED_EXTRACT_IMAGES_IN_PDF",
+                            False,
+                        ),
                         DATALAB_MARKER_API_KEY=request.app.state.config.DATALAB_MARKER_API_KEY,
                         DATALAB_MARKER_API_BASE_URL=request.app.state.config.DATALAB_MARKER_API_BASE_URL,
                         DATALAB_MARKER_ADDITIONAL_CONFIG=request.app.state.config.DATALAB_MARKER_ADDITIONAL_CONFIG,
@@ -2420,8 +2866,10 @@ def process_file(
                 try:
                     # Note: split=False because audio/video transcripts are already chunked above
                     # Text files will have split=True (default) since they're chunked by Loader
-                    should_split = not form_data.content  # Don't split if content provided (already chunked)
-                    
+                    should_split = (
+                        not form_data.content
+                    )  # Don't split if content provided (already chunked)
+
                     # CRITICAL: Ensure each file's metadata includes its unique file_id
                     # This is essential for Pinecone which uses metadata filtering for collections
                     file_metadata = {
@@ -2429,13 +2877,18 @@ def process_file(
                         "name": file.filename,
                         "hash": hash,
                     }
-                    
+
                     # Double-check file_id is in all document metadata
                     for doc in docs:
-                        if "file_id" not in doc.metadata or doc.metadata["file_id"] != file.id:
-                            log.warning(f"Correcting file_id in document metadata. Was: {doc.metadata.get('file_id')}, Should be: {file.id}")
+                        if (
+                            "file_id" not in doc.metadata
+                            or doc.metadata["file_id"] != file.id
+                        ):
+                            log.warning(
+                                f"Correcting file_id in document metadata. Was: {doc.metadata.get('file_id')}, Should be: {file.id}"
+                            )
                             doc.metadata["file_id"] = file.id
-                    
+
                     result = save_docs_to_vector_db(
                         request,
                         docs=docs,
@@ -3003,8 +3456,10 @@ def query_doc_handler(
             form_data.hybrid is None or form_data.hybrid
         ):
             collection_results = {}
+            namespace = get_namespace_for_collection(form_data.collection_name)
             collection_results[form_data.collection_name] = VECTOR_DB_CLIENT.get(
-                collection_name=form_data.collection_name
+                collection_name=form_data.collection_name,
+                namespace=namespace,
             )
             return query_doc_with_hybrid_search(
                 collection_name=form_data.collection_name,
@@ -3136,13 +3591,18 @@ class DeleteForm(BaseModel):
 @router.post("/delete")
 def delete_entries_from_collection(form_data: DeleteForm, user=Depends(get_admin_user)):
     try:
-        if VECTOR_DB_CLIENT.has_collection(collection_name=form_data.collection_name):
+        namespace = get_namespace_for_collection(form_data.collection_name)
+
+        if VECTOR_DB_CLIENT.has_collection(
+            collection_name=form_data.collection_name, namespace=namespace
+        ):
             file = Files.get_file_by_id(form_data.file_id)
             hash = file.hash
 
             VECTOR_DB_CLIENT.delete(
                 collection_name=form_data.collection_name,
                 metadata={"hash": hash},
+                namespace=namespace,
             )
             return {"status": True}
         else:
