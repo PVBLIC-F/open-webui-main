@@ -21,12 +21,45 @@ from open_webui.retrieval.vector.factory import VECTOR_DB_CLIENT
 def get_namespace_for_collection(collection_name: str) -> Optional[str]:
     """
     Get the appropriate namespace for a collection based on vector DB type.
-    For Pinecone: Use collection name as namespace for logical isolation.
-    For other DBs: Return None (use default behavior).
+
+    For Pinecone: Creates human-readable namespace with collection name prefix.
+    Format: "{sanitized-name}-{collection-id}" for easier identification.
+
+    For other DBs: Returns None (use default behavior).
     """
     vector_db_type = VECTOR_DB.value if hasattr(VECTOR_DB, "value") else VECTOR_DB
+
     if vector_db_type == "pinecone":
-        return collection_name
+        # Try to get a human-readable name for the collection
+        prefix = None
+
+        # Check if this is a knowledge base (UUID format without prefix)
+        if not collection_name.startswith(("file-", "user-memory-", "email-")):
+            try:
+                # Import here to avoid circular dependency
+                knowledge = Knowledges.get_knowledge_by_id(collection_name)
+                if knowledge and knowledge.name:
+                    # Sanitize knowledge name for namespace
+                    # Convert to lowercase, replace spaces/special chars with dashes
+                    import re
+
+                    sanitized = re.sub(r"[^a-z0-9]+", "-", knowledge.name.lower())
+                    # Remove leading/trailing dashes
+                    sanitized = sanitized.strip("-")
+                    # Limit length to avoid overly long namespaces
+                    if sanitized:
+                        prefix = sanitized[:50]  # Max 50 chars for prefix
+            except Exception as e:
+                # If lookup fails, just use collection ID
+                pass
+
+        # Build namespace: "{prefix}-{collection_id}" or just "{collection_id}"
+        if prefix:
+            return f"{prefix}-{collection_name}"
+        else:
+            # For files, memories, or if name lookup failed, use collection name as-is
+            return collection_name
+
     return None
 
 
