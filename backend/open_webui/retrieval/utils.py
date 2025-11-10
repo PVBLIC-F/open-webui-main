@@ -98,6 +98,7 @@ class VectorSearchRetriever(BaseRetriever):
     collection_name: Any
     embedding_function: Any
     top_k: int
+    namespace: Any = None  # Optional namespace for Pinecone isolation
 
     def _get_relevant_documents(
         self,
@@ -109,6 +110,7 @@ class VectorSearchRetriever(BaseRetriever):
             collection_name=self.collection_name,
             vectors=[self.embedding_function(query, RAG_EMBEDDING_QUERY_PREFIX)],
             limit=self.top_k,
+            namespace=self.namespace,
         )
 
         ids = result.ids[0]
@@ -130,11 +132,16 @@ def query_doc(
     collection_name: str, query_embedding: list[float], k: int, user: UserModel = None
 ):
     try:
-        log.debug(f"query_doc:doc {collection_name}")
+        namespace = get_namespace_for_collection(collection_name)
+        log.debug(
+            f"query_doc:doc {collection_name}"
+            + (f" in namespace '{namespace}'" if namespace else "")
+        )
         result = VECTOR_DB_CLIENT.search(
             collection_name=collection_name,
             vectors=[query_embedding],
             limit=k,
+            namespace=namespace,
         )
 
         if result:
@@ -148,8 +155,14 @@ def query_doc(
 
 def get_doc(collection_name: str, user: UserModel = None):
     try:
-        log.debug(f"get_doc:doc {collection_name}")
-        result = VECTOR_DB_CLIENT.get(collection_name=collection_name)
+        namespace = get_namespace_for_collection(collection_name)
+        log.debug(
+            f"get_doc:doc {collection_name}"
+            + (f" in namespace '{namespace}'" if namespace else "")
+        )
+        result = VECTOR_DB_CLIENT.get(
+            collection_name=collection_name, namespace=namespace
+        )
 
         if result:
             log.info(f"query_doc:result {result.ids} {result.metadatas}")
@@ -184,6 +197,9 @@ def query_doc_with_hybrid_search(
 
         log.debug(f"query_doc_with_hybrid_search:doc {collection_name}")
 
+        # Get namespace for vector search retriever
+        namespace = get_namespace_for_collection(collection_name)
+
         bm25_retriever = BM25Retriever.from_texts(
             texts=collection_result.documents[0],
             metadatas=collection_result.metadatas[0],
@@ -194,6 +210,7 @@ def query_doc_with_hybrid_search(
             collection_name=collection_name,
             embedding_function=embedding_function,
             top_k=k,
+            namespace=namespace,
         )
 
         if hybrid_bm25_weight <= 0:
