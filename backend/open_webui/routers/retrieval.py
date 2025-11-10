@@ -125,7 +125,9 @@ def get_namespace_for_collection(collection_name: str) -> Optional[str]:
     """
     Get the appropriate namespace for a collection based on vector DB type.
 
-    Pinecone Best Practice: Use collection name as namespace for logical isolation.
+    Pinecone Best Practice: Use human-readable namespace with collection name prefix.
+    Format: "{sanitized-name}-{collection-id}" for easier identification.
+
     This provides better performance by limiting query scope to specific collections
     and prevents cross-collection interference.
 
@@ -133,32 +135,64 @@ def get_namespace_for_collection(collection_name: str) -> Optional[str]:
     instead, they rely on collection-based isolation.
 
     Args:
-        collection_name: Name of the collection (e.g., "file-abc123", "knowledge-xyz")
+        collection_name: Name of the collection (e.g., "file-abc123", "494b175b-3672...")
 
     Returns:
-        - For Pinecone: collection_name (enables per-collection namespace isolation)
+        - For Pinecone: "{name}-{id}" (e.g., "fosd-494b175b-3672..." for knowledge bases)
         - For other DBs: None (use default behavior)
 
     Performance Impact:
         - Pinecone queries only scan the specific namespace
         - Reduces query latency for large deployments with many collections
         - Better scalability as collections grow
+        - Human-readable namespaces easier to debug
 
     Example:
-        namespace = get_namespace_for_collection("file-abc123")
+        namespace = get_namespace_for_collection("494b175b-3672-45a2-bb2a-ea21f3328818")
+        # Returns: "my-knowledge-494b175b-3672-45a2-bb2a-ea21f3328818"
+
         VECTOR_DB_CLIENT.insert(
-            collection_name="file-abc123",
+            collection_name="494b175b-3672-45a2-bb2a-ea21f3328818",
             items=vectors,
-            namespace=namespace  # "file-abc123" for Pinecone, None for others
+            namespace="my-knowledge-494b175b-3672-45a2-bb2a-ea21f3328818"
         )
     """
     # Extract actual value if VECTOR_DB is a PersistentConfig object
     vector_db_type = VECTOR_DB.value if hasattr(VECTOR_DB, "value") else VECTOR_DB
 
     if vector_db_type == "pinecone":
-        # Use collection name as namespace for logical isolation
-        # This aligns with Gmail sync pattern (email-{user_id} namespaces)
-        return collection_name
+        # Try to get a human-readable name for the collection
+        prefix = None
+
+        # Check if this is a knowledge base (UUID format without prefix)
+        if not collection_name.startswith(("file-", "user-memory-", "email-")):
+            try:
+                # Import here to avoid circular dependency
+                from open_webui.models.knowledge import Knowledges
+
+                knowledge = Knowledges.get_knowledge_by_id(collection_name)
+                if knowledge and knowledge.name:
+                    # Sanitize knowledge name for namespace
+                    # Convert to lowercase, replace spaces/special chars with dashes
+                    import re
+
+                    sanitized = re.sub(r"[^a-z0-9]+", "-", knowledge.name.lower())
+                    # Remove leading/trailing dashes
+                    sanitized = sanitized.strip("-")
+                    # Limit length to avoid overly long namespaces
+                    if sanitized:
+                        prefix = sanitized[:50]  # Max 50 chars for prefix
+            except Exception as e:
+                # If lookup fails, just use collection ID
+                pass
+
+        # Build namespace: "{prefix}-{collection_id}" or just "{collection_id}"
+        if prefix:
+            return f"{prefix}-{collection_name}"
+        else:
+            # For files, memories, or if name lookup failed, use collection name as-is
+            # This maintains compatibility with email-{user_id} pattern
+            return collection_name
 
     # Other vector DBs (Chroma, Qdrant, Milvus, etc.) use collections directly
     return None
