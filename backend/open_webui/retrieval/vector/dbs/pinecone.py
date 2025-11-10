@@ -304,8 +304,8 @@ class PineconeClient(VectorDBBase):
             }
         )
 
-    def has_collection(self, collection_name: str) -> bool:
-        """Check if a collection exists by querying for at least one item."""
+    def has_collection(self, collection_name: str, namespace: str = None) -> bool:
+        """Check if a collection exists by querying for at least one item with optional namespace."""
         collection_name_with_prefix = self._get_collection_name_with_prefix(
             collection_name
         )
@@ -313,41 +313,51 @@ class PineconeClient(VectorDBBase):
         try:
             # Note: describe_index_stats with filter doesn't work on serverless indexes
             # Using query with dummy vector instead (works for all index types)
+            query_kwargs = {
+                "vector": [0.0] * self.dimension,
+                "top_k": 1,
+                "filter": {"collection_name": collection_name_with_prefix},
+                "include_metadata": False,
+                "include_values": False,  # Don't need vector values
+            }
+            if namespace:
+                query_kwargs["namespace"] = namespace
+
             response = self._retry_pinecone_operation(
-                lambda: self.index.query(
-                    vector=[0.0] * self.dimension,
-                    top_k=1,
-                    filter={"collection_name": collection_name_with_prefix},
-                    include_metadata=False,
-                    include_values=False,  # Don't need vector values
-                )
+                lambda: self.index.query(**query_kwargs)
             )
             matches = getattr(response, "matches", []) or []
             return len(matches) > 0
 
         except Exception as e:
             log.exception(
-                f"Error checking collection '{collection_name_with_prefix}': {e}"
+                f"Error checking collection '{collection_name_with_prefix}'"
+                + (f" in namespace '{namespace}'" if namespace else "")
+                + f": {e}"
             )
             return False
 
-    def delete_collection(self, collection_name: str) -> None:
+    def delete_collection(self, collection_name: str, namespace: str = None) -> None:
         """Delete a collection by removing all vectors with the collection name in metadata."""
         collection_name_with_prefix = self._get_collection_name_with_prefix(
             collection_name
         )
         try:
-            self._retry_pinecone_operation(
-                lambda: self.index.delete(
-                    filter={"collection_name": collection_name_with_prefix}
-                )
-            )
+            delete_kwargs = {"filter": {"collection_name": collection_name_with_prefix}}
+            if namespace:
+                delete_kwargs["namespace"] = namespace
+
+            self._retry_pinecone_operation(lambda: self.index.delete(**delete_kwargs))
             log.info(
-                f"Collection '{collection_name_with_prefix}' deleted (all vectors removed)."
+                f"Collection '{collection_name_with_prefix}' deleted (all vectors removed)"
+                + (f" from namespace '{namespace}'" if namespace else "")
+                + "."
             )
         except Exception as e:
             log.warning(
-                f"Failed to delete collection '{collection_name_with_prefix}': {e}"
+                f"Failed to delete collection '{collection_name_with_prefix}'"
+                + (f" from namespace '{namespace}'" if namespace else "")
+                + f": {e}"
             )
             raise
 
