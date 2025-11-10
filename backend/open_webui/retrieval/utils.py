@@ -18,6 +18,18 @@ from open_webui.config import VECTOR_DB
 from open_webui.retrieval.vector.factory import VECTOR_DB_CLIENT
 
 
+def get_namespace_for_collection(collection_name: str) -> Optional[str]:
+    """
+    Get the appropriate namespace for a collection based on vector DB type.
+    For Pinecone: Use collection name as namespace for logical isolation.
+    For other DBs: Return None (use default behavior).
+    """
+    vector_db_type = VECTOR_DB.value if hasattr(VECTOR_DB, "value") else VECTOR_DB
+    if vector_db_type == "pinecone":
+        return collection_name
+    return None
+
+
 from open_webui.models.users import UserModel
 from open_webui.models.files import Files
 from open_webui.models.knowledge import Knowledges
@@ -397,11 +409,13 @@ def query_collection_with_hybrid_search(
     collection_results = {}
     for collection_name in collection_names:
         try:
+            namespace = get_namespace_for_collection(collection_name)
             log.debug(
                 f"query_collection_with_hybrid_search:VECTOR_DB_CLIENT.get:collection {collection_name}"
+                + (f" in namespace '{namespace}'" if namespace else "")
             )
             collection_results[collection_name] = VECTOR_DB_CLIENT.get(
-                collection_name=collection_name
+                collection_name=collection_name, namespace=namespace
             )
         except Exception as e:
             log.exception(f"Failed to fetch collection {collection_name}: {e}")
@@ -851,11 +865,11 @@ def generate_openai_batch_embeddings(
     try:
         # Filter out empty or whitespace-only texts
         valid_texts = [text.strip() for text in texts if text and text.strip()]
-        
+
         if len(valid_texts) == 0:
             log.warning("No valid texts provided for embedding generation")
             return None
-            
+
         log.debug(
             f"generate_openai_batch_embeddings:model {model} batch size: {len(valid_texts)} (filtered from {len(texts)})"
         )
@@ -885,7 +899,7 @@ def generate_openai_batch_embeddings(
         data = r.json()
         if "data" in data:
             embeddings = [elem["embedding"] for elem in data["data"]]
-            
+
             # If we filtered out some texts, we need to return None for the empty ones
             if len(valid_texts) < len(texts):
                 result = []
@@ -918,11 +932,11 @@ def generate_azure_openai_batch_embeddings(
     try:
         # Filter out empty or whitespace-only texts
         valid_texts = [text.strip() for text in texts if text and text.strip()]
-        
+
         if len(valid_texts) == 0:
             log.warning("No valid texts provided for Azure OpenAI embedding generation")
             return None
-            
+
         log.debug(
             f"generate_azure_openai_batch_embeddings:deployment {model} batch size: {len(valid_texts)} (filtered from {len(texts)})"
         )
@@ -959,7 +973,7 @@ def generate_azure_openai_batch_embeddings(
             data = r.json()
             if "data" in data:
                 embeddings = [elem["embedding"] for elem in data["data"]]
-                
+
                 # If we filtered out some texts, we need to return None for the empty ones
                 if len(valid_texts) < len(texts):
                     result = []
