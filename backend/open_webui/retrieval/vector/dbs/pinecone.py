@@ -361,8 +361,10 @@ class PineconeClient(VectorDBBase):
             )
             raise
 
-    def insert(self, collection_name: str, items: List[VectorItem]) -> None:
-        """Insert vectors into a collection with optimized batching."""
+    def insert(
+        self, collection_name: str, items: List[VectorItem], namespace: str = None
+    ) -> None:
+        """Insert vectors into a collection with optimized batching and optional namespace support."""
         if not items:
             log.warning("No items to insert")
             return
@@ -372,6 +374,15 @@ class PineconeClient(VectorDBBase):
         collection_name_with_prefix = self._get_collection_name_with_prefix(
             collection_name
         )
+
+        # Log detailed information about what's being inserted
+        namespace_info = (
+            f" in namespace '{namespace}'" if namespace else " in default namespace"
+        )
+        log.info(
+            f"Inserting {len(items)} items to Pinecone collection: {collection_name} (with prefix: {collection_name_with_prefix}){namespace_info}"
+        )
+
         points = self._create_points(items, collection_name_with_prefix)
 
         # Use dynamic batching to respect both count and size limits
@@ -386,12 +397,23 @@ class PineconeClient(VectorDBBase):
         executor = self._executor
         futures = []
         for batch in batches:
-            futures.append(
-                executor.submit(
-                    self._retry_pinecone_operation,
-                    lambda b=batch: self.index.upsert(vectors=b),
+            # Include namespace in insert call if provided
+            if namespace:
+                futures.append(
+                    executor.submit(
+                        self._retry_pinecone_operation,
+                        lambda b=batch, ns=namespace: self.index.upsert(
+                            vectors=b, namespace=ns
+                        ),
+                    )
                 )
-            )
+            else:
+                futures.append(
+                    executor.submit(
+                        self._retry_pinecone_operation,
+                        lambda b=batch: self.index.upsert(vectors=b),
+                    )
+                )
 
         for future in concurrent.futures.as_completed(futures):
             try:
@@ -404,7 +426,7 @@ class PineconeClient(VectorDBBase):
         log.debug(f"Insert of {len(points)} vectors took {elapsed:.2f} seconds")
         log.info(
             f"Successfully inserted {len(points)} vectors in {len(batches)} parallel batches "
-            f"into '{collection_name_with_prefix}'"
+            f"into '{collection_name_with_prefix}'{namespace_info}"
         )
 
     def upsert(
