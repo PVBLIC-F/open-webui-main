@@ -5,6 +5,7 @@ from typing import Optional
 
 from open_webui.models.memories import Memories, MemoryModel
 from open_webui.retrieval.vector.factory import VECTOR_DB_CLIENT
+from open_webui.routers.retrieval import get_namespace_for_collection
 from open_webui.utils.auth import get_verified_user
 from open_webui.env import SRC_LOG_LEVELS
 
@@ -51,8 +52,11 @@ async def add_memory(
 ):
     memory = Memories.insert_new_memory(user.id, form_data.content)
 
+    memory_collection = f"user-memory-{user.id}"
+    namespace = get_namespace_for_collection(memory_collection)
+
     VECTOR_DB_CLIENT.upsert(
-        collection_name=f"user-memory-{user.id}",
+        collection_name=memory_collection,
         items=[
             {
                 "id": memory.id,
@@ -63,6 +67,7 @@ async def add_memory(
                 "metadata": {"created_at": memory.created_at},
             }
         ],
+        namespace=namespace,
     )
 
     return memory
@@ -86,10 +91,14 @@ async def query_memory(
     if not memories:
         raise HTTPException(status_code=404, detail="No memories found for user")
 
+    memory_collection = f"user-memory-{user.id}"
+    namespace = get_namespace_for_collection(memory_collection)
+
     results = VECTOR_DB_CLIENT.search(
-        collection_name=f"user-memory-{user.id}",
+        collection_name=memory_collection,
         vectors=[request.app.state.EMBEDDING_FUNCTION(form_data.content, user=user)],
         limit=form_data.k,
+        namespace=namespace,
     )
 
     return results
@@ -102,11 +111,14 @@ async def query_memory(
 async def reset_memory_from_vector_db(
     request: Request, user=Depends(get_verified_user)
 ):
-    VECTOR_DB_CLIENT.delete_collection(f"user-memory-{user.id}")
+    memory_collection = f"user-memory-{user.id}"
+    namespace = get_namespace_for_collection(memory_collection)
+
+    VECTOR_DB_CLIENT.delete_collection(memory_collection, namespace=namespace)
 
     memories = Memories.get_memories_by_user_id(user.id)
     VECTOR_DB_CLIENT.upsert(
-        collection_name=f"user-memory-{user.id}",
+        collection_name=memory_collection,
         items=[
             {
                 "id": memory.id,
@@ -121,6 +133,7 @@ async def reset_memory_from_vector_db(
             }
             for memory in memories
         ],
+        namespace=namespace,
     )
 
     return True
@@ -137,7 +150,9 @@ async def delete_memory_by_user_id(user=Depends(get_verified_user)):
 
     if result:
         try:
-            VECTOR_DB_CLIENT.delete_collection(f"user-memory-{user.id}")
+            memory_collection = f"user-memory-{user.id}"
+            namespace = get_namespace_for_collection(memory_collection)
+            VECTOR_DB_CLIENT.delete_collection(memory_collection, namespace=namespace)
         except Exception as e:
             log.error(e)
         return True
@@ -164,8 +179,11 @@ async def update_memory_by_id(
         raise HTTPException(status_code=404, detail="Memory not found")
 
     if form_data.content is not None:
+        memory_collection = f"user-memory-{user.id}"
+        namespace = get_namespace_for_collection(memory_collection)
+
         VECTOR_DB_CLIENT.upsert(
-            collection_name=f"user-memory-{user.id}",
+            collection_name=memory_collection,
             items=[
                 {
                     "id": memory.id,
@@ -179,6 +197,7 @@ async def update_memory_by_id(
                     },
                 }
             ],
+            namespace=namespace,
         )
 
     return memory
@@ -194,8 +213,10 @@ async def delete_memory_by_id(memory_id: str, user=Depends(get_verified_user)):
     result = Memories.delete_memory_by_id_and_user_id(memory_id, user.id)
 
     if result:
+        memory_collection = f"user-memory-{user.id}"
+        namespace = get_namespace_for_collection(memory_collection)
         VECTOR_DB_CLIENT.delete(
-            collection_name=f"user-memory-{user.id}", ids=[memory_id]
+            collection_name=memory_collection, ids=[memory_id], namespace=namespace
         )
         return True
 

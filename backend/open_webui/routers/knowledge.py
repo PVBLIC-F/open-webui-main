@@ -16,6 +16,7 @@ from open_webui.routers.retrieval import (
     ProcessFileForm,
     process_files_batch,
     BatchProcessFilesForm,
+    get_namespace_for_collection,
 )
 from open_webui.storage.provider import Storage
 
@@ -212,9 +213,13 @@ async def reindex_knowledge_files(request: Request, user=Depends(get_verified_us
             file_ids = knowledge_base.data.get("file_ids", [])
             files = Files.get_files_by_ids(file_ids)
             try:
-                if VECTOR_DB_CLIENT.has_collection(collection_name=knowledge_base.id):
+                namespace = get_namespace_for_collection(knowledge_base.id)
+                if VECTOR_DB_CLIENT.has_collection(
+                    collection_name=knowledge_base.id, namespace=namespace
+                ):
                     VECTOR_DB_CLIENT.delete_collection(
-                        collection_name=knowledge_base.id
+                        collection_name=knowledge_base.id,
+                        namespace=namespace,
                     )
             except Exception as e:
                 log.error(f"Error deleting collection {knowledge_base.id}: {str(e)}")
@@ -474,8 +479,11 @@ def update_file_from_knowledge_by_id(
         )
 
     # Remove content from the vector database
+    namespace = get_namespace_for_collection(knowledge.id)
     VECTOR_DB_CLIENT.delete(
-        collection_name=knowledge.id, filter={"file_id": form_data.file_id}
+        collection_name=knowledge.id,
+        filter={"file_id": form_data.file_id},
+        namespace=namespace,
     )
 
     # Add content to the vector database
@@ -546,24 +554,34 @@ def remove_file_from_knowledge_by_id(
 
     # Remove content from the vector database
     try:
-        log.info(f"Attempting to delete vectors for file_id: {form_data.file_id} from collection: {knowledge.id}")
-        
+        namespace = get_namespace_for_collection(knowledge.id)
+        log.info(
+            f"Attempting to delete vectors for file_id: {form_data.file_id} from collection: {knowledge.id}"
+        )
+
         # First, let's check if there are any vectors with this file_id
         result = VECTOR_DB_CLIENT.query(
-            collection_name=knowledge.id, 
-            filter={"file_id": form_data.file_id}
+            collection_name=knowledge.id,
+            filter={"file_id": form_data.file_id},
+            namespace=namespace,
         )
-        
+
         if result and result.ids and result.ids[0]:
-            log.info(f"Found {len(result.ids[0])} vectors to delete for file_id: {form_data.file_id}")
+            log.info(
+                f"Found {len(result.ids[0])} vectors to delete for file_id: {form_data.file_id}"
+            )
         else:
-            log.warning(f"No vectors found for file_id: {form_data.file_id} in collection: {knowledge.id}")
-        
+            log.warning(
+                f"No vectors found for file_id: {form_data.file_id} in collection: {knowledge.id}"
+            )
+
         VECTOR_DB_CLIENT.delete(
-            collection_name=knowledge.id, filter={"file_id": form_data.file_id}
+            collection_name=knowledge.id,
+            filter={"file_id": form_data.file_id},
+            namespace=namespace,
         )
         log.info(f"Successfully deleted vectors for file_id: {form_data.file_id}")
-        
+
     except Exception as e:
         log.error(f"Error deleting vectors for file_id {form_data.file_id}: {e}")
         log.debug("This was most likely caused by bypassing embedding processing")
@@ -573,8 +591,13 @@ def remove_file_from_knowledge_by_id(
         try:
             # Remove the file's collection from vector database
             file_collection = f"file-{form_data.file_id}"
-            if VECTOR_DB_CLIENT.has_collection(collection_name=file_collection):
-                VECTOR_DB_CLIENT.delete_collection(collection_name=file_collection)
+            file_namespace = get_namespace_for_collection(file_collection)
+            if VECTOR_DB_CLIENT.has_collection(
+                collection_name=file_collection, namespace=file_namespace
+            ):
+                VECTOR_DB_CLIENT.delete_collection(
+                    collection_name=file_collection, namespace=file_namespace
+                )
         except Exception as e:
             log.debug("This was most likely caused by bypassing embedding processing")
             log.debug(e)
@@ -672,15 +695,16 @@ async def delete_knowledge_by_id(id: str, user=Depends(get_verified_user)):
 
     # Clean up vector DB
     try:
+        namespace = get_namespace_for_collection(id)
         log.info(f"Attempting to delete vector collection: {id}")
-        
+
         # Check if collection exists before trying to delete
-        if VECTOR_DB_CLIENT.has_collection(collection_name=id):
-            VECTOR_DB_CLIENT.delete_collection(collection_name=id)
+        if VECTOR_DB_CLIENT.has_collection(collection_name=id, namespace=namespace):
+            VECTOR_DB_CLIENT.delete_collection(collection_name=id, namespace=namespace)
             log.info(f"Successfully deleted vector collection: {id}")
         else:
             log.warning(f"Vector collection {id} does not exist, skipping deletion")
-            
+
     except Exception as e:
         log.error(f"Error deleting vector collection {id}: {e}")
         # Don't pass silently - this is important for cleanup
@@ -714,15 +738,16 @@ async def reset_knowledge_by_id(id: str, user=Depends(get_verified_user)):
         )
 
     try:
+        namespace = get_namespace_for_collection(id)
         log.info(f"Attempting to reset vector collection: {id}")
-        
+
         # Check if collection exists before trying to delete
-        if VECTOR_DB_CLIENT.has_collection(collection_name=id):
-            VECTOR_DB_CLIENT.delete_collection(collection_name=id)
+        if VECTOR_DB_CLIENT.has_collection(collection_name=id, namespace=namespace):
+            VECTOR_DB_CLIENT.delete_collection(collection_name=id, namespace=namespace)
             log.info(f"Successfully reset vector collection: {id}")
         else:
             log.warning(f"Vector collection {id} does not exist, skipping reset")
-            
+
     except Exception as e:
         log.error(f"Error resetting vector collection {id}: {e}")
         # Don't pass silently - this is important for cleanup
