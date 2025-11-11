@@ -58,6 +58,23 @@ class StorageProvider(ABC):
     @abstractmethod
     def delete_file(self, file_path: str) -> None:
         pass
+    
+    def get_signed_url(self, file_path: str, expiration: int = 3600) -> str:
+        """
+        Generate a time-limited signed URL for direct browser access (streaming).
+        
+        This enables HTTP Range Request streaming for video/audio without backend proxying.
+        Default implementation falls back to local file path.
+        
+        Args:
+            file_path: Cloud storage path (e.g., "gs://bucket/file.mp4")
+            expiration: URL validity in seconds (default: 1 hour)
+            
+        Returns:
+            Signed URL for direct browser access (supports Range Requests)
+        """
+        # Default: return local file path (for local storage provider)
+        return self.get_file(file_path)
 
 
 class LocalStorageProvider(StorageProvider):
@@ -103,6 +120,23 @@ class LocalStorageProvider(StorageProvider):
                     log.exception(f"Failed to delete {file_path}. Reason: {e}")
         else:
             log.warning(f"Directory {UPLOAD_DIR} not found in local storage.")
+    
+    @staticmethod
+    def get_signed_url(file_path: str, expiration: int = 3600) -> str:
+        """
+        For local storage, return the file path directly.
+        Local files don't need signed URLs as they're served by the backend.
+        
+        Args:
+            file_path: Local file path
+            expiration: Ignored for local storage
+            
+        Returns:
+            Local file path (no URL generation needed)
+        """
+        # For local storage, just return the path
+        # The backend will serve it directly via FileResponse
+        return file_path
 
 
 class S3StorageProvider(StorageProvider):
@@ -176,11 +210,19 @@ class S3StorageProvider(StorageProvider):
             raise RuntimeError(f"Error uploading file to S3: {e}")
 
     def get_file(self, file_path: str) -> str:
-        """Handles downloading of the file from S3 storage."""
+        """Handles downloading of the file from S3 storage with local caching."""
         try:
             s3_key = self._extract_s3_key(file_path)
             local_file_path = self._get_local_file_path(s3_key)
+            
+            # **PERFORMANCE OPTIMIZATION**: Check if file already exists locally
+            # This prevents re-downloading large video/audio files for every segment request
+            if os.path.exists(local_file_path) and os.path.getsize(local_file_path) > 0:
+                log.debug(f"Using cached local copy of {s3_key} (avoiding S3 download)")
+                return local_file_path
+            
             self.s3_client.download_file(self.bucket_name, s3_key, local_file_path)
+            log.info(f"Successfully downloaded {s3_key} from S3")
             return local_file_path
         except ClientError as e:
             raise RuntimeError(f"Error downloading file from S3: {e}")
@@ -214,6 +256,41 @@ class S3StorageProvider(StorageProvider):
 
         # Always delete from local storage
         LocalStorageProvider.delete_all_files()
+    
+    def get_signed_url(self, file_path: str, expiration: int = 3600) -> str:
+        """
+        Generate a presigned URL for direct browser streaming from S3.
+        
+        Enables HTTP Range Request support for video/audio playback without backend proxying.
+        
+        Args:
+            file_path: S3 file path (e.g., "s3://bucket/prefix/file.mp4")
+            expiration: URL validity in seconds (default: 1 hour)
+            
+        Returns:
+            Time-limited presigned URL with Range Request support
+        """
+        try:
+            s3_key = self._extract_s3_key(file_path)
+            
+            # Generate presigned URL that supports HTTP Range Requests
+            # This allows browser to seek in video/audio and stream efficiently
+            presigned_url = self.s3_client.generate_presigned_url(
+                'get_object',
+                Params={
+                    'Bucket': self.bucket_name,
+                    'Key': s3_key
+                },
+                ExpiresIn=expiration
+            )
+            
+            log.debug(f"Generated presigned URL for {s3_key} (expires in {expiration}s)")
+            return presigned_url
+            
+        except ClientError as e:
+            log.warning(f"Failed to generate presigned URL for {file_path}: {e}")
+            # Fallback to downloading file locally
+            return self.get_file(file_path)
 
     # The s3 key is the name assigned to an object. It excludes the bucket name, but includes the internal path and the file name.
     def _extract_s3_key(self, full_file_path: str) -> str:
@@ -293,7 +370,7 @@ class GCSStorageProvider(StorageProvider):
                         )
 
     def get_file(self, file_path: str) -> str:
-        """Handles downloading of the file from GCS storage with retry logic."""
+        """Handles downloading of the file from GCS storage with retry logic and local caching."""
         import time
         from requests.exceptions import ConnectionError, Timeout
         from open_webui.config import (
@@ -304,6 +381,12 @@ class GCSStorageProvider(StorageProvider):
 
         filename = file_path.removeprefix("gs://").split("/")[1]
         local_file_path = f"{UPLOAD_DIR}/{filename}"
+
+        # **PERFORMANCE OPTIMIZATION**: Check if file already exists locally
+        # This prevents re-downloading large video/audio files for every segment request
+        if os.path.exists(local_file_path) and os.path.getsize(local_file_path) > 0:
+            log.debug(f"Using cached local copy of {filename} (avoiding GCS download)")
+            return local_file_path
 
         # Get configurable retry settings
         max_retries = GCS_MAX_RETRY_ATTEMPTS
@@ -413,6 +496,41 @@ class GCSStorageProvider(StorageProvider):
 
         # Always delete from local storage
         LocalStorageProvider.delete_all_files()
+    
+    def get_signed_url(self, file_path: str, expiration: int = 3600) -> str:
+        """
+        Generate a signed URL for direct browser streaming from GCS.
+        
+        Enables HTTP Range Request support for video/audio playback without backend proxying.
+        
+        Args:
+            file_path: GCS file path (e.g., "gs://bucket/file.mp4")
+            expiration: URL validity in seconds (default: 1 hour)
+            
+        Returns:
+            Time-limited signed URL with Range Request support
+        """
+        try:
+            from datetime import timedelta
+            
+            filename = file_path.removeprefix("gs://").split("/")[1]
+            blob = self.bucket.blob(filename)
+            
+            # Generate signed URL that supports HTTP Range Requests
+            # This allows browser to seek in video/audio and stream efficiently
+            signed_url = blob.generate_signed_url(
+                version="v4",
+                expiration=timedelta(seconds=expiration),
+                method="GET",
+            )
+            
+            log.debug(f"Generated signed URL for {filename} (expires in {expiration}s)")
+            return signed_url
+            
+        except Exception as e:
+            log.warning(f"Failed to generate signed URL for {file_path}: {e}")
+            # Fallback to downloading file locally
+            return self.get_file(file_path)
 
 
 class AzureStorageProvider(StorageProvider):
@@ -449,13 +567,21 @@ class AzureStorageProvider(StorageProvider):
             raise RuntimeError(f"Error uploading file to Azure Blob Storage: {e}")
 
     def get_file(self, file_path: str) -> str:
-        """Handles downloading of the file from Azure Blob Storage."""
+        """Handles downloading of the file from Azure Blob Storage with local caching."""
         try:
             filename = file_path.split("/")[-1]
             local_file_path = f"{UPLOAD_DIR}/{filename}"
+            
+            # **PERFORMANCE OPTIMIZATION**: Check if file already exists locally
+            # This prevents re-downloading large video/audio files for every segment request
+            if os.path.exists(local_file_path) and os.path.getsize(local_file_path) > 0:
+                log.debug(f"Using cached local copy of {filename} (avoiding Azure download)")
+                return local_file_path
+            
             blob_client = self.container_client.get_blob_client(filename)
             with open(local_file_path, "wb") as download_file:
                 download_file.write(blob_client.download_blob().readall())
+            log.info(f"Successfully downloaded {filename} from Azure Blob Storage")
             return local_file_path
         except ResourceNotFoundError as e:
             raise RuntimeError(f"Error downloading file from Azure Blob Storage: {e}")
@@ -483,6 +609,47 @@ class AzureStorageProvider(StorageProvider):
 
         # Always delete from local storage
         LocalStorageProvider.delete_all_files()
+    
+    def get_signed_url(self, file_path: str, expiration: int = 3600) -> str:
+        """
+        Generate a SAS URL for direct browser streaming from Azure Blob Storage.
+        
+        Enables HTTP Range Request support for video/audio playback without backend proxying.
+        
+        Args:
+            file_path: Azure file path
+            expiration: URL validity in seconds (default: 1 hour)
+            
+        Returns:
+            Time-limited SAS URL with Range Request support
+        """
+        try:
+            from azure.storage.blob import generate_blob_sas, BlobSasPermissions
+            from datetime import datetime, timedelta
+            
+            filename = file_path.split("/")[-1]
+            blob_client = self.container_client.get_blob_client(filename)
+            
+            # Generate SAS token for blob access
+            sas_token = generate_blob_sas(
+                account_name=blob_client.account_name,
+                container_name=self.container_name,
+                blob_name=filename,
+                account_key=AZURE_STORAGE_KEY,
+                permission=BlobSasPermissions(read=True),
+                expiry=datetime.utcnow() + timedelta(seconds=expiration)
+            )
+            
+            # Construct full URL with SAS token
+            sas_url = f"{blob_client.url}?{sas_token}"
+            
+            log.debug(f"Generated SAS URL for {filename} (expires in {expiration}s)")
+            return sas_url
+            
+        except Exception as e:
+            log.warning(f"Failed to generate SAS URL for {file_path}: {e}")
+            # Fallback to downloading file locally
+            return self.get_file(file_path)
 
 
 def get_storage_provider(storage_provider: str):
