@@ -134,7 +134,7 @@ class ChatPDFGenerator:
             )
         )
 
-        # Message role headers
+        # Message role headers (reduced spacing for tighter layout)
         styles.add(
             ParagraphStyle(
                 name="UserHeader",
@@ -142,8 +142,8 @@ class ChatPDFGenerator:
                 fontSize=12,
                 textColor=self.COLOR_USER,
                 fontName="Helvetica-Bold",
-                spaceAfter=6,
-                spaceBefore=12,
+                spaceAfter=4,
+                spaceBefore=8,
             )
         )
 
@@ -154,8 +154,8 @@ class ChatPDFGenerator:
                 fontSize=12,
                 textColor=self.COLOR_ASSISTANT,
                 fontName="Helvetica-Bold",
-                spaceAfter=6,
-                spaceBefore=12,
+                spaceAfter=4,
+                spaceBefore=8,
             )
         )
 
@@ -166,12 +166,12 @@ class ChatPDFGenerator:
                 fontSize=12,
                 textColor=self.COLOR_SYSTEM,
                 fontName="Helvetica-Bold",
-                spaceAfter=6,
-                spaceBefore=12,
+                spaceAfter=4,
+                spaceBefore=8,
             )
         )
 
-        # Message content
+        # Message content (tighter spacing)
         styles.add(
             ParagraphStyle(
                 name="MessageContent",
@@ -179,8 +179,8 @@ class ChatPDFGenerator:
                 fontSize=10,
                 textColor=black,
                 leftIndent=10,
-                spaceAfter=10,
-                leading=14,  # Line height
+                spaceAfter=6,
+                leading=13,  # Line height
             )
         )
 
@@ -449,8 +449,8 @@ class ChatPDFGenerator:
 
             # Empty line
             if not line.strip():
-                # Small spacer between paragraphs
-                flowables.append(Spacer(1, 0.1 * cm))
+                # Very small spacer between paragraphs (reduced for tighter layout)
+                flowables.append(Spacer(1, 0.05 * cm))
                 i += 1
                 continue
 
@@ -524,11 +524,11 @@ class ChatPDFGenerator:
         content_flowables = self._parse_markdown_to_flowables(content)
         flowables.extend(content_flowables)
 
-        # Add spacer after message
-        flowables.append(Spacer(1, 0.3 * cm))
+        # Small spacer after message (reduced from 0.3cm to 0.2cm)
+        flowables.append(Spacer(1, 0.2 * cm))
 
         # Keep message together on same page when possible
-        return [KeepTogether(flowables)]
+        return flowables  # Don't wrap in KeepTogether - allows better flow
 
     def generate_chat_pdf(self) -> bytes:
         """
