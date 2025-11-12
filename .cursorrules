@@ -1,0 +1,1162 @@
+# Open WebUI - Cursor AI Rules
+# Project: Open WebUI (Self-hosted AI Platform)
+# Tech Stack: Python 3.11/3.12 (Backend) + Svelte (Frontend)
+# Last Updated: 2025-01-12
+
+## Project Overview
+Open WebUI is an extensible, feature-rich, self-hosted AI platform with RAG capabilities.
+- Backend: FastAPI (Python 3.11/3.12)
+- Frontend: SvelteKit + TypeScript
+- Vector DBs: Pinecone, Chroma, Qdrant, Milvus, OpenSearch
+- Storage: Local, S3, GCS, Azure Blob
+- Architecture: REST API + WebSocket (for real-time chat)
+
+---
+
+## Core Principles
+
+### 1. **Code Quality**
+- ✅ Write clean, professional, maintainable code
+- ✅ Prefer simple, concise solutions over complex ones
+- ✅ Avoid over-engineering; use existing patterns
+- ✅ Performance improvements are important, but not at the cost of clarity
+- ✅ DRY (Don't Repeat Yourself) - reuse existing functions
+
+### 2. **Senior-Level Engineering**
+- ✅ Think through edge cases and error handling
+- ✅ Consider security implications (auth, data isolation, input validation)
+- ✅ Pay attention to streaming (audio/video chunks, SSE responses)
+- ✅ Design for scalability (async operations, batching, caching)
+- ✅ Document complex logic with clear comments
+
+### 3. **Testing & Deployment**
+- ⚠️ **CRITICAL**: Tests cannot be run locally in this environment
+- ✅ Ensure code changes don't break existing functionality
+- ✅ Frontend/backend have hot reload - no need to restart servers
+- ✅ Make changes carefully with appropriate validation
+
+---
+
+## Python Backend Standards
+
+### **Code Formatting**
+```python
+# ✅ Use Black formatter (line length: 88 chars default)
+# Command: black backend/
+
+# ✅ Import Order (follow existing patterns):
+from typing import List, Optional, Dict, Any
+from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, status, Request
+import logging
+
+from open_webui.models.* import ...
+from open_webui.routers.* import ...
+from open_webui.utils.* import ...
+from open_webui.constants import ERROR_MESSAGES
+from open_webui.env import SRC_LOG_LEVELS
+from open_webui.config import *
+```
+
+### **Logging**
+```python
+# ✅ Always use loguru logger (not print)
+import logging
+from open_webui.env import SRC_LOG_LEVELS
+
+log = logging.getLogger(__name__)
+log.setLevel(SRC_LOG_LEVELS["RAG"])  # or "MAIN", "MODELS", etc.
+
+# Log levels:
+log.debug(f"Detailed info: {variable}")  # Development/troubleshooting
+log.info(f"Important operations: Processing {count} files")  # Key events
+log.warning(f"Unexpected but handled: {issue}")  # Warnings
+log.error(f"Error processing {id}: {error}")  # Errors
+log.exception(e)  # Exceptions with full traceback
+```
+
+### **Error Handling**
+```python
+# ✅ Use FastAPI HTTPException for API errors
+from fastapi import HTTPException, status
+from open_webui.constants import ERROR_MESSAGES
+
+# Standard pattern:
+try:
+    result = perform_operation()
+    if not result:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=ERROR_MESSAGES.NOT_FOUND
+        )
+except SpecificException as e:
+    log.error(f"Operation failed: {e}")
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=ERROR_MESSAGES.DEFAULT(str(e))
+    )
+except Exception as e:
+    log.exception(e)  # Full traceback
+    raise HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail="Internal server error"
+    )
+
+# ✅ Continue-on-error pattern (cleanup operations):
+for item in items:
+    try:
+        process_item(item)
+    except Exception as e:
+        log.error(f"Error processing {item.id}: {e}")
+        # Continue with other items
+        continue
+```
+
+### **Authentication & Authorization**
+```python
+# ✅ Always use proper auth dependencies
+from open_webui.utils.auth import get_verified_user, get_admin_user
+from open_webui.utils.access_control import has_access, has_permission
+
+@router.get("/resource/{id}")
+async def get_resource(
+    id: str,
+    user=Depends(get_verified_user)  # ✅ Authenticated user
+):
+    resource = Resources.get_by_id(id)
+    
+    # ✅ Check ownership or access control
+    if resource.user_id != user.id and user.role != "admin":
+        if not has_access(user.id, "read", resource.access_control):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=ERROR_MESSAGES.ACCESS_PROHIBITED
+            )
+    
+    return resource
+```
+
+### **Async/Await**
+```python
+# ✅ Use async for I/O-bound operations
+async def fetch_data(url: str):
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as response:
+            return await response.json()
+
+# ✅ Use background tasks for long operations
+from fastapi import BackgroundTasks
+
+@router.post("/process")
+async def process_data(
+    background_tasks: BackgroundTasks,
+    user=Depends(get_verified_user)
+):
+    background_tasks.add_task(long_running_task, data)
+    return {"status": "processing"}
+```
+
+### **Streaming Responses (SSE)**
+```python
+# ✅ Server-Sent Events pattern (used extensively for chat, file processing)
+from fastapi.responses import StreamingResponse
+from fastapi import BackgroundTask
+
+# Pattern 1: Proxying streaming responses
+async def proxy_stream(url: str, payload: dict):
+    r = None
+    session = None
+    streaming = False
+    
+    try:
+        session = aiohttp.ClientSession(
+            trust_env=True, 
+            timeout=aiohttp.ClientTimeout(total=AIOHTTP_CLIENT_TIMEOUT)
+        )
+        
+        r = await session.post(url, data=payload, headers=headers)
+        
+        # Check if response is SSE
+        if "text/event-stream" in r.headers.get("Content-Type", ""):
+            streaming = True
+            return StreamingResponse(
+                r.content,
+                status_code=r.status,
+                headers=dict(r.headers),
+                background=BackgroundTask(
+                    cleanup_response, response=r, session=session
+                ),
+            )
+        else:
+            response = await r.json()
+            return response
+            
+    except Exception as e:
+        log.exception(e)
+        raise HTTPException(status_code=r.status if r else 500, detail=str(e))
+    finally:
+        if not streaming:
+            await cleanup_response(r, session)
+
+# Pattern 2: Custom event stream generator
+@router.get("/status")
+async def get_status(stream: bool = Query(False)):
+    if stream:
+        async def event_stream():
+            for _ in range(100):
+                item = check_status()
+                event = {"status": item.status}
+                
+                # SSE format: "data: {json}\n\n"
+                yield f"data: {json.dumps(event)}\n\n"
+                
+                if item.status in ("completed", "failed"):
+                    break
+                    
+                await asyncio.sleep(0.5)
+        
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream"
+        )
+    else:
+        return {"status": check_status()}
+
+# ✅ Always clean up resources
+async def cleanup_response(response, session):
+    if response:
+        response.close()
+    if session:
+        await session.close()
+```
+
+### **HTTP Range Requests (Video/Audio Streaming)**
+```python
+# ✅ Support Range Requests for video/audio seeking
+from fastapi.responses import StreamingResponse
+from pathlib import Path
+
+@router.get("/{id}/video")
+async def stream_video(id: str, request: Request):
+    file_path = get_video_path(id)
+    file_size = os.path.getsize(file_path)
+    range_header = request.headers.get("Range")
+    
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Content-Type": "video/mp4"
+    }
+    
+    if range_header:
+        # Parse: "Range: bytes=0-1023"
+        units, _, range_spec = range_header.partition("=")
+        start_str, _, end_str = range_spec.partition("-")
+        start = int(start_str) if start_str else 0
+        end = int(end_str) if end_str else (file_size - 1)
+        
+        headers.update({
+            "Content-Range": f"bytes {start}-{end}/{file_size}",
+            "Content-Length": str(end - start + 1)
+        })
+        
+        return StreamingResponse(
+            file_chunk(start, end, file_path),
+            status_code=206,  # Partial Content
+            headers=headers
+        )
+    else:
+        # Full file
+        headers["Content-Length"] = str(file_size)
+        return StreamingResponse(
+            file_chunk(0, file_size - 1, file_path),
+            status_code=200,
+            headers=headers
+        )
+
+# ✅ File chunk generator
+def file_chunk(start: int, end: int, file_path: Path, chunk_size=8192):
+    with open(file_path, "rb") as f:
+        f.seek(start)
+        remaining = end - start + 1
+        while remaining > 0:
+            read_size = min(chunk_size, remaining)
+            data = f.read(read_size)
+            if not data:
+                break
+            remaining -= len(data)
+            yield data
+```
+
+### **Response Models**
+```python
+# ✅ Always define response models for type safety
+from pydantic import BaseModel
+from typing import Optional, List
+
+class KnowledgeResponse(BaseModel):
+    id: str
+    name: str
+    description: Optional[str] = None
+    created_at: int
+    
+    class Config:
+        from_attributes = True  # For ORM compatibility
+
+@router.get("/{id}", response_model=KnowledgeResponse)
+async def get_knowledge(id: str, user=Depends(get_verified_user)):
+    knowledge = Knowledges.get_knowledge_by_id(id)
+    if not knowledge:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=ERROR_MESSAGES.NOT_FOUND
+        )
+    return knowledge
+
+# ✅ For list responses
+@router.get("/", response_model=List[KnowledgeResponse])
+async def get_all_knowledge(user=Depends(get_verified_user)):
+    return Knowledges.get_knowledge_bases_by_user_id(user.id, "read")
+```
+
+### **Router Organization**
+```python
+# ✅ Use section headers for endpoint groups
+router = APIRouter()
+
+############################
+# GetKnowledgeBases
+############################
+
+@router.get("/", response_model=list[KnowledgeResponse])
+async def get_knowledge(user=Depends(get_verified_user)):
+    return Knowledges.get_knowledge_bases_by_user_id(user.id, "read")
+
+############################
+# CreateKnowledge
+############################
+
+@router.post("/create", response_model=KnowledgeResponse)
+async def create_knowledge(
+    request: Request,
+    form_data: KnowledgeForm,
+    user=Depends(get_verified_user)
+):
+    # Implementation
+    pass
+```
+
+### **Safe Data Access**
+```python
+# ✅ Always use .get() with defaults for dict access
+file_ids = knowledge.data.get("file_ids", []) if knowledge.data else []
+
+# ✅ Safe nested dict access
+metadata = file.meta.get("transcript_segments", [])
+duration = file.meta.get("transcript_duration")
+
+# ✅ Check existence before accessing
+if result and result.ids and len(result.ids) > 0:
+    process_results(result.ids[0])
+
+# ❌ NEVER assume keys exist:
+# file_ids = knowledge.data["file_ids"]  # Will crash if data is None
+```
+
+### **Model Serialization**
+```python
+# ✅ Use model_dump() for Pydantic v2
+data = model.model_dump()
+
+# ✅ For JSON serialization
+json_str = model.model_dump_json(exclude_none=True)
+
+# ✅ For partial updates
+update_data = form_data.model_dump(exclude_unset=True)
+```
+
+### **Vector Database Operations**
+```python
+# ✅ Always use namespace isolation (especially Pinecone)
+from open_webui.routers.retrieval import get_namespace_for_collection
+
+# For knowledge collections:
+namespace = get_namespace_for_collection(collection_id)
+VECTOR_DB_CLIENT.insert(
+    collection_name=collection_id,
+    items=vectors,
+    namespace=namespace  # ✅ CRITICAL for multi-tenancy
+)
+
+# For individual files within collections:
+file_collection = f"file-{file_id}"
+file_namespace = get_namespace_for_collection(
+    file_collection,
+    parent_collection_name=collection_id  # ✅ Pass parent for correct namespace
+)
+
+# ✅ Always filter by file_id to prevent cross-contamination
+VECTOR_DB_CLIENT.query(
+    collection_name=collection_id,
+    filter={"file_id": file_id},  # ✅ CRITICAL for data isolation
+    namespace=namespace
+)
+
+# ✅ IMPORTANT: When deleting collections, delete BOTH namespaces
+# Main collection namespace
+namespace = get_namespace_for_collection(collection_id)
+VECTOR_DB_CLIENT.delete_collection(collection_name=collection_id, namespace=namespace)
+
+# Individual file namespaces (prevent orphaned vectors)
+file_ids = knowledge.data.get("file_ids", []) if knowledge.data else []
+for file_id in file_ids:
+    file_collection = f"file-{file_id}"
+    file_namespace = get_namespace_for_collection(file_collection, parent_collection_name=collection_id)
+    VECTOR_DB_CLIENT.delete_collection(collection_name=file_collection, namespace=file_namespace)
+```
+
+### **Performance Patterns**
+```python
+# ✅ Batch operations (especially for vector DBs)
+BATCH_SIZE = 1000  # Pinecone's recommended batch size
+batches = [items[i:i+BATCH_SIZE] for i in range(0, len(items), BATCH_SIZE)]
+
+# ✅ Parallel execution
+import concurrent.futures
+
+with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+    futures = [executor.submit(process_batch, batch) for batch in batches]
+    for future in concurrent.futures.as_completed(futures):
+        future.result()
+
+# ✅ Retry logic with exponential backoff
+import random
+import time
+
+def retry_operation(operation, max_retries=3, base_delay=1):
+    for attempt in range(max_retries):
+        try:
+            return operation()
+        except Exception as e:
+            if attempt < max_retries - 1:
+                delay = base_delay * (2 ** attempt) + random.uniform(0, 1)
+                log.warning(f"Retry {attempt + 1}/{max_retries} after {delay:.1f}s: {e}")
+                time.sleep(delay)
+            else:
+                raise
+
+# ✅ Caching (check before expensive operations)
+if os.path.exists(cached_file) and os.path.getsize(cached_file) > 0:
+    return cached_file  # Use cache
+# Otherwise, perform expensive operation
+```
+
+### **Storage Operations**
+```python
+# ✅ Use Storage abstraction (supports Local, S3, GCS, Azure)
+from open_webui.storage.provider import Storage
+
+# Upload
+contents, file_path = Storage.upload_file(file, filename, tags)
+
+# Download (with caching)
+local_path = Storage.get_file(file_path)  # Automatically caches
+
+# Generate signed URL for streaming (NEW pattern)
+signed_url = Storage.get_signed_url(file_path, expiration=3600)
+# Returns time-limited URL for direct browser access (no backend proxy)
+```
+
+### **Database Patterns**
+```python
+# ✅ Use ORM methods (Peewee)
+from open_webui.models.knowledge import Knowledges
+
+# Get by ID
+knowledge = Knowledges.get_knowledge_by_id(id)
+
+# Get with user filter
+knowledge = Knowledges.get_knowledge_by_id_and_user_id(id, user.id)
+
+# Update
+knowledge = Knowledges.update_knowledge_by_id(id, form_data)
+
+# ✅ Always check existence before operations
+if not knowledge:
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail=ERROR_MESSAGES.NOT_FOUND
+    )
+```
+
+---
+
+## Svelte Frontend Standards
+
+### **Component Structure**
+```svelte
+<script lang="ts">
+	import { onMount, getContext } from 'svelte';
+	import { writable } from 'svelte/store';
+	
+	// ✅ Import UI components
+	import Tooltip from '$lib/components/common/Tooltip.svelte';
+	import Spinner from '$lib/components/common/Spinner.svelte';
+	
+	// ✅ Import APIs
+	import { getKnowledgeBases } from '$lib/apis/knowledge';
+	
+	// ✅ Context (i18n, etc.)
+	const i18n = getContext('i18n');
+	
+	// ✅ Props
+	export let onSelect = (e) => {};
+	export let disabled = false;
+	
+	// ✅ State
+	let loading = false;
+	let items: any[] = [];
+	let selectedIdx = 0;
+	
+	// ✅ Reactive statements
+	$: filteredItems = items.filter(item => item.visible);
+	
+	// ✅ Lifecycle
+	onMount(async () => {
+		await loadData();
+	});
+	
+	// ✅ Functions
+	const loadData = async () => {
+		loading = true;
+		try {
+			items = await getKnowledgeBases();
+		} catch (error) {
+			console.error('Error loading data:', error);
+		} finally {
+			loading = false;
+		}
+	};
+</script>
+
+<!-- ✅ Template -->
+{#if loading}
+	<Spinner />
+{:else if items.length > 0}
+	<div class="flex flex-col gap-2">
+		{#each filteredItems as item, idx (item.id)}
+			<button
+				on:click={() => onSelect(item)}
+				class="px-4 py-2 hover:bg-gray-100"
+			>
+				{item.name}
+			</button>
+		{/each}
+	</div>
+{:else}
+	<p class="text-gray-500">{$i18n.t('No items found')}</p>
+{/if}
+
+<!-- ✅ Scoped styles -->
+<style>
+	/* Component-specific styles */
+</style>
+```
+
+### **TypeScript**
+```typescript
+// ✅ Use proper types
+interface KnowledgeBase {
+	id: string;
+	name: string;
+	description?: string;
+	created_at: number;
+}
+
+// ✅ Type function parameters
+const processItem = (item: KnowledgeBase): void => {
+	// ...
+};
+
+// ✅ Use type guards
+if (typeof value === 'string') {
+	// ...
+}
+```
+
+### **State Management**
+```typescript
+// ✅ Use Svelte stores for global state
+import { writable } from 'svelte/store';
+
+export const knowledge = writable<KnowledgeBase[]>([]);
+
+// ✅ Subscribe and update
+knowledge.subscribe(value => {
+	console.log('Knowledge updated:', value);
+});
+
+knowledge.update(kb => [...kb, newItem]);
+```
+
+---
+
+## Git & Branch Naming
+
+### **Branch Names**
+```bash
+# ✅ Format: feat/<description>-<date>
+feat/knowledge-11-07-25
+feat/pinecone-performance-11-10-25
+fix/video-streaming-11-12-25
+
+# Examples:
+feat/jsonb-optimizations-11-07-25
+feat/ui-improvements-11-07-25
+fix/namespace-cleanup-11-12-25
+```
+
+### **Commit Messages**
+```bash
+# ✅ Format: <type>: <description>
+
+# Types:
+feat: New feature
+fix: Bug fix
+perf: Performance improvement
+refactor: Code refactoring
+docs: Documentation
+style: Formatting
+test: Tests
+chore: Maintenance
+
+# Examples:
+feat: Add expandable tree view for knowledge collections
+fix: Delete individual file namespaces when deleting collections
+perf: Optimize video streaming with caching and signed URLs
+refactor: Improve Pinecone namespace isolation
+```
+
+---
+
+## Documentation Standards
+
+### **Code Comments**
+```python
+# ✅ Document WHY, not WHAT
+# BAD:
+# Loop through items
+for item in items:
+    process(item)
+
+# GOOD:
+# Process items in batches to avoid overwhelming Pinecone API (rate limits)
+for batch in batches:
+    process_batch(batch)
+
+# ✅ Document complex logic
+def get_namespace_for_collection(
+    collection_name: str, 
+    parent_collection_name: Optional[str] = None
+) -> Optional[str]:
+    """
+    Get the appropriate namespace for a collection based on vector DB type.
+    
+    Pinecone Best Practice: Use human-readable namespace with collection name prefix.
+    Format: "{sanitized-name}-{collection-id}" for easier identification.
+    
+    Args:
+        collection_name: Name of the collection (e.g., "file-abc123", "494b175b-3672...")
+        parent_collection_name: Optional parent collection ID (for files in knowledge bases)
+        
+    Returns:
+        - For Pinecone: "{name}-{id}" (e.g., "fosd-494b175b-3672...")
+        - For files in collections: "{parent-name}-file-{file-id}"
+        - For other DBs: None (use default behavior)
+    """
+```
+
+### **API Documentation**
+```python
+# ✅ Use docstrings for endpoints
+@router.delete("/{id}/delete", response_model=bool)
+async def delete_knowledge_by_id(id: str, user=Depends(get_verified_user)):
+    """
+    Delete a knowledge collection and all associated vectors.
+    
+    Cleans up:
+    - Main collection namespace
+    - Individual file namespaces
+    - Knowledge base record from DB
+    - References in models
+    """
+```
+
+---
+
+## Security Best Practices
+
+### **Input Validation**
+```python
+# ✅ Validate all user inputs
+from pydantic import BaseModel, Field, validator
+
+class KnowledgeForm(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    description: Optional[str] = Field(None, max_length=500)
+    
+    @validator('name')
+    def name_must_not_be_empty(cls, v):
+        if not v.strip():
+            raise ValueError('Name cannot be empty')
+        return v.strip()
+
+# ✅ Sanitize filenames
+import re
+def sanitize_filename(filename: str) -> str:
+    # Remove path traversal attempts
+    filename = os.path.basename(filename)
+    # Remove special characters
+    filename = re.sub(r'[^a-zA-Z0-9._-]', '_', filename)
+    return filename
+```
+
+### **Data Isolation**
+```python
+# ✅ Always filter by user_id or check ownership
+if resource.user_id != user.id and user.role != "admin":
+    raise HTTPException(status_code=403, detail="Access denied")
+
+# ✅ Never trust user-provided collection/file IDs
+# Always validate ownership before operations
+
+# ✅ Use file_id filter to prevent cross-contamination
+VECTOR_DB_CLIENT.delete(
+    collection_name=collection_id,
+    filter={"file_id": file_id},  # ✅ CRITICAL
+    namespace=namespace
+)
+```
+
+### **SQL Injection Prevention**
+```python
+# ✅ Use ORM (Peewee) - prevents SQL injection
+knowledge = Knowledges.get_knowledge_by_id(id)
+
+# ❌ NEVER do raw SQL with user input:
+# cursor.execute(f"SELECT * FROM knowledge WHERE id = '{id}'")
+```
+
+---
+
+## Performance Optimization
+
+### **Database**
+```python
+# ✅ Use indexes (defined in models)
+# ✅ Limit query results
+# ✅ Use pagination for large datasets
+# ✅ Cache frequently accessed data
+```
+
+### **Vector Operations**
+```python
+# ✅ Batch inserts (1000 vectors/batch for Pinecone)
+# ✅ Use namespaces for query optimization
+# ✅ Set include_values=False when you don't need embeddings
+result = VECTOR_DB_CLIENT.query(
+    collection_name=collection_id,
+    filter={"file_id": file_id},
+    namespace=namespace,
+    include_values=False,  # ✅ Saves bandwidth
+    include_metadata=True
+)
+```
+
+### **File Operations**
+```python
+# ✅ Stream large files (don't load into memory)
+# ✅ Use cloud storage signed URLs for direct streaming
+# ✅ Cache downloaded files from cloud storage
+# ✅ Use background tasks for processing
+```
+
+---
+
+## Common Patterns
+
+### **Cleanup Operations**
+```python
+# ✅ Always clean up resources (try/except, continue on error)
+try:
+    # Delete main resource
+    delete_main_resource(id)
+    
+    # Clean up related resources
+    for related_id in related_ids:
+        try:
+            delete_related_resource(related_id)
+        except Exception as e:
+            log.error(f"Error deleting {related_id}: {e}")
+            # Continue with other resources
+            continue
+            
+except Exception as e:
+    log.error(f"Cleanup failed: {e}")
+    # Don't fail the operation if cleanup fails
+```
+
+### **Data Migration**
+```python
+# ✅ Handle backward compatibility
+file_ids = knowledge.data.get("file_ids", []) if knowledge.data else []
+# Safely handles old records without file_ids
+```
+
+---
+
+## Critical Patterns from Codebase
+
+### **File Upload Handling**
+```python
+# ✅ Standard file upload pattern
+from fastapi import UploadFile, File, Form
+
+@router.post("/upload", response_model=FileResponse)
+async def upload_file(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    metadata: Optional[dict | str] = Form(None),
+    process: bool = Query(True),
+    user=Depends(get_verified_user)
+):
+    # Generate unique ID
+    id = str(uuid.uuid4())
+    filename = f"{id}_{file.filename}"
+    
+    # Upload to storage
+    contents, file_path = Storage.upload_file(
+        file.file,
+        filename,
+        tags={
+            "OpenWebUI-User-Id": user.id,
+            "OpenWebUI-File-Id": id
+        }
+    )
+    
+    # Process in background if needed
+    if process:
+        background_tasks.add_task(process_file, file_path, id)
+    
+    return {"id": id, "filename": file.filename}
+```
+
+### **Access Control Patterns**
+```python
+# ✅ Three-tier access check pattern (used throughout codebase)
+if user.role == "admin" and BYPASS_ADMIN_ACCESS_CONTROL:
+    # Admin with bypass - full access
+    items = Model.get_all()
+else:
+    # Regular users - check ownership and access control
+    items = Model.get_by_user_id(user.id, access_type="read")
+
+# ✅ Resource-level access check
+if (
+    resource.user_id != user.id
+    and not has_access(user.id, "read", resource.access_control)
+    and user.role != "admin"
+):
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=ERROR_MESSAGES.ACCESS_PROHIBITED
+    )
+```
+
+### **Null Safety & Optional Handling**
+```python
+# ✅ Always handle Optional/None gracefully
+# Pattern 1: Conditional chaining
+file_ids = knowledge.data.get("file_ids", []) if knowledge.data else []
+
+# Pattern 2: Early return
+if not knowledge:
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail=ERROR_MESSAGES.NOT_FOUND
+    )
+
+# Pattern 3: Safe attribute access
+if model.meta and hasattr(model.meta, "knowledge"):
+    knowledge_list = model.meta.knowledge or []
+
+# Pattern 4: Fallback chains
+content_type = (
+    file.meta.get("content_type") 
+    or request.headers.get("content-type")
+    or "application/octet-stream"
+)
+```
+
+### **Retry & Eventual Consistency**
+```python
+# ✅ Handle eventual consistency (especially for Pinecone)
+# After upsert, vectors may not be immediately queryable (1-15s delay)
+max_retries = 6
+retry_delay = 3  # seconds
+result = None
+
+for attempt in range(max_retries):
+    try:
+        result = VECTOR_DB_CLIENT.query(
+            collection_name=collection_name,
+            filter={"file_id": file_id},
+            namespace=namespace
+        )
+        
+        # Check if vectors are available
+        if result and result.ids and len(result.ids[0]) > 0:
+            log.info(f"Found vectors on attempt {attempt + 1}")
+            break
+            
+        if attempt < max_retries - 1:
+            log.warning(f"No vectors found yet, retrying in {retry_delay}s")
+            time.sleep(retry_delay)
+            
+    except Exception as e:
+        log.error(f"Query failed: {e}")
+        if attempt < max_retries - 1:
+            time.sleep(retry_delay)
+```
+
+## What NOT to Do
+
+### **❌ Don't**
+- Use `print()` for logging (use `log.info()` etc.)
+- Commit without testing (ensure hot reload works)
+- Skip error handling (always catch and log exceptions)
+- Ignore security (always validate ownership/access)
+- Break existing tests (we can't run them locally!)
+- Force push to main/master (use feature branches)
+- Skip git hooks or commit verification
+- Overcomplicate solutions (keep it simple)
+- Duplicate code (reuse existing functions)
+- Leave orphaned resources (clean up vectors, files, etc.)
+- Trust user input (validate and sanitize)
+- Expose internal errors to users (use generic messages)
+- Block async operations with sync calls
+- Assume dict keys exist (use .get() with defaults)
+- Skip cleanup for streaming responses (always use BackgroundTask)
+- Forget to check namespace when deleting vectors (orphaned data!)
+- Re-download cloud files (check cache first)
+
+---
+
+## Quick Reference
+
+### **File Locations**
+```
+backend/
+  open_webui/
+    routers/          # API endpoints
+    models/           # Database models
+    retrieval/        # RAG & vector DB
+    storage/          # Storage providers
+    utils/            # Utilities
+    config.py         # Configuration
+    constants.py      # Constants
+    env.py            # Environment variables
+
+src/
+  lib/
+    components/       # Svelte components
+    apis/             # API client functions
+    stores/           # Global state
+    utils/            # Utilities
+```
+
+### **Common Commands**
+```bash
+# Format Python code
+black backend/
+
+# Check for issues
+ruff check backend/
+
+# Frontend dev
+npm run dev
+
+# Backend dev (hot reload enabled)
+# Just ensure servers are running
+```
+
+### **Environment**
+- Python: 3.11 (production), 3.12 (local dev) - both supported
+- Node: 22
+- Requires: Docker, PostgreSQL 17+ (recommended)
+
+---
+
+## Common Pitfalls & Solutions
+
+### **❌ Pitfall 1: Orphaned Vector Namespaces**
+```python
+# BAD: Only deletes main collection
+VECTOR_DB_CLIENT.delete_collection(collection_id, namespace)
+
+# GOOD: Deletes both main AND file namespaces
+namespace = get_namespace_for_collection(collection_id)
+VECTOR_DB_CLIENT.delete_collection(collection_id, namespace)
+
+# Don't forget individual files!
+file_ids = knowledge.data.get("file_ids", []) if knowledge.data else []
+for file_id in file_ids:
+    file_namespace = get_namespace_for_collection(
+        f"file-{file_id}",
+        parent_collection_name=collection_id
+    )
+    VECTOR_DB_CLIENT.delete_collection(f"file-{file_id}", file_namespace)
+```
+
+### **❌ Pitfall 2: Re-downloading Cloud Files**
+```python
+# BAD: Downloads from cloud storage every time
+def get_segment(file_id: str, start: float, end: float):
+    file_path = Storage.get_file(file.path)  # Downloads every time!
+    extract_segment(file_path, start, end)
+
+# GOOD: Cache-aware (Storage.get_file now checks cache)
+def get_segment(file_id: str, start: float, end: float):
+    file_path = Storage.get_file(file.path)  # Cached after first download ✅
+    extract_segment(file_path, start, end)
+
+# BEST: Use signed URLs for direct streaming
+signed_url = Storage.get_signed_url(file.path, expiration=3600)
+return {"video_url": signed_url}  # Browser streams directly from cloud
+```
+
+### **❌ Pitfall 3: Not Handling Streaming Cleanup**
+```python
+# BAD: Leaks connections
+async def proxy():
+    session = aiohttp.ClientSession()
+    r = await session.post(url, data=payload)
+    return StreamingResponse(r.content)  # Session never closed!
+
+# GOOD: Use BackgroundTask for cleanup
+async def proxy():
+    r = None
+    session = None
+    streaming = False
+    
+    try:
+        session = aiohttp.ClientSession()
+        r = await session.post(url, data=payload)
+        
+        if "text/event-stream" in r.headers.get("Content-Type", ""):
+            streaming = True
+            return StreamingResponse(
+                r.content,
+                background=BackgroundTask(cleanup_response, r, session)
+            )
+    finally:
+        if not streaming:
+            await cleanup_response(r, session)
+```
+
+### **❌ Pitfall 4: Unsafe Dict Access**
+```python
+# BAD: Will crash if key doesn't exist
+file_ids = knowledge.data["file_ids"]  # KeyError if missing!
+
+# GOOD: Safe with default
+file_ids = knowledge.data.get("file_ids", []) if knowledge.data else []
+
+# GOOD: Check existence first
+if knowledge and knowledge.data and "file_ids" in knowledge.data:
+    file_ids = knowledge.data["file_ids"]
+```
+
+---
+
+## Architecture Decision Guidelines
+
+### **When to Use Namespace Isolation**
+- ✅ **Always** for Pinecone (multi-tenancy requirement)
+- ✅ Use human-readable prefixes: `{name}-{id}` instead of just `{id}`
+- ✅ For files in collections: `{collection-name}-file-{file-id}`
+- ❌ Not needed for Chroma, Qdrant, Milvus (they use collections)
+
+### **When to Use Background Tasks vs Async**
+- ✅ **Background Tasks**: Fire-and-forget operations (file processing, notifications)
+- ✅ **Async/Await**: Operations where response depends on result (data fetching)
+- ❌ Don't use async for CPU-bound tasks (use ThreadPoolExecutor)
+
+### **When to Use Caching**
+- ✅ Cloud storage files (especially large video/audio)
+- ✅ Expensive computations (embeddings, model inference)
+- ✅ Frequent database queries (with TTL)
+- ❌ Don't cache user-specific data globally
+- ❌ Don't cache without size limits (can exhaust disk/memory)
+
+### **When to Use Signed URLs vs Backend Proxying**
+- ✅ **Signed URLs**: Large files (video/audio), direct browser streaming
+- ✅ **Backend Proxy**: Small files, need request logging, transform data
+- ⚡ **Performance**: Signed URLs = 0 backend bandwidth, instant playback
+
+---
+
+## Common Task Patterns
+
+### **Pattern: Adding a New RAG Source**
+1. Create collection with namespace
+2. Insert vectors with proper metadata (including `file_id`)
+3. Always filter by `file_id` when querying
+4. Delete BOTH collection AND file namespaces on cleanup
+
+### **Pattern: Implementing Streaming API**
+1. Use `async def` for endpoint
+2. Create `aiohttp.ClientSession` in try block
+3. Check content-type for "text/event-stream"
+4. Return `StreamingResponse` with `BackgroundTask` for cleanup
+5. Use `finally` block to cleanup non-streaming responses
+
+### **Pattern: File Processing Pipeline**
+1. Upload to Storage (get file_path)
+2. Create file record in DB with `status: "pending"`
+3. Process in background task (or immediately)
+4. Update status to "completed" or "failed"
+5. Clean up temporary files
+
+### **Pattern: Access Control Check**
+1. Get resource by ID
+2. Check if resource exists (404 if not)
+3. Check ownership (resource.user_id == user.id)
+4. Check access control (has_access for shared resources)
+5. Check admin role (user.role == "admin")
+6. Raise 403 if all checks fail
+
+---
+
+## Remember
+
+1. **Think like a senior engineer** - consider edge cases, security, performance
+2. **Keep it simple** - don't over-engineer
+3. **Document complex logic** - help future maintainers
+4. **Test thoroughly** - we can't run tests locally, so be careful
+5. **Log everything important** - makes debugging easier
+6. **Handle errors gracefully** - don't expose internal details
+7. **Clean up resources** - prevent orphaned data (vectors, files, connections)
+8. **Follow existing patterns** - consistency is key
+9. **Performance matters** - but not at the cost of correctness
+10. **Security first** - always validate, never trust user input
+11. **Use namespaces** - prevent data contamination in Pinecone
+12. **Stream efficiently** - use Range Requests and signed URLs
+13. **Check cache first** - avoid redundant cloud downloads
+14. **Safe dict access** - always use .get() with defaults
+
+---
+
+**Last Updated**: 2025-01-12
+**Maintained By**: Open WebUI Development Team
+
