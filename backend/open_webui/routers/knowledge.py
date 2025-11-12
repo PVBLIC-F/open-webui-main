@@ -213,6 +213,7 @@ async def reindex_knowledge_files(request: Request, user=Depends(get_verified_us
             file_ids = knowledge_base.data.get("file_ids", [])
             files = Files.get_files_by_ids(file_ids)
             try:
+                # Delete main collection namespace
                 namespace = get_namespace_for_collection(knowledge_base.id)
                 if VECTOR_DB_CLIENT.has_collection(
                     collection_name=knowledge_base.id, namespace=namespace
@@ -221,6 +222,21 @@ async def reindex_knowledge_files(request: Request, user=Depends(get_verified_us
                         collection_name=knowledge_base.id,
                         namespace=namespace,
                     )
+                
+                # Delete individual file namespaces during reindex
+                if file_ids:
+                    log.info(f"Reindexing: Deleting {len(file_ids)} file namespaces for knowledge base {knowledge_base.id}")
+                    for file_id in file_ids:
+                        try:
+                            file_collection = f"file-{file_id}"
+                            file_namespace = get_namespace_for_collection(file_collection, parent_collection_name=knowledge_base.id)
+                            
+                            if VECTOR_DB_CLIENT.has_collection(collection_name=file_collection, namespace=file_namespace):
+                                VECTOR_DB_CLIENT.delete_collection(collection_name=file_collection, namespace=file_namespace)
+                                log.debug(f"Deleted file namespace: {file_namespace}")
+                        except Exception as file_error:
+                            log.error(f"Error deleting file namespace for {file_id}: {file_error}")
+                            
             except Exception as e:
                 log.error(f"Error deleting collection {knowledge_base.id}: {str(e)}")
                 continue  # Skip, don't raise
@@ -695,6 +711,7 @@ async def delete_knowledge_by_id(id: str, user=Depends(get_verified_user)):
 
     # Clean up vector DB
     try:
+        # Delete main collection namespace
         namespace = get_namespace_for_collection(id)
         log.info(f"Attempting to delete vector collection: {id}")
 
@@ -704,6 +721,28 @@ async def delete_knowledge_by_id(id: str, user=Depends(get_verified_user)):
             log.info(f"Successfully deleted vector collection: {id}")
         else:
             log.warning(f"Vector collection {id} does not exist, skipping deletion")
+
+        # Delete individual file namespaces
+        # Each file gets its own namespace (e.g., "fosd-file-abc123") for standalone access
+        file_ids = knowledge.data.get("file_ids", []) if knowledge.data else []
+        if file_ids:
+            log.info(f"Deleting {len(file_ids)} individual file namespaces for knowledge base {id}")
+            
+            for file_id in file_ids:
+                try:
+                    file_collection = f"file-{file_id}"
+                    # Use parent collection context to get correct namespace
+                    file_namespace = get_namespace_for_collection(file_collection, parent_collection_name=id)
+                    
+                    if VECTOR_DB_CLIENT.has_collection(collection_name=file_collection, namespace=file_namespace):
+                        VECTOR_DB_CLIENT.delete_collection(collection_name=file_collection, namespace=file_namespace)
+                        log.info(f"Deleted file namespace: {file_namespace}")
+                    else:
+                        log.debug(f"File namespace {file_namespace} does not exist, skipping")
+                        
+                except Exception as file_error:
+                    log.error(f"Error deleting file namespace for {file_id}: {file_error}")
+                    # Continue with other files even if one fails
 
     except Exception as e:
         log.error(f"Error deleting vector collection {id}: {e}")
@@ -738,6 +777,7 @@ async def reset_knowledge_by_id(id: str, user=Depends(get_verified_user)):
         )
 
     try:
+        # Delete main collection namespace
         namespace = get_namespace_for_collection(id)
         log.info(f"Attempting to reset vector collection: {id}")
 
@@ -747,6 +787,27 @@ async def reset_knowledge_by_id(id: str, user=Depends(get_verified_user)):
             log.info(f"Successfully reset vector collection: {id}")
         else:
             log.warning(f"Vector collection {id} does not exist, skipping reset")
+
+        # Delete individual file namespaces
+        file_ids = knowledge.data.get("file_ids", []) if knowledge.data else []
+        if file_ids:
+            log.info(f"Resetting {len(file_ids)} individual file namespaces for knowledge base {id}")
+            
+            for file_id in file_ids:
+                try:
+                    file_collection = f"file-{file_id}"
+                    # Use parent collection context to get correct namespace
+                    file_namespace = get_namespace_for_collection(file_collection, parent_collection_name=id)
+                    
+                    if VECTOR_DB_CLIENT.has_collection(collection_name=file_collection, namespace=file_namespace):
+                        VECTOR_DB_CLIENT.delete_collection(collection_name=file_collection, namespace=file_namespace)
+                        log.info(f"Deleted file namespace: {file_namespace}")
+                    else:
+                        log.debug(f"File namespace {file_namespace} does not exist, skipping")
+                        
+                except Exception as file_error:
+                    log.error(f"Error deleting file namespace for {file_id}: {file_error}")
+                    # Continue with other files even if one fails
 
     except Exception as e:
         log.error(f"Error resetting vector collection {id}: {e}")
