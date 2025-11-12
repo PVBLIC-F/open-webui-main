@@ -392,9 +392,9 @@ class ChatPDFGenerator:
                         ListFlowable(
                             list_items,
                             bulletType="bullet",
-                            leftIndent=20,
-                            spaceBefore=6,
-                            spaceAfter=6,
+                            leftIndent=15,
+                            spaceBefore=3,
+                            spaceAfter=3,
                         )
                     )
                 continue
@@ -420,9 +420,9 @@ class ChatPDFGenerator:
                         ListFlowable(
                             list_items,
                             bulletType="1",
-                            leftIndent=20,
-                            spaceBefore=6,
-                            spaceAfter=6,
+                            leftIndent=15,
+                            spaceBefore=3,
+                            spaceAfter=3,
                         )
                     )
                 continue
