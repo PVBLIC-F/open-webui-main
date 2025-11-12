@@ -78,8 +78,7 @@
 	};
 	let imageCompressionInChannels = true;
 
-	// chat export
-	let stylizedPdfExport = true;
+	// chat export (removed stylizedPdfExport - always uses professional backend PDF now)
 
 	// Admin - Show Update Available Toast
 	let showUpdateToast = true;
@@ -233,7 +232,7 @@
 		iframeSandboxAllowSameOrigin = $settings?.iframeSandboxAllowSameOrigin ?? false;
 		iframeSandboxAllowForms = $settings?.iframeSandboxAllowForms ?? false;
 
-		stylizedPdfExport = $settings?.stylizedPdfExport ?? true;
+		// stylizedPdfExport removed - always uses professional backend PDF now
 
 		hapticFeedback = $settings?.hapticFeedback ?? false;
 		ctrlEnterToSend = $settings?.ctrlEnterToSend ?? false;
@@ -882,24 +881,7 @@
 				</div>
 			</div>
 
-			<div>
-				<div class=" py-0.5 flex w-full justify-between">
-					<div id="stylized-pdf-export-label" class=" self-center text-xs">
-						{$i18n.t('Stylized PDF Export')}
-					</div>
-
-					<div class="flex items-center gap-2 p-1">
-						<Switch
-							ariaLabelledbyId="stylized-pdf-export-label"
-							tooltip={true}
-							bind:state={stylizedPdfExport}
-							on:change={() => {
-								saveSettings({ stylizedPdfExport });
-							}}
-						/>
-					</div>
-				</div>
-			</div>
+			<!-- Stylized PDF Export setting removed - always uses professional backend PDF now -->
 
 			<div>
 				<div class=" py-0.5 flex w-full justify-between">

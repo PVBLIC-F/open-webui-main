@@ -157,7 +157,7 @@ type Settings = {
 	expandDetails?: boolean;
 	notificationSound?: boolean;
 	notificationSoundAlways?: boolean;
-	stylizedPdfExport?: boolean;
+	// stylizedPdfExport removed - always uses professional backend PDF now
 	notifications?: any;
 	imageCompression?: boolean;
 	imageCompressionSize?: any;
