@@ -121,15 +121,15 @@ class ChatPDFGenerator:
         """
         styles = getSampleStyleSheet()
 
-        # Chat title
+        # Chat title (reduced spacing for compact layout)
         styles.add(
             ParagraphStyle(
                 name="ChatTitle",
                 parent=styles["Heading1"],
                 fontSize=18,
                 textColor=self.COLOR_HEADER,
-                spaceAfter=20,
-                spaceBefore=10,
+                spaceAfter=8,
+                spaceBefore=4,
                 alignment=TA_CENTER,
             )
         )
@@ -557,11 +557,11 @@ class ChatPDFGenerator:
                 bottomMargin=2.5 * cm,
             )
 
-            # Title page
+            # Title page (dramatically reduced spacing)
             self.story.append(
                 Paragraph(self.form_data.title, self.styles["ChatTitle"])
             )
-            self.story.append(Spacer(1, 0.5 * cm))
+            self.story.append(Spacer(1, 0.2 * cm))
 
             # Chat metadata
             metadata_text = f"<i>Exported on {datetime.now().strftime('%B %d, %Y at %H:%M')}</i>"
@@ -571,16 +571,16 @@ class ChatPDFGenerator:
                 fontSize=9,
                 textColor=HexColor("#666666"),
                 alignment=TA_CENTER,
-                spaceAfter=20,
+                spaceAfter=8,
             )
             self.story.append(Paragraph(metadata_text, metadata_style))
-            self.story.append(Spacer(1, 0.5 * cm))
+            self.story.append(Spacer(1, 0.1 * cm))
 
             # Message count
             msg_count = len(self.form_data.messages)
             count_text = f"<i>{msg_count} message{'s' if msg_count != 1 else ''}</i>"
             self.story.append(Paragraph(count_text, metadata_style))
-            self.story.append(Spacer(1, 1 * cm))
+            self.story.append(Spacer(1, 0.3 * cm))
 
             # Add all messages
             log.info(f"Generating PDF for chat '{self.form_data.title}' with {msg_count} messages")
