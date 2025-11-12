@@ -1,6 +1,7 @@
 import black
 import logging
 import markdown
+import re
 
 from open_webui.models.chats import ChatTitleMessagesForm
 from open_webui.config import DATA_DIR, ENABLE_ADMIN_EXPORT
