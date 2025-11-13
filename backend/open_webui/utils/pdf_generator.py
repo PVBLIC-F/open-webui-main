@@ -49,8 +49,10 @@ def _register_emoji_font():
         emoji_font_path = FONTS_DIR / "Twemoji.ttf"
         if emoji_font_path.exists():
             pdfmetrics.registerFont(TTFont("Twemoji", str(emoji_font_path)))
-            log.debug("Twemoji font registered for emoji support")
+            log.info("✅ Twemoji font registered for emoji support in PDF exports")
             return True
+        else:
+            log.warning(f"Twemoji font not found at {emoji_font_path}")
     except Exception as e:
         log.warning(f"Could not register Twemoji font: {e}")
     return False
@@ -801,8 +803,9 @@ class ChatPDFGenerator:
             header_style = self.styles["SystemHeader"]
             role_display = f"⚙️ {role.title()}"
 
-        # Message header
-        flowables.append(Paragraph(role_display, header_style))
+        # Message header (wrap emojis in role display)
+        role_display_with_emojis = self._wrap_emojis_with_font(role_display)
+        flowables.append(Paragraph(role_display_with_emojis, header_style))
 
         # Timestamp (if available)
         if timestamp:
@@ -863,8 +866,10 @@ class ChatPDFGenerator:
             )
 
             # Title page (dramatically reduced spacing)
+            # Wrap emojis in title for proper rendering
+            title_with_emojis = self._wrap_emojis_with_font(self.form_data.title)
             self.story.append(
-                Paragraph(self.form_data.title, self.styles["ChatTitle"])
+                Paragraph(title_with_emojis, self.styles["ChatTitle"])
             )
             self.story.append(Spacer(1, 0.2 * cm))
 
