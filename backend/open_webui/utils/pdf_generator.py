@@ -32,50 +32,14 @@ from reportlab.platypus import (
     Table,
     TableStyle,
 )
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
-
 from open_webui.models.chats import ChatTitleMessagesForm
-from open_webui.env import SRC_LOG_LEVELS, FONTS_DIR
+from open_webui.env import SRC_LOG_LEVELS
 
 log = logging.getLogger(__name__)
 log.setLevel(SRC_LOG_LEVELS["MAIN"])
 
 
-# Register emoji font for rendering emojis in PDFs
-def _register_emoji_font():
-    """
-    Register Symbola font for emoji support in PDFs.
-    
-    Symbola is a black & white outline font specifically designed for
-    Unicode characters including emojis. Works with ReportLab unlike
-    color emoji fonts (Twemoji, Noto Color Emoji).
-    """
-    try:
-        # Try Symbola first (best compatibility with ReportLab)
-        symbola_path = FONTS_DIR / "Symbola.ttf"
-        if symbola_path.exists():
-            pdfmetrics.registerFont(TTFont("Symbola", str(symbola_path)))
-            log.info(f"✅ Symbola emoji font registered for PDF exports (black & white outlines)")
-            return "Symbola"
-        
-        # Fallback to Twemoji (likely won't render, but try)
-        twemoji_path = FONTS_DIR / "Twemoji.ttf"
-        if twemoji_path.exists():
-            pdfmetrics.registerFont(TTFont("Twemoji", str(twemoji_path)))
-            log.warning(f"⚠️  Using Twemoji font (color font, may not render properly)")
-            return "Twemoji"
-        
-        log.warning(f"⚠️  No emoji font found (Symbola or Twemoji)")
-        return None
-            
-    except Exception as e:
-        log.error(f"❌ Could not register emoji font: {e}")
-    return None
-
-
-# Try to register emoji font (returns font name or None)
-_EMOJI_FONT = _register_emoji_font()
+# No emoji font registration needed - we remove emojis from PDFs for clean professional output
 
 
 class ChatDocTemplate(SimpleDocTemplate):
@@ -159,23 +123,20 @@ class ChatPDFGenerator:
         """
         styles = getSampleStyleSheet()
         
-        # Set default font with emoji fallback for all styles
-        default_font = "Helvetica"
-        emoji_fallback = [_EMOJI_FONT] if _EMOJI_FONT else []
+        # All styles use standard Helvetica fonts (emojis removed before rendering)
 
         # Chat title (reduced spacing for compact layout)
-        title_style = ParagraphStyle(
-            name="ChatTitle",
-            parent=styles["Heading1"],
-            fontSize=18,
-            textColor=self.COLOR_HEADER,
-            spaceAfter=8,
-            spaceBefore=4,
-            alignment=TA_CENTER,
+        styles.add(
+            ParagraphStyle(
+                name="ChatTitle",
+                parent=styles["Heading1"],
+                fontSize=18,
+                textColor=self.COLOR_HEADER,
+                spaceAfter=8,
+                spaceBefore=4,
+                alignment=TA_CENTER,
+            )
         )
-        if emoji_fallback:
-            title_style.fontName = default_font
-        styles.add(title_style)
 
         # Message role headers (reduced spacing for tighter layout)
         styles.add(
@@ -459,26 +420,21 @@ class ChatPDFGenerator:
             log.warning(f"Error parsing markdown table: {e}")
             return None, None
 
-    def _wrap_emojis_with_font(self, text: str) -> str:
+    def _remove_emojis(self, text: str) -> str:
         """
-        Wrap emoji characters with emoji font tag for proper rendering.
+        Remove emoji characters from text for clean PDF output.
         
-        Uses Symbola font (black & white outlines) which works with ReportLab,
-        unlike color emoji fonts (Twemoji, Noto Color Emoji).
+        Emojis don't render well in PDFs (require special fonts, often look
+        poor in print). Removing them creates cleaner, more professional
+        documents suitable for formal sharing and printing.
         
         Args:
             text: Text that may contain emojis
             
         Returns:
-            Text with emojis wrapped in <font name="Symbola"> tags
+            Text with emojis removed, extra whitespace cleaned
         """
-        if not _EMOJI_FONT:
-            return text
-        
-        original_text = text
-        
         # Emoji unicode ranges (common emojis used by LLMs)
-        # This regex matches most emoji characters
         emoji_pattern = re.compile(
             "["
             "\U0001F300-\U0001F9FF"  # Miscellaneous Symbols and Pictographs
@@ -494,13 +450,11 @@ class ChatPDFGenerator:
             flags=re.UNICODE
         )
         
-        # Wrap emojis with emoji font tag (Symbola or Twemoji)
-        text = emoji_pattern.sub(rf'<font name="{_EMOJI_FONT}">\g<0></font>', text)
+        # Remove emojis
+        text = emoji_pattern.sub('', text)
         
-        # Log if we wrapped any emojis (for debugging)
-        if text != original_text:
-            emojis_found = emoji_pattern.findall(original_text)
-            log.debug(f"Wrapped {len(emojis_found)} emoji(s) with {_EMOJI_FONT} font")
+        # Clean up extra whitespace left by emoji removal
+        text = re.sub(r'\s+', ' ', text).strip()
         
         return text
 
@@ -517,8 +471,8 @@ class ChatPDFGenerator:
         # Escape HTML first (security)
         text = self._escape_html(text)
         
-        # Wrap emojis with font tags for proper rendering
-        text = self._wrap_emojis_with_font(text)
+        # Remove emojis for clean PDF output
+        text = self._remove_emojis(text)
 
         # Inline code: `code` -> <font name="Courier">code</font>
         # Process first to avoid interference with bold/italic
@@ -825,9 +779,9 @@ class ChatPDFGenerator:
             header_style = self.styles["SystemHeader"]
             role_display = f"⚙️ {role.title()}"
 
-        # Message header (wrap emojis in role display)
-        role_display_with_emojis = self._wrap_emojis_with_font(role_display)
-        flowables.append(Paragraph(role_display_with_emojis, header_style))
+        # Message header (remove emojis for clean output)
+        clean_role_display = self._remove_emojis(role_display)
+        flowables.append(Paragraph(clean_role_display, header_style))
 
         # Timestamp (if available)
         if timestamp:
@@ -888,10 +842,10 @@ class ChatPDFGenerator:
             )
 
             # Title page (dramatically reduced spacing)
-            # Wrap emojis in title for proper rendering
-            title_with_emojis = self._wrap_emojis_with_font(self.form_data.title)
+            # Remove emojis from title for clean professional output
+            clean_title = self._remove_emojis(self.form_data.title)
             self.story.append(
-                Paragraph(title_with_emojis, self.styles["ChatTitle"])
+                Paragraph(clean_title, self.styles["ChatTitle"])
             )
             self.story.append(Spacer(1, 0.2 * cm))
 
