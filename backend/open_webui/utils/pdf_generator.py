@@ -428,6 +428,38 @@ class ChatPDFGenerator:
 
         return text
 
+    def _filter_reasoning_blocks(self, content: str) -> str:
+        """
+        Remove LLM reasoning blocks from content before PDF generation.
+        
+        Filters out <details type="reasoning"> blocks that show internal
+        LLM thinking process - users don't need to see this in PDFs.
+        
+        Args:
+            content: Message content with potential reasoning blocks
+            
+        Returns:
+            Content with reasoning blocks removed
+        """
+        # Remove <details type="reasoning">...</details> blocks
+        # Matches: <details ...>...</details> (non-greedy)
+        content = re.sub(
+            r'<details\s+type="reasoning"[^>]*>.*?</details>',
+            '',
+            content,
+            flags=re.DOTALL | re.IGNORECASE
+        )
+        
+        # Also remove any standalone reasoning summary tags
+        content = re.sub(
+            r'<summary>Thought for \d+ seconds?</summary>',
+            '',
+            content,
+            flags=re.IGNORECASE
+        )
+        
+        return content.strip()
+
     def _parse_markdown_to_flowables(self, content: str) -> List[Any]:
         """
         Parse markdown content into ReportLab flowables.
@@ -437,6 +469,7 @@ class ChatPDFGenerator:
         - Code blocks (```)
         - Lists (- or 1.)
         - Block quotes (>)
+        - Tables (| Header | Header |)
         - Paragraphs
 
         Args:
@@ -445,6 +478,9 @@ class ChatPDFGenerator:
         Returns:
             List of ReportLab flowables (Paragraph, Preformatted, etc.)
         """
+        # Filter out LLM reasoning blocks first
+        content = self._filter_reasoning_blocks(content)
+        
         flowables = []
         lines = content.split("\n")
         i = 0
