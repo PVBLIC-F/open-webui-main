@@ -127,10 +127,14 @@ async def download_chat_as_pdf(
             f"{elapsed:.2f}s"
         )
         
-        # Sanitize filename (remove special characters)
+        # Sanitize filename (remove special characters) and add timestamp
         safe_title = re.sub(r'[^\w\s-]', '', form_data.title)[:50]
         safe_title = safe_title.strip() or "chat"
-        filename = f"{safe_title}.pdf"
+        
+        # Add timestamp to make each export unique
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{safe_title}_{timestamp}.pdf"
 
         return Response(
             content=pdf_bytes,
