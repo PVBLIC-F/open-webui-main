@@ -75,14 +75,15 @@
 		try {
 			// Call backend API for professional PDF generation
 			const messages = createMessagesList(chat.chat.history, chat.chat.history.currentId);
-			const blob = await downloadChatAsPDF(
+			const result = await downloadChatAsPDF(
 				localStorage.token,
 				chat.chat.title,
 				messages
 			);
 
-			if (blob) {
-				saveAs(blob, `chat-${chat.chat.title}.pdf`);
+			if (result?.blob) {
+				// Use filename from backend (includes timestamp)
+				saveAs(result.blob, result.filename);
 			} else {
 				console.error('Failed to generate PDF');
 			}

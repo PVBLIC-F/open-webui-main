@@ -94,7 +94,7 @@ export const formatPythonCode = async (token: string, code: string) => {
 export const downloadChatAsPDF = async (token: string, title: string, messages: object[]) => {
 	let error = null;
 
-	const blob = await fetch(`${WEBUI_API_BASE_URL}/utils/pdf`, {
+	const result = await fetch(`${WEBUI_API_BASE_URL}/utils/pdf`, {
 		method: 'POST',
 		headers: {
 			'Content-Type': 'application/json',
@@ -107,7 +107,20 @@ export const downloadChatAsPDF = async (token: string, title: string, messages: 
 	})
 		.then(async (res) => {
 			if (!res.ok) throw await res.json();
-			return res.blob();
+			
+			// Extract filename from Content-Disposition header (includes timestamp)
+			const contentDisposition = res.headers.get('Content-Disposition');
+			let filename = `${title}.pdf`; // Default fallback
+			
+			if (contentDisposition) {
+				const matches = contentDisposition.match(/filename="?([^"]+)"?/);
+				if (matches && matches[1]) {
+					filename = matches[1];
+				}
+			}
+			
+			const blob = await res.blob();
+			return { blob, filename };
 		})
 		.catch((err) => {
 			console.error(err);
@@ -115,7 +128,7 @@ export const downloadChatAsPDF = async (token: string, title: string, messages: 
 			return null;
 		});
 
-	return blob;
+	return result;
 };
 
 export const getHTMLFromMarkdown = async (token: string, md: string) => {
