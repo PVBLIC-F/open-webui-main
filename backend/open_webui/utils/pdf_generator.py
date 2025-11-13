@@ -14,19 +14,17 @@ import re
 import logging
 from datetime import datetime
 from io import BytesIO
-from typing import Dict, Any, List, Tuple
-from html import unescape
+from typing import Dict, Any, List
 
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import cm, inch
-from reportlab.lib.colors import HexColor, black, white
-from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
+from reportlab.lib.units import cm
+from reportlab.lib.colors import HexColor, black
+from reportlab.lib.enums import TA_CENTER
 from reportlab.platypus import (
     SimpleDocTemplate,
     Paragraph,
     Spacer,
-    PageBreak,
     KeepTogether,
     Preformatted,
     ListFlowable,
@@ -34,7 +32,6 @@ from reportlab.platypus import (
     Table,
     TableStyle,
 )
-from reportlab.pdfgen import canvas
 
 from open_webui.models.chats import ChatTitleMessagesForm
 from open_webui.env import SRC_LOG_LEVELS
@@ -110,6 +107,7 @@ class ChatPDFGenerator:
         """
         self.form_data = form_data
         self.styles = self._create_styles()
+        self.table_style = self._get_table_style()  # Create once, reuse
         self.story = []  # ReportLab flowables
 
     def _create_styles(self) -> Dict[str, ParagraphStyle]:
@@ -242,7 +240,56 @@ class ChatPDFGenerator:
                 )
             )
 
+        # Metadata style (for title page)
+        styles.add(
+            ParagraphStyle(
+                name="Metadata",
+                parent=styles["Normal"],
+                fontSize=9,
+                textColor=HexColor("#666666"),
+                alignment=TA_CENTER,
+                spaceAfter=8,
+            )
+        )
+
         return styles
+
+    def _get_table_style(self) -> TableStyle:
+        """
+        Create professional table style.
+
+        Returns:
+            TableStyle for markdown tables
+        """
+        return TableStyle(
+            [
+                # Header row styling
+                ("BACKGROUND", (0, 0), (-1, 0), HexColor("#e8e8e8")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), HexColor("#1a1a1a")),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTSIZE", (0, 0), (-1, 0), 10),
+                ("BOTTOMPADDING", (0, 0), (-1, 0), 8),
+                # Data rows styling
+                ("BACKGROUND", (0, 1), (-1, -1), HexColor("#ffffff")),
+                ("TEXTCOLOR", (0, 1), (-1, -1), black),
+                ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
+                ("FONTSIZE", (0, 1), (-1, -1), 9),
+                # All cells
+                ("GRID", (0, 0), (-1, -1), 0.5, HexColor("#cccccc")),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 1), (-1, -1), 4),
+                # Zebra striping for readability
+                (
+                    "ROWBACKGROUNDS",
+                    (0, 1),
+                    (-1, -1),
+                    [HexColor("#ffffff"), HexColor("#f5f5f5")],
+                ),
+            ]
+        )
 
     def _format_timestamp(self, timestamp: float) -> str:
         """
@@ -275,6 +322,78 @@ class ChatPDFGenerator:
         text = text.replace("<", "&lt;")
         text = text.replace(">", "&gt;")
         return text
+
+    def _parse_markdown_table(
+        self, lines: List[str]
+    ) -> tuple[List[List[Paragraph]], List[str]]:
+        """
+        Parse markdown table into ReportLab Table data.
+
+        Args:
+            lines: Table lines from markdown
+
+        Returns:
+            Tuple of (table_data, alignments)
+            - table_data: 2D list of Paragraph objects for each cell
+            - alignments: List of 'LEFT', 'CENTER', 'RIGHT' for each column
+        """
+        if len(lines) < 2:
+            return None, None
+
+        try:
+            # Parse header row
+            header_cells = [cell.strip() for cell in lines[0].split("|")[1:-1]]
+            num_cols = len(header_cells)
+
+            # Parse separator row for alignment
+            separator_cells = [cell.strip() for cell in lines[1].split("|")[1:-1]]
+            alignments = []
+            for cell in separator_cells:
+                if cell.startswith(":") and cell.endswith(":"):
+                    alignments.append("CENTER")
+                elif cell.endswith(":"):
+                    alignments.append("RIGHT")
+                else:
+                    alignments.append("LEFT")
+
+            # Build table data with Paragraphs (supports markdown in cells)
+            table_data = []
+
+            # Header row (using list comprehension)
+            header_row = [
+                Paragraph(
+                    self._parse_markdown_inline(cell),
+                    self.styles["MessageContent"],
+                )
+                for cell in header_cells
+            ]
+            table_data.append(header_row)
+
+            # Data rows
+            for line in lines[2:]:
+                if "|" in line and line.strip():
+                    cells = [cell.strip() for cell in line.split("|")[1:-1]]
+
+                    # Normalize column count to match header
+                    while len(cells) < num_cols:
+                        cells.append("")  # Pad with empty cells
+                    cells = cells[:num_cols]  # Truncate if too many
+
+                    # Create row with Paragraph objects (using list comprehension)
+                    row = [
+                        Paragraph(
+                            self._parse_markdown_inline(cell),
+                            self.styles["MessageContent"],
+                        )
+                        for cell in cells
+                    ]
+                    table_data.append(row)
+
+            return table_data, alignments
+
+        except Exception as e:
+            log.warning(f"Error parsing markdown table: {e}")
+            return None, None
 
     def _parse_markdown_inline(self, text: str) -> str:
         """
@@ -447,6 +566,68 @@ class ChatPDFGenerator:
                     )
                 continue
 
+            # Table: | Header | Header |
+            if "|" in line and line.strip().startswith("|"):
+                table_lines = []
+
+                # Collect all table lines
+                while i < len(lines) and "|" in lines[i] and lines[i].strip():
+                    table_lines.append(lines[i])
+                    i += 1
+
+                # Need at least header + separator
+                if len(table_lines) >= 2:
+                    # Validate second line is separator row (contains dashes)
+                    separator = table_lines[1].strip()
+                    is_separator = all(c in "|-: " for c in separator)
+
+                    if not is_separator:
+                        # Not a valid table, treat as regular text
+                        for table_line in table_lines:
+                            flowables.append(
+                                Paragraph(
+                                    self._parse_markdown_inline(table_line),
+                                    self.styles["MessageContent"],
+                                )
+                            )
+                        continue
+
+                    try:
+                        # Parse table structure
+                        table_data, alignments = self._parse_markdown_table(table_lines)
+
+                        if table_data and len(table_data) > 0:
+                            # Create ReportLab Table
+                            table = Table(table_data, hAlign="LEFT")
+
+                            # Apply base table style (use cached)
+                            style_commands = list(self.table_style._cmds)
+
+                            # Apply column alignments if specified
+                            if alignments:
+                                for col_idx, align in enumerate(alignments):
+                                    # Apply to all rows in this column
+                                    style_commands.append(
+                                        ("ALIGN", (col_idx, 0), (col_idx, -1), align)
+                                    )
+
+                            table.setStyle(TableStyle(style_commands))
+                            flowables.append(table)
+                            flowables.append(Spacer(1, 0.3 * cm))
+
+                    except Exception as e:
+                        log.warning(f"Error rendering table: {e}")
+                        # Fallback: render as plain text
+                        for table_line in table_lines:
+                            flowables.append(
+                                Paragraph(
+                                    self._parse_markdown_inline(table_line),
+                                    self.styles["MessageContent"],
+                                )
+                            )
+
+                continue
+
             # Empty line
             if not line.strip():
                 # Very small spacer between paragraphs (reduced for tighter layout)
@@ -565,21 +746,13 @@ class ChatPDFGenerator:
 
             # Chat metadata
             metadata_text = f"<i>Exported on {datetime.now().strftime('%B %d, %Y at %H:%M')}</i>"
-            metadata_style = ParagraphStyle(
-                name="Metadata",
-                parent=self.styles["Normal"],
-                fontSize=9,
-                textColor=HexColor("#666666"),
-                alignment=TA_CENTER,
-                spaceAfter=8,
-            )
-            self.story.append(Paragraph(metadata_text, metadata_style))
+            self.story.append(Paragraph(metadata_text, self.styles["Metadata"]))
             self.story.append(Spacer(1, 0.1 * cm))
 
             # Message count
             msg_count = len(self.form_data.messages)
             count_text = f"<i>{msg_count} message{'s' if msg_count != 1 else ''}</i>"
-            self.story.append(Paragraph(count_text, metadata_style))
+            self.story.append(Paragraph(count_text, self.styles["Metadata"]))
             self.story.append(Spacer(1, 0.3 * cm))
 
             # Add all messages
