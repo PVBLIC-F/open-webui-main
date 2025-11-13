@@ -45,39 +45,37 @@ log.setLevel(SRC_LOG_LEVELS["MAIN"])
 # Register emoji font for rendering emojis in PDFs
 def _register_emoji_font():
     """
-    Register Twemoji font for emoji support in PDFs.
+    Register Symbola font for emoji support in PDFs.
     
-    Uses reportlab's font substitution to automatically use Twemoji
-    for emoji characters when Helvetica can't render them.
+    Symbola is a black & white outline font specifically designed for
+    Unicode characters including emojis. Works with ReportLab unlike
+    color emoji fonts (Twemoji, Noto Color Emoji).
     """
     try:
-        from reportlab.pdfbase.pdfmetrics import registerFontFamily
+        # Try Symbola first (best compatibility with ReportLab)
+        symbola_path = FONTS_DIR / "Symbola.ttf"
+        if symbola_path.exists():
+            pdfmetrics.registerFont(TTFont("Symbola", str(symbola_path)))
+            log.info(f"✅ Symbola emoji font registered for PDF exports (black & white outlines)")
+            return "Symbola"
         
-        emoji_font_path = FONTS_DIR / "Twemoji.ttf"
-        if emoji_font_path.exists():
-            # Register Twemoji font
-            pdfmetrics.registerFont(TTFont("Twemoji", str(emoji_font_path)))
+        # Fallback to Twemoji (likely won't render, but try)
+        twemoji_path = FONTS_DIR / "Twemoji.ttf"
+        if twemoji_path.exists():
+            pdfmetrics.registerFont(TTFont("Twemoji", str(twemoji_path)))
+            log.warning(f"⚠️  Using Twemoji font (color font, may not render properly)")
+            return "Twemoji"
+        
+        log.warning(f"⚠️  No emoji font found (Symbola or Twemoji)")
+        return None
             
-            # Register as a font family (allows it to be used as fallback)
-            registerFontFamily(
-                'Twemoji',
-                normal='Twemoji',
-                bold='Twemoji',
-                italic='Twemoji',
-                boldItalic='Twemoji'
-            )
-            
-            log.info(f"✅ Twemoji font registered for emoji support (path: {emoji_font_path})")
-            return True
-        else:
-            log.warning(f"⚠️  Twemoji font not found at {emoji_font_path}")
     except Exception as e:
-        log.error(f"❌ Could not register Twemoji font: {e}")
-    return False
+        log.error(f"❌ Could not register emoji font: {e}")
+    return None
 
 
-# Try to register emoji font (optional, degrades gracefully)
-_EMOJI_FONT_AVAILABLE = _register_emoji_font()
+# Try to register emoji font (returns font name or None)
+_EMOJI_FONT = _register_emoji_font()
 
 
 class ChatDocTemplate(SimpleDocTemplate):
@@ -468,16 +466,18 @@ class ChatPDFGenerator:
 
     def _wrap_emojis_with_font(self, text: str) -> str:
         """
-        Wrap emoji characters with Twemoji font tag for proper rendering.
+        Wrap emoji characters with emoji font tag for proper rendering.
+        
+        Uses Symbola font (black & white outlines) which works with ReportLab,
+        unlike color emoji fonts (Twemoji, Noto Color Emoji).
         
         Args:
             text: Text that may contain emojis
             
         Returns:
-            Text with emojis wrapped in <font name="Twemoji"> tags
+            Text with emojis wrapped in <font name="Symbola"> tags
         """
-        if not _EMOJI_FONT_AVAILABLE:
-            log.debug("Emoji font not available, skipping emoji wrapping")
+        if not _EMOJI_FONT:
             return text
         
         original_text = text
@@ -499,13 +499,13 @@ class ChatPDFGenerator:
             flags=re.UNICODE
         )
         
-        # Wrap emojis with Twemoji font tag
-        text = emoji_pattern.sub(r'<font name="Twemoji">\g<0></font>', text)
+        # Wrap emojis with emoji font tag (Symbola or Twemoji)
+        text = emoji_pattern.sub(rf'<font name="{_EMOJI_FONT}">\g<0></font>', text)
         
         # Log if we wrapped any emojis (for debugging)
         if text != original_text:
             emojis_found = emoji_pattern.findall(original_text)
-            log.info(f"Wrapped {len(emojis_found)} emoji(s) with Twemoji font: {emojis_found}")
+            log.debug(f"Wrapped {len(emojis_found)} emoji(s) with {_EMOJI_FONT} font")
         
         return text
 
