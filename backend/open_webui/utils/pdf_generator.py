@@ -133,24 +133,31 @@ class ChatPDFGenerator:
     def _create_styles(self) -> Dict[str, ParagraphStyle]:
         """
         Create professional paragraph styles.
+        
+        Includes emoji support via Twemoji font fallback.
 
         Returns:
             Dictionary of style name -> ParagraphStyle
         """
         styles = getSampleStyleSheet()
+        
+        # Set default font with emoji fallback for all styles
+        default_font = "Helvetica"
+        emoji_fallback = ["Twemoji"] if _EMOJI_FONT_AVAILABLE else []
 
         # Chat title (reduced spacing for compact layout)
-        styles.add(
-            ParagraphStyle(
-                name="ChatTitle",
-                parent=styles["Heading1"],
-                fontSize=18,
-                textColor=self.COLOR_HEADER,
-                spaceAfter=8,
-                spaceBefore=4,
-                alignment=TA_CENTER,
-            )
+        title_style = ParagraphStyle(
+            name="ChatTitle",
+            parent=styles["Heading1"],
+            fontSize=18,
+            textColor=self.COLOR_HEADER,
+            spaceAfter=8,
+            spaceBefore=4,
+            alignment=TA_CENTER,
         )
+        if emoji_fallback:
+            title_style.fontName = default_font
+        styles.add(title_style)
 
         # Message role headers (reduced spacing for tighter layout)
         styles.add(
@@ -189,16 +196,31 @@ class ChatPDFGenerator:
             )
         )
 
-        # Message content (tighter spacing)
+        # Message content (tighter spacing, with emoji support)
+        content_style = ParagraphStyle(
+            name="MessageContent",
+            parent=styles["Normal"],
+            fontSize=10,
+            textColor=black,
+            leftIndent=10,
+            spaceAfter=6,
+            leading=13,  # Line height
+        )
+        # Add emoji font fallback if available
+        if _EMOJI_FONT_AVAILABLE:
+            # This allows emojis to render properly
+            # ReportLab will use Helvetica for regular text, Twemoji for emojis
+            pass  # Note: ReportLab handles font fallback differently
+        styles.add(content_style)
+        
+        # Table cell content (smaller font for compact tables)
         styles.add(
             ParagraphStyle(
-                name="MessageContent",
+                name="TableCell",
                 parent=styles["Normal"],
-                fontSize=10,
+                fontSize=8,  # Smaller than regular content
                 textColor=black,
-                leftIndent=10,
-                spaceAfter=6,
-                leading=13,  # Line height
+                leading=10,  # Tighter line height
             )
         )
 
@@ -388,11 +410,11 @@ class ChatPDFGenerator:
             # Build table data with Paragraphs (supports markdown in cells)
             table_data = []
 
-            # Header row (using list comprehension)
+            # Header row (use TableCell style for smaller, compact text)
             header_row = [
                 Paragraph(
                     self._parse_markdown_inline(cell),
-                    self.styles["MessageContent"],
+                    self.styles["TableCell"],  # Smaller font for tables
                 )
                 for cell in header_cells
             ]
@@ -408,11 +430,11 @@ class ChatPDFGenerator:
                         cells.append("")  # Pad with empty cells
                     cells = cells[:num_cols]  # Truncate if too many
 
-                    # Create row with Paragraph objects (using list comprehension)
+                    # Create row with Paragraph objects (use TableCell style for smaller font)
                     row = [
                         Paragraph(
                             self._parse_markdown_inline(cell),
-                            self.styles["MessageContent"],
+                            self.styles["TableCell"],  # Smaller font for compact tables
                         )
                         for cell in cells
                     ]
@@ -424,6 +446,40 @@ class ChatPDFGenerator:
             log.warning(f"Error parsing markdown table: {e}")
             return None, None
 
+    def _wrap_emojis_with_font(self, text: str) -> str:
+        """
+        Wrap emoji characters with Twemoji font tag for proper rendering.
+        
+        Args:
+            text: Text that may contain emojis
+            
+        Returns:
+            Text with emojis wrapped in <font name="Twemoji"> tags
+        """
+        if not _EMOJI_FONT_AVAILABLE:
+            return text
+        
+        # Emoji unicode ranges (common emojis used by LLMs)
+        # This regex matches most emoji characters
+        emoji_pattern = re.compile(
+            "["
+            "\U0001F300-\U0001F9FF"  # Miscellaneous Symbols and Pictographs
+            "\U0001FA00-\U0001FAFF"  # Symbols and Pictographs Extended-A
+            "\U00002600-\U000027BF"  # Miscellaneous Symbols
+            "\U0001F900-\U0001F9FF"  # Supplemental Symbols and Pictographs
+            "\U00002700-\U000027BF"  # Dingbats
+            "\U0001F600-\U0001F64F"  # Emoticons
+            "\U0001F680-\U0001F6FF"  # Transport and Map
+            "\U00002600-\U000026FF"  # Miscellaneous symbols
+            "\U0001F1E0-\U0001F1FF"  # Flags
+            "]+",
+            flags=re.UNICODE
+        )
+        
+        # Wrap emojis with Twemoji font tag
+        text = emoji_pattern.sub(r'<font name="Twemoji">\g<0></font>', text)
+        return text
+
     def _parse_markdown_inline(self, text: str) -> str:
         """
         Parse inline markdown (bold, italic, inline code) to ReportLab XML.
@@ -432,10 +488,13 @@ class ChatPDFGenerator:
             text: Markdown text
 
         Returns:
-            ReportLab-compatible XML string
+            ReportLab-compatible XML string with emoji support
         """
         # Escape HTML first (security)
         text = self._escape_html(text)
+        
+        # Wrap emojis with font tags for proper rendering
+        text = self._wrap_emojis_with_font(text)
 
         # Inline code: `code` -> <font name="Courier">code</font>
         # Process first to avoid interference with bold/italic
