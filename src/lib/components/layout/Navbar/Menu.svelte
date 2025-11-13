@@ -6,7 +6,7 @@
 	import fileSaver from 'file-saver';
 	const { saveAs } = fileSaver;
 
-	import { downloadChatAsPDF } from '$lib/apis/utils';
+	import { downloadChatAsPDF, downloadChatAsWord } from '$lib/apis/utils';
 	import { copyToClipboard, createMessagesList } from '$lib/utils';
 
 	import {
@@ -89,6 +89,27 @@
 			}
 		} catch (error) {
 			console.error('Error generating PDF:', error);
+		}
+	};
+
+	const downloadWord = async () => {
+		try {
+			// Call backend API for professional Word generation
+			const messages = createMessagesList(chat.chat.history, chat.chat.history.currentId);
+			const result = await downloadChatAsWord(
+				localStorage.token,
+				chat.chat.title,
+				messages
+			);
+
+			if (result?.blob) {
+				// Use filename from backend (includes timestamp)
+				saveAs(result.blob, result.filename);
+			} else {
+				console.error('Failed to generate Word document');
+			}
+		} catch (error) {
+			console.error('Error generating Word document:', error);
 		}
 	};
 
@@ -255,6 +276,15 @@
 						}}
 					>
 						<div class="flex items-center line-clamp-1">{$i18n.t('PDF document (.pdf)')}</div>
+					</DropdownMenu.Item>
+
+					<DropdownMenu.Item
+						class="flex gap-2 items-center px-3 py-1.5 text-sm cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800 rounded-xl select-none w-full"
+						on:click={() => {
+							downloadWord();
+						}}
+					>
+						<div class="flex items-center line-clamp-1">{$i18n.t('Word document (.docx)')}</div>
 					</DropdownMenu.Item>
 				</DropdownMenu.SubContent>
 			</DropdownMenu.Sub>
