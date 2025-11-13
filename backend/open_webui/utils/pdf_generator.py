@@ -161,7 +161,7 @@ class ChatPDFGenerator:
         
         # Set default font with emoji fallback for all styles
         default_font = "Helvetica"
-        emoji_fallback = ["Twemoji"] if _EMOJI_FONT_AVAILABLE else []
+        emoji_fallback = [_EMOJI_FONT] if _EMOJI_FONT else []
 
         # Chat title (reduced spacing for compact layout)
         title_style = ParagraphStyle(
@@ -224,11 +224,6 @@ class ChatPDFGenerator:
             spaceAfter=6,
             leading=13,  # Line height
         )
-        # Add emoji font fallback if available
-        if _EMOJI_FONT_AVAILABLE:
-            # This allows emojis to render properly
-            # ReportLab will use Helvetica for regular text, Twemoji for emojis
-            pass  # Note: ReportLab handles font fallback differently
         styles.add(content_style)
         
         # Table cell content (smaller font for compact tables)
