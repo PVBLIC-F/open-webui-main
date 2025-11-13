@@ -44,17 +44,35 @@ log.setLevel(SRC_LOG_LEVELS["MAIN"])
 
 # Register emoji font for rendering emojis in PDFs
 def _register_emoji_font():
-    """Register Twemoji font for emoji support in PDFs."""
+    """
+    Register Twemoji font for emoji support in PDFs.
+    
+    Uses reportlab's font substitution to automatically use Twemoji
+    for emoji characters when Helvetica can't render them.
+    """
     try:
+        from reportlab.pdfbase.pdfmetrics import registerFontFamily
+        
         emoji_font_path = FONTS_DIR / "Twemoji.ttf"
         if emoji_font_path.exists():
+            # Register Twemoji font
             pdfmetrics.registerFont(TTFont("Twemoji", str(emoji_font_path)))
-            log.info("✅ Twemoji font registered for emoji support in PDF exports")
+            
+            # Register as a font family (allows it to be used as fallback)
+            registerFontFamily(
+                'Twemoji',
+                normal='Twemoji',
+                bold='Twemoji',
+                italic='Twemoji',
+                boldItalic='Twemoji'
+            )
+            
+            log.info(f"✅ Twemoji font registered for emoji support (path: {emoji_font_path})")
             return True
         else:
-            log.warning(f"Twemoji font not found at {emoji_font_path}")
+            log.warning(f"⚠️  Twemoji font not found at {emoji_font_path}")
     except Exception as e:
-        log.warning(f"Could not register Twemoji font: {e}")
+        log.error(f"❌ Could not register Twemoji font: {e}")
     return False
 
 
@@ -459,7 +477,10 @@ class ChatPDFGenerator:
             Text with emojis wrapped in <font name="Twemoji"> tags
         """
         if not _EMOJI_FONT_AVAILABLE:
+            log.debug("Emoji font not available, skipping emoji wrapping")
             return text
+        
+        original_text = text
         
         # Emoji unicode ranges (common emojis used by LLMs)
         # This regex matches most emoji characters
@@ -480,6 +501,12 @@ class ChatPDFGenerator:
         
         # Wrap emojis with Twemoji font tag
         text = emoji_pattern.sub(r'<font name="Twemoji">\g<0></font>', text)
+        
+        # Log if we wrapped any emojis (for debugging)
+        if text != original_text:
+            emojis_found = emoji_pattern.findall(original_text)
+            log.info(f"Wrapped {len(emojis_found)} emoji(s) with Twemoji font: {emojis_found}")
+        
         return text
 
     def _parse_markdown_inline(self, text: str) -> str:
