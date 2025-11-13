@@ -32,12 +32,32 @@ from reportlab.platypus import (
     Table,
     TableStyle,
 )
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 
 from open_webui.models.chats import ChatTitleMessagesForm
-from open_webui.env import SRC_LOG_LEVELS
+from open_webui.env import SRC_LOG_LEVELS, FONTS_DIR
 
 log = logging.getLogger(__name__)
 log.setLevel(SRC_LOG_LEVELS["MAIN"])
+
+
+# Register emoji font for rendering emojis in PDFs
+def _register_emoji_font():
+    """Register Twemoji font for emoji support in PDFs."""
+    try:
+        emoji_font_path = FONTS_DIR / "Twemoji.ttf"
+        if emoji_font_path.exists():
+            pdfmetrics.registerFont(TTFont("Twemoji", str(emoji_font_path)))
+            log.debug("Twemoji font registered for emoji support")
+            return True
+    except Exception as e:
+        log.warning(f"Could not register Twemoji font: {e}")
+    return False
+
+
+# Try to register emoji font (optional, degrades gracefully)
+_EMOJI_FONT_AVAILABLE = _register_emoji_font()
 
 
 class ChatDocTemplate(SimpleDocTemplate):
@@ -310,14 +330,23 @@ class ChatPDFGenerator:
     def _escape_html(self, text: str) -> str:
         """
         Escape HTML entities in text while preserving structure.
+        
+        First unescapes any existing HTML entities (from LLM responses),
+        then re-escapes for XML safety.
 
         Args:
-            text: Raw text
+            text: Raw text (may contain HTML entities)
 
         Returns:
-            HTML-escaped text safe for ReportLab
+            XML-escaped text safe for ReportLab
         """
-        # ReportLab uses XML-like syntax, so escape these
+        from html import unescape
+        
+        # First unescape any existing HTML entities (e.g., &gt; → >)
+        # This handles cases where LLM responses already contain HTML entities
+        text = unescape(text)
+        
+        # Then escape for XML/ReportLab safety
         text = text.replace("&", "&amp;")
         text = text.replace("<", "&lt;")
         text = text.replace(">", "&gt;")
