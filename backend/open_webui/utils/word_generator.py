@@ -58,10 +58,10 @@ class ChatWordGenerator:
     COLOR_TIMESTAMP = RGBColor(128, 128, 128)  # Gray
     COLOR_WHITE = RGBColor(255, 255, 255)  # White
 
-    # Spacing constants (in points)
-    SPACING_SMALL = Pt(3)
-    SPACING_MEDIUM = Pt(6)
-    SPACING_LARGE = Pt(12)
+    # Spacing constants (in points) - reduced for tighter layout
+    SPACING_SMALL = Pt(2)
+    SPACING_MEDIUM = Pt(4)
+    SPACING_LARGE = Pt(6)
 
     # Font sizes (in points)
     FONT_SIZE_CODE = Pt(9)
@@ -107,6 +107,7 @@ class ChatWordGenerator:
         flags=re.UNICODE,
     )
     _REGEX_WHITESPACE = re.compile(r"\s+")
+    _REGEX_HORIZONTAL_RULE = re.compile(r"^[\s]*[-]{3,}[\s]*$")
 
     def __init__(self, form_data: ChatTitleMessagesForm):
         """
@@ -405,6 +406,11 @@ class ChatWordGenerator:
         while i < len(lines):
             line = lines[i]
 
+            # Horizontal rule: --- (skip these)
+            if self._REGEX_HORIZONTAL_RULE.match(line):
+                i += 1
+                continue
+
             # Code block: ``` ... ```
             if line.strip().startswith("```"):
                 code_lines = []
@@ -429,8 +435,8 @@ class ChatWordGenerator:
 
                     # Set paragraph formatting
                     p.paragraph_format.left_indent = self.INDENT_CODE
-                    p.paragraph_format.space_before = self.SPACING_MEDIUM
-                    p.paragraph_format.space_after = self.SPACING_MEDIUM
+                    p.paragraph_format.space_before = self.SPACING_SMALL
+                    p.paragraph_format.space_after = self.SPACING_SMALL
 
                 i += 1  # Skip closing ```
                 continue
@@ -509,8 +515,8 @@ class ChatWordGenerator:
                     quote_text = " ".join(quote_lines)
                     p = self.doc.add_paragraph()
                     p.paragraph_format.left_indent = self.INDENT_QUOTE
-                    p.paragraph_format.space_before = self.SPACING_MEDIUM
-                    p.paragraph_format.space_after = self.SPACING_MEDIUM
+                    p.paragraph_format.space_before = self.SPACING_SMALL
+                    p.paragraph_format.space_after = self.SPACING_SMALL
 
                     # Add italic formatted text
                     runs = self._parse_markdown_inline(quote_text)
@@ -587,8 +593,8 @@ class ChatWordGenerator:
                                         cell_shading.set(qn("w:fill"), self.TABLE_HEADER_BG)
                                         cell_para._element.get_or_add_pPr().append(cell_shading)
 
-                            # Add spacing after table
-                            self._add_spacing_paragraph(self.SPACING_MEDIUM)
+                            # Add minimal spacing after table
+                            self._add_spacing_paragraph(self.SPACING_SMALL)
 
                     except Exception as e:
                         log.warning(f"Error rendering table: {e}")
@@ -601,9 +607,8 @@ class ChatWordGenerator:
 
                 continue
 
-            # Empty line
+            # Empty line (skip to reduce spacing)
             if not line.strip():
-                self._add_spacing_paragraph()
                 i += 1
                 continue
 
@@ -673,8 +678,8 @@ class ChatWordGenerator:
         # Parse markdown content
         self._parse_markdown_to_paragraphs(content)
 
-        # Add spacing after message
-        self._add_spacing_paragraph(self.SPACING_LARGE)
+        # Add minimal spacing after message
+        self._add_spacing_paragraph(self.SPACING_MEDIUM)
 
     def generate_chat_docx(self) -> bytes:
         """
@@ -690,7 +695,7 @@ class ChatWordGenerator:
             title.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
             # Add spacing
-            self._add_spacing_paragraph(self.SPACING_MEDIUM)
+            self._add_spacing_paragraph(self.SPACING_SMALL)
 
             # Chat metadata
             metadata_text = f"Exported on {datetime.now().strftime('%B %d, %Y at %H:%M')}"
@@ -712,7 +717,7 @@ class ChatWordGenerator:
             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
             # Add spacing
-            self._add_spacing_paragraph(self.SPACING_LARGE)
+            self._add_spacing_paragraph(self.SPACING_MEDIUM)
 
             # Add all messages
             log.info(f"Generating Word doc for chat '{self.form_data.title}' with {msg_count} messages")
