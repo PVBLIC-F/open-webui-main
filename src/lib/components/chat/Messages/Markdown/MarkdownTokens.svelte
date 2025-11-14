@@ -48,9 +48,7 @@
 		return 'h' + depth;
 	};
 
-	const exportTableToCSVHandler = (token, tokenIdx = 0) => {
-		console.log('Exporting table to CSV');
-
+	const tableToCSV = (token) => {
 		// Extract header row text and escape for CSV.
 		const header = token.header.map((headerCell) => `"${headerCell.text.replace(/"/g, '""')}"`);
 
@@ -68,10 +66,15 @@
 		const csvData = [header, ...rows];
 
 		// Join the rows using commas (,) as the separator and rows using newline (\n).
-		const csvContent = csvData.map((row) => row.join(',')).join('\n');
+		return csvData.map((row) => row.join(',')).join('\n');
+	};
 
-		// Log rows and CSV content to ensure everything is correct.
-		console.log(csvData);
+	const exportTableToCSVHandler = (token, tokenIdx = 0) => {
+		console.log('Exporting table to CSV');
+
+		const csvContent = tableToCSV(token);
+
+		// Log CSV content to ensure everything is correct.
 		console.log(csvContent);
 
 		// To handle Unicode characters, you need to prefix the data with a BOM:
@@ -82,6 +85,19 @@
 
 		// Use FileSaver.js's saveAs function to save the generated CSV file.
 		saveAs(blob, `table-${id}-${tokenIdx}.csv`);
+	};
+
+	// Trigger artifact panel for tables (like CSV code blocks)
+	const handleTableMount = (node, { token }) => {
+		// Convert table to CSV and trigger artifact panel (similar to CodeBlock pattern)
+		const csvContent = tableToCSV(token);
+		onUpdate({ lang: 'csv', text: csvContent });
+
+		return {
+			destroy() {
+				// Cleanup if needed
+			}
+		};
 	};
 </script>
 
@@ -125,7 +141,7 @@
 			{token.text}
 		{/if}
 	{:else if token.type === 'table'}
-		<div class="relative w-full group mb-2">
+		<div class="relative w-full group mb-2" use:handleTableMount={{ token }}>
 			<div class="scrollbar-hidden relative overflow-x-auto max-w-full">
 				<table
 					class=" w-full text-sm text-left text-gray-500 dark:text-gray-400 max-w-full rounded-xl"
