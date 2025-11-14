@@ -886,10 +886,14 @@
                     `;
 					contents = [...contents, { type: 'iframe', content: renderedContent }];
 				} else {
-					// Check for SVG content
+					// Check for SVG, CSV, and JSON content
 					for (const block of codeBlocks) {
 						if (block.lang === 'svg' || (block.lang === 'xml' && block.code.includes('<svg'))) {
 							contents = [...contents, { type: 'svg', content: block.code }];
+						} else if (block.lang === 'csv') {
+							contents = [...contents, { type: 'csv', content: block.code }];
+						} else if (block.lang === 'json') {
+							contents = [...contents, { type: 'json', content: block.code }];
 						}
 					}
 				}
