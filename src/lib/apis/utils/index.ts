@@ -171,6 +171,52 @@ export const downloadChatAsWord = async (token: string, title: string, messages:
 	return result;
 };
 
+export const exportArtifactToExcel = async (
+	token: string,
+	artifactType: string,
+	content: string,
+	filename: string = 'data.xlsx'
+) => {
+	let error = null;
+
+	const result = await fetch(`${WEBUI_API_BASE_URL}/utils/artifacts/export-excel`, {
+		method: 'POST',
+		headers: {
+			'Content-Type': 'application/json',
+			Authorization: `Bearer ${token}`
+		},
+		body: JSON.stringify({
+			artifact_type: artifactType,
+			content: content,
+			filename: filename
+		})
+	})
+		.then(async (res) => {
+			if (!res.ok) throw await res.json();
+
+			// Extract filename from Content-Disposition header
+			const contentDisposition = res.headers.get('Content-Disposition');
+			let finalFilename = filename;
+
+			if (contentDisposition) {
+				const matches = contentDisposition.match(/filename="?([^"]+)"?/);
+				if (matches && matches[1]) {
+					finalFilename = matches[1];
+				}
+			}
+
+			const blob = await res.blob();
+			return { blob, filename: finalFilename };
+		})
+		.catch((err) => {
+			console.error(err);
+			error = err;
+			return null;
+		});
+
+	return result;
+};
+
 export const getHTMLFromMarkdown = async (token: string, md: string) => {
 	let error = null;
 

@@ -13,6 +13,8 @@
 		artifactContents
 	} from '$lib/stores';
 	import { copyToClipboard, createMessagesList } from '$lib/utils';
+	import { exportArtifactToExcel } from '$lib/apis/utils';
+	import { saveAs } from 'file-saver';
 
 	import XMark from '../icons/XMark.svelte';
 	import ArrowsPointingOut from '../icons/ArrowsPointingOut.svelte';
@@ -77,16 +79,163 @@
 		}
 	};
 
+	const parseCsvToTable = (csvContent: string): { headers: string[]; rows: string[][] } | null => {
+		try {
+			const lines = csvContent.trim().split('\n');
+			if (lines.length === 0) return null;
+
+			// Parse CSV (simple implementation, handles basic cases)
+			const parseRow = (line: string): string[] => {
+				const result = [];
+				let current = '';
+				let inQuotes = false;
+
+				for (let i = 0; i < line.length; i++) {
+					const char = line[i];
+					if (char === '"') {
+						if (inQuotes && line[i + 1] === '"') {
+							current += '"';
+							i++; // Skip next quote
+						} else {
+							inQuotes = !inQuotes;
+						}
+					} else if (char === ',' && !inQuotes) {
+						result.push(current.trim());
+						current = '';
+					} else {
+						current += char;
+					}
+				}
+				result.push(current.trim());
+				return result;
+			};
+
+			const headers = parseRow(lines[0]);
+			const rows = lines.slice(1).map(parseRow);
+
+			return { headers, rows };
+		} catch (e) {
+			console.error('Error parsing CSV:', e);
+			return null;
+		}
+	};
+
+	const parseJsonToTable = (
+		jsonContent: string
+	): { headers: string[]; rows: string[][] } | null => {
+		try {
+			const data = JSON.parse(jsonContent);
+			if (!Array.isArray(data) || data.length === 0) {
+				return null;
+			}
+
+			const headers = Object.keys(data[0]);
+			const rows = data.map((row) => headers.map((header) => String(row[header] ?? '')));
+
+			return { headers, rows };
+		} catch (e) {
+			console.error('Error parsing JSON:', e);
+			return null;
+		}
+	};
+
+	const convertJsonToCsv = (jsonContent: string): string => {
+		try {
+			const data = JSON.parse(jsonContent);
+			if (!Array.isArray(data) || data.length === 0) {
+				return jsonContent; // Fallback to raw content
+			}
+
+			// Extract headers from first object
+			const headers = Object.keys(data[0]);
+			const csvRows = [];
+
+			// Add header row
+			csvRows.push(headers.join(','));
+
+			// Add data rows
+			for (const row of data) {
+				const values = headers.map((header) => {
+					const value = row[header];
+					// Escape quotes and wrap in quotes if contains comma/quote/newline
+					const stringValue = String(value ?? '');
+					if (stringValue.includes(',') || stringValue.includes('"') || stringValue.includes('\n')) {
+						return `"${stringValue.replace(/"/g, '""')}"`;
+					}
+					return stringValue;
+				});
+				csvRows.push(values.join(','));
+			}
+
+			return csvRows.join('\n');
+		} catch (e) {
+			console.error('Error converting JSON to CSV:', e);
+			return jsonContent; // Fallback to raw content
+		}
+	};
+
 	const downloadArtifact = () => {
-		const blob = new Blob([contents[selectedContentIdx].content], { type: 'text/html' });
+		const artifact = contents[selectedContentIdx];
+		let blob: Blob;
+		let filename: string;
+
+		if (artifact.type === 'csv') {
+			blob = new Blob([artifact.content], { type: 'text/csv' });
+			filename = `data-${$chatId}-${selectedContentIdx}.csv`;
+		} else if (artifact.type === 'json') {
+			// Option 1: Download as JSON
+			blob = new Blob([artifact.content], { type: 'application/json' });
+			filename = `data-${$chatId}-${selectedContentIdx}.json`;
+			
+			// Option 2: Convert to CSV (uncomment to use)
+			// const csvContent = convertJsonToCsv(artifact.content);
+			// blob = new Blob([csvContent], { type: 'text/csv' });
+			// filename = `data-${$chatId}-${selectedContentIdx}.csv`;
+		} else if (artifact.type === 'svg') {
+			blob = new Blob([artifact.content], { type: 'image/svg+xml' });
+			filename = `artifact-${$chatId}-${selectedContentIdx}.svg`;
+		} else {
+			// Default: HTML/iframe
+			blob = new Blob([artifact.content], { type: 'text/html' });
+			filename = `artifact-${$chatId}-${selectedContentIdx}.html`;
+		}
+
 		const url = URL.createObjectURL(blob);
 		const a = document.createElement('a');
 		a.href = url;
-		a.download = `artifact-${$chatId}-${selectedContentIdx}.html`;
+		a.download = filename;
 		document.body.appendChild(a);
 		a.click();
 		document.body.removeChild(a);
 		URL.revokeObjectURL(url);
+	};
+
+	const downloadAsExcel = async () => {
+		const artifact = contents[selectedContentIdx];
+		
+		if (!['csv', 'json'].includes(artifact.type)) {
+			toast.error($i18n.t('Only CSV and JSON artifacts can be exported to Excel'));
+			return;
+		}
+
+		try {
+			const result = await exportArtifactToExcel(
+				localStorage.token,
+				artifact.type,
+				artifact.content,
+				`data-${$chatId}-${selectedContentIdx}.xlsx`
+			);
+
+			if (result?.blob) {
+				saveAs(result.blob, result.filename);
+				toast.success($i18n.t('Excel file downloaded successfully'));
+			} else {
+				toast.error($i18n.t('Failed to generate Excel file'));
+			}
+		} catch (error) {
+			console.error('Error exporting to Excel:', error);
+			toast.error($i18n.t('Error exporting to Excel'));
+		}
 	};
 
 	onMount(() => {
@@ -187,16 +336,27 @@
 							}}>{copied ? $i18n.t('Copied') : $i18n.t('Copy')}</button
 						>
 
-						<Tooltip content={$i18n.t('Download')}>
+					<Tooltip content={$i18n.t('Download')}>
+						<button
+							class=" bg-none border-none text-xs bg-gray-50 hover:bg-gray-100 dark:bg-gray-850 dark:hover:bg-gray-800 transition rounded-md p-0.5"
+							on:click={downloadArtifact}
+						>
+							<Download className="size-3.5" />
+						</button>
+					</Tooltip>
+
+					{#if ['csv', 'json'].includes(contents[selectedContentIdx].type)}
+						<Tooltip content={$i18n.t('Export to Excel')}>
 							<button
-								class=" bg-none border-none text-xs bg-gray-50 hover:bg-gray-100 dark:bg-gray-850 dark:hover:bg-gray-800 transition rounded-md p-0.5"
-								on:click={downloadArtifact}
+								class=" bg-none border-none text-xs bg-gray-50 hover:bg-gray-100 dark:bg-gray-850 dark:hover:bg-gray-800 transition rounded-md px-1.5 py-0.5 font-medium"
+								on:click={downloadAsExcel}
 							>
-								<Download className="size-3.5" />
+								📊 Excel
 							</button>
 						</Tooltip>
+					{/if}
 
-						{#if contents[selectedContentIdx].type === 'iframe'}
+					{#if contents[selectedContentIdx].type === 'iframe'}
 							<Tooltip content={$i18n.t('Open in full screen')}>
 								<button
 									class=" bg-none border-none text-xs bg-gray-50 hover:bg-gray-100 dark:bg-gray-850 dark:hover:bg-gray-800 transition rounded-md p-0.5"
@@ -248,6 +408,80 @@
 								className=" w-full h-full max-h-full overflow-hidden"
 								svg={contents[selectedContentIdx].content}
 							/>
+						{:else if contents[selectedContentIdx].type === 'csv'}
+							{@const tableData = parseCsvToTable(contents[selectedContentIdx].content)}
+							{#if tableData}
+								<div class="overflow-auto h-full p-4 bg-white dark:bg-gray-850">
+									<table
+										class="min-w-full border-collapse border border-gray-300 dark:border-gray-700 text-sm"
+									>
+										<thead>
+											<tr class="bg-gray-100 dark:bg-gray-800">
+												{#each tableData.headers as header}
+													<th
+														class="border border-gray-300 dark:border-gray-700 px-4 py-2 text-left font-semibold"
+													>
+														{header}
+													</th>
+												{/each}
+											</tr>
+										</thead>
+										<tbody>
+											{#each tableData.rows as row}
+												<tr class="hover:bg-gray-50 dark:hover:bg-gray-800/50">
+													{#each row as cell}
+														<td class="border border-gray-300 dark:border-gray-700 px-4 py-2">
+															{cell}
+														</td>
+													{/each}
+												</tr>
+											{/each}
+										</tbody>
+									</table>
+								</div>
+							{:else}
+								<div class="p-4 text-gray-500 dark:text-gray-400">
+									<p>{$i18n.t('Unable to parse CSV data')}</p>
+									<pre class="mt-2 text-xs overflow-auto">{contents[selectedContentIdx].content}</pre>
+								</div>
+							{/if}
+						{:else if contents[selectedContentIdx].type === 'json'}
+							{@const tableData = parseJsonToTable(contents[selectedContentIdx].content)}
+							{#if tableData}
+								<div class="overflow-auto h-full p-4 bg-white dark:bg-gray-850">
+									<table
+										class="min-w-full border-collapse border border-gray-300 dark:border-gray-700 text-sm"
+									>
+										<thead>
+											<tr class="bg-gray-100 dark:bg-gray-800">
+												{#each tableData.headers as header}
+													<th
+														class="border border-gray-300 dark:border-gray-700 px-4 py-2 text-left font-semibold"
+													>
+														{header}
+													</th>
+												{/each}
+											</tr>
+										</thead>
+										<tbody>
+											{#each tableData.rows as row}
+												<tr class="hover:bg-gray-50 dark:hover:bg-gray-800/50">
+													{#each row as cell}
+														<td class="border border-gray-300 dark:border-gray-700 px-4 py-2">
+															{cell}
+														</td>
+													{/each}
+												</tr>
+											{/each}
+										</tbody>
+									</table>
+								</div>
+							{:else}
+								<div class="p-4 text-gray-500 dark:text-gray-400">
+									<p>{$i18n.t('Unable to parse JSON data')}</p>
+									<pre class="mt-2 text-xs overflow-auto">{contents[selectedContentIdx].content}</pre>
+								</div>
+							{/if}
 						{/if}
 					</div>
 				{:else}
