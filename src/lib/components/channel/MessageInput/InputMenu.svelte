@@ -3,7 +3,7 @@
 	import { flyAndScale } from '$lib/utils/transitions';
 	import { getContext, onMount, tick } from 'svelte';
 
-	import { config, user, tools as _tools, mobile } from '$lib/stores';
+	import { config, user, tools as _tools, mobile, knowledge } from '$lib/stores';
 	import { getTools } from '$lib/apis/tools';
 
 	import Dropdown from '$lib/components/common/Dropdown.svelte';
@@ -15,15 +15,19 @@
 	import CameraSolid from '$lib/components/icons/CameraSolid.svelte';
 	import Camera from '$lib/components/icons/Camera.svelte';
 	import Clip from '$lib/components/icons/Clip.svelte';
+	import Database from '$lib/components/icons/Database.svelte';
+	import KnowledgeModal from './KnowledgeModal.svelte';
 
 	const i18n = getContext('i18n');
 
 	export let screenCaptureHandler: Function;
 	export let uploadFilesHandler: Function;
+	export let knowledgeHandler: Function = () => {};
 
 	export let onClose: Function = () => {};
 
 	let show = false;
+	let showKnowledgeModal = false;
 
 	$: if (show) {
 		init();
@@ -72,6 +76,24 @@
 				<Camera />
 				<div class=" line-clamp-1">{$i18n.t('Capture')}</div>
 			</DropdownMenu.Item>
+
+			<DropdownMenu.Item
+				class="flex gap-2 items-center px-3 py-1.5 text-sm  cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50  rounded-xl"
+				on:click={() => {
+					showKnowledgeModal = true;
+					show = false;
+				}}
+			>
+				<Database className="size-4" />
+				<div class=" line-clamp-1">{$i18n.t('Knowledge')}</div>
+			</DropdownMenu.Item>
 		</DropdownMenu.Content>
 	</div>
 </Dropdown>
+
+{#if showKnowledgeModal}
+	<KnowledgeModal
+		bind:show={showKnowledgeModal}
+		onSelect={knowledgeHandler}
+	/>
+{/if}

@@ -348,6 +348,56 @@
 						{/if}
 					</div>
 
+					<!-- Knowledge Sources Display -->
+					{#if message?.meta?.sources?.length > 0}
+						<div class="mt-2 mb-2">
+							<details class="group text-sm">
+								<summary
+									class="flex items-center gap-2 cursor-pointer text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 transition"
+								>
+									<svg
+										xmlns="http://www.w3.org/2000/svg"
+										viewBox="0 0 20 20"
+										fill="currentColor"
+										class="size-4 transition-transform group-open:rotate-90"
+									>
+										<path
+											fill-rule="evenodd"
+											d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z"
+											clip-rule="evenodd"
+										/>
+									</svg>
+									<span class="font-medium"
+										>{$i18n.t('Sources')} ({message.meta.sources.length})</span
+									>
+								</summary>
+								<div class="mt-2 ml-6 space-y-1.5">
+									{#each message.meta.sources as source, idx}
+										<div
+											class="flex items-start gap-2 p-2 rounded-lg bg-gray-50 dark:bg-gray-800/50 text-xs"
+										>
+											<span class="text-gray-500 dark:text-gray-400 font-mono mt-0.5">
+												[{idx + 1}]
+											</span>
+											<div class="flex-1 min-w-0">
+												<div class="font-medium text-gray-800 dark:text-gray-200 truncate">
+													{source?.source?.name ?? source?.name ?? 'Unknown'}
+												</div>
+												{#if source?.document?.[0]}
+													<div
+														class="mt-1 text-gray-600 dark:text-gray-400 line-clamp-2 whitespace-pre-wrap"
+													>
+														{source.document[0]}
+													</div>
+												{/if}
+											</div>
+										</div>
+									{/each}
+								</div>
+							</details>
+						</div>
+					{/if}
+
 					{#if (message?.reactions ?? []).length > 0}
 						<div>
 							<div class="flex items-center flex-wrap gap-y-1.5 gap-1 mt-1 mb-2">
