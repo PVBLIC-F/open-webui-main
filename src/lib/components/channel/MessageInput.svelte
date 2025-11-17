@@ -6,7 +6,7 @@
 
 	const i18n = getContext('i18n');
 
-	import { config, mobile, settings, socket, user, knowledge } from '$lib/stores';
+	import { config, mobile, settings, socket, user } from '$lib/stores';
 	import {
 		convertHeicToJpeg,
 		compressImage,
@@ -22,8 +22,6 @@
 	} from '$lib/utils';
 
 	import { getSessionUser } from '$lib/apis/auths';
-	import { getKnowledgeBases } from '$lib/apis/knowledge';
-
 	import { uploadFile } from '$lib/apis/files';
 	import { WEBUI_API_BASE_URL } from '$lib/constants';
 
@@ -577,15 +575,6 @@
 	}
 
 	onMount(async () => {
-		// Load knowledge bases only if not already loaded (performance optimization)
-		if (!$knowledge || $knowledge.length === 0) {
-			try {
-				knowledge.set(await getKnowledgeBases(localStorage.token));
-			} catch (e) {
-				console.error('Failed to load knowledge bases:', e);
-			}
-		}
-
 		suggestions = [
 			{
 				char: '@',

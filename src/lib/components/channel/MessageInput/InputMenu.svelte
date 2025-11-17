@@ -1,39 +1,47 @@
 <script lang="ts">
 	import { DropdownMenu } from 'bits-ui';
+	import { fly } from 'svelte/transition';
 	import { flyAndScale } from '$lib/utils/transitions';
-	import { getContext, onMount, tick } from 'svelte';
+	import { getContext } from 'svelte';
 
-	import { config, user, tools as _tools, mobile, knowledge } from '$lib/stores';
-	import { getTools } from '$lib/apis/tools';
+	import { knowledge } from '$lib/stores';
+	import { getKnowledgeBases } from '$lib/apis/knowledge';
 
 	import Dropdown from '$lib/components/common/Dropdown.svelte';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
-	import DocumentArrowUpSolid from '$lib/components/icons/DocumentArrowUpSolid.svelte';
-	import Switch from '$lib/components/common/Switch.svelte';
-	import GlobeAltSolid from '$lib/components/icons/GlobeAltSolid.svelte';
-	import WrenchSolid from '$lib/components/icons/WrenchSolid.svelte';
-	import CameraSolid from '$lib/components/icons/CameraSolid.svelte';
 	import Camera from '$lib/components/icons/Camera.svelte';
 	import Clip from '$lib/components/icons/Clip.svelte';
 	import Database from '$lib/components/icons/Database.svelte';
-	import KnowledgeModal from './KnowledgeModal.svelte';
+	import ChevronRight from '$lib/components/icons/ChevronRight.svelte';
+	import ChevronLeft from '$lib/components/icons/ChevronLeft.svelte';
+	import Knowledge from '$lib/components/chat/MessageInput/InputMenu/Knowledge.svelte';
 
 	const i18n = getContext('i18n');
 
 	export let screenCaptureHandler: Function;
 	export let uploadFilesHandler: Function;
 	export let knowledgeHandler: Function = () => {};
-
 	export let onClose: Function = () => {};
 
 	let show = false;
-	let showKnowledgeModal = false;
+	let tab = '';
+
+	const init = async () => {
+		if ($knowledge === null) {
+			knowledge.set(await getKnowledgeBases(localStorage.token));
+		}
+	};
 
 	$: if (show) {
 		init();
+	} else {
+		tab = ''; // Reset tab when dropdown closes
 	}
 
-	const init = async () => {};
+	const onSelect = (item) => {
+		knowledgeHandler(item);
+		show = false;
+	};
 </script>
 
 <Dropdown
@@ -50,50 +58,70 @@
 
 	<div slot="content">
 		<DropdownMenu.Content
-			class="w-full max-w-[200px] rounded-2xl px-1 py-1  border border-gray-100  dark:border-gray-800 z-999 bg-white dark:bg-gray-850 dark:text-white shadow-lg transition"
+			class="w-full max-w-70 rounded-2xl px-1 py-1 border border-gray-100 dark:border-gray-800 z-50 bg-white dark:bg-gray-850 dark:text-white shadow-lg max-h-72 overflow-y-auto scrollbar-thin transition"
 			sideOffset={4}
 			alignOffset={-6}
 			side="bottom"
 			align="start"
 			transition={flyAndScale}
 		>
-			<DropdownMenu.Item
-				class="flex gap-2 items-center px-3 py-1.5 text-sm cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 rounded-xl"
-				on:click={() => {
-					uploadFilesHandler();
-				}}
-			>
-				<Clip />
-				<div class="line-clamp-1">{$i18n.t('Upload Files')}</div>
-			</DropdownMenu.Item>
+			{#if tab === ''}
+				<div in:fly={{ x: -20, duration: 150 }}>
+					<DropdownMenu.Item
+						class="flex gap-2 items-center px-3 py-1.5 text-sm cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 rounded-xl"
+						on:click={() => {
+							uploadFilesHandler();
+						}}
+					>
+						<Clip />
+						<div class="line-clamp-1">{$i18n.t('Upload Files')}</div>
+					</DropdownMenu.Item>
 
-			<DropdownMenu.Item
-				class="flex gap-2 items-center px-3 py-1.5 text-sm  cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50  rounded-xl"
-				on:click={() => {
-					screenCaptureHandler();
-				}}
-			>
-				<Camera />
-				<div class=" line-clamp-1">{$i18n.t('Capture')}</div>
-			</DropdownMenu.Item>
+					<DropdownMenu.Item
+						class="flex gap-2 items-center px-3 py-1.5 text-sm cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 rounded-xl"
+						on:click={() => {
+							screenCaptureHandler();
+						}}
+					>
+						<Camera />
+						<div class="line-clamp-1">{$i18n.t('Capture')}</div>
+					</DropdownMenu.Item>
 
-			<DropdownMenu.Item
-				class="flex gap-2 items-center px-3 py-1.5 text-sm  cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50  rounded-xl"
-				on:click={() => {
-					showKnowledgeModal = true;
-					show = false;
-				}}
-			>
-				<Database className="size-4" />
-				<div class=" line-clamp-1">{$i18n.t('Knowledge')}</div>
-			</DropdownMenu.Item>
+					{#if ($knowledge ?? []).length > 0}
+						<button
+							class="flex gap-2 w-full items-center px-3 py-1.5 text-sm cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 rounded-xl"
+							on:click={() => {
+								tab = 'knowledge';
+							}}
+						>
+							<Database />
+
+							<div class="flex items-center w-full justify-between">
+								<div class="line-clamp-1">{$i18n.t('Attach Knowledge')}</div>
+								<div class="text-gray-500">
+									<ChevronRight />
+								</div>
+							</div>
+						</button>
+					{/if}
+				</div>
+			{:else if tab === 'knowledge'}
+				<div in:fly={{ x: 20, duration: 150 }}>
+					<button
+						class="flex w-full justify-between gap-2 items-center px-3 py-1.5 text-sm cursor-pointer rounded-xl hover:bg-gray-50 dark:hover:bg-gray-800/50"
+						on:click={() => {
+							tab = '';
+						}}
+					>
+						<ChevronLeft />
+						<div class="flex items-center w-full justify-between">
+							<div>{$i18n.t('Knowledge')}</div>
+						</div>
+					</button>
+
+					<Knowledge {onSelect} />
+				</div>
+			{/if}
 		</DropdownMenu.Content>
 	</div>
 </Dropdown>
-
-{#if showKnowledgeModal}
-	<KnowledgeModal
-		bind:show={showKnowledgeModal}
-		onSelect={knowledgeHandler}
-	/>
-{/if}
