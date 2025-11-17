@@ -103,13 +103,6 @@
 				if (idx !== -1) {
 					messages[idx] = data;
 				}
-			} else if (type === 'message:sources') {
-				// Update message with knowledge sources
-				const idx = messages.findIndex((m) => m.id === data.message_id);
-				if (idx !== -1) {
-					messages[idx].meta = { ...messages[idx].meta, sources: data.sources };
-					messages = messages;
-				}
 			} else if (type.includes('message:reaction')) {
 				const idx = messages.findIndex((message) => message.id === data.id);
 				if (idx !== -1) {
