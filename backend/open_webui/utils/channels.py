@@ -1,4 +1,7 @@
 import re
+from typing import Optional
+from open_webui.utils.task import rag_template
+from open_webui.config import DEFAULT_RAG_TEMPLATE
 
 
 def extract_mentions(message: str, triggerChar: str = "@"):
@@ -29,3 +32,31 @@ def replace_mentions(message: str, triggerChar: str = "@", use_label: bool = Tru
     # Regex captures: idType, id, optional label
     pattern = rf"<{triggerChar}([A-Z]):([^|>]+)(?:\|([^>]+))?>"
     return re.sub(pattern, replacer, message)
+
+
+def build_message_with_rag_context(
+    user_message: str, sources: list[dict], template: Optional[str] = None
+) -> str:
+    """
+    Inject knowledge sources into message using RAG template.
+    Simplified for channel messaging (no complex formatting).
+    """
+    if not sources:
+        return user_message
+
+    template = template or DEFAULT_RAG_TEMPLATE
+
+    # Build context from sources
+    context_parts = []
+    for idx, source in enumerate(sources, 1):
+        for doc_idx, doc in enumerate(source.get("document", [])):
+            metadata = (
+                source.get("metadata", [])[doc_idx]
+                if doc_idx < len(source.get("metadata", []))
+                else {}
+            )
+            name = metadata.get("name") or metadata.get("source") or f"Source {idx}"
+            context_parts.append(f"[{idx}] {name}:\n{doc}")
+
+    context = "\n\n".join(context_parts)
+    return rag_template(template, context, user_message)

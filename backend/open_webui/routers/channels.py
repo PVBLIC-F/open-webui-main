@@ -1,15 +1,14 @@
 import json
 import logging
+import asyncio
 from typing import Optional
-
+from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status, BackgroundTasks
 from pydantic import BaseModel
 
-
 from open_webui.socket.main import sio, get_user_ids_from_room
-from open_webui.models.users import Users, UserNameResponse
-
+from open_webui.models.users import Users, UserNameResponse, UserModel
 from open_webui.models.groups import Groups
 from open_webui.models.channels import (
     Channels,
@@ -24,28 +23,70 @@ from open_webui.models.messages import (
     MessageForm,
 )
 
-
 from open_webui.config import ENABLE_ADMIN_CHAT_ACCESS, ENABLE_ADMIN_EXPORT
 from open_webui.constants import ERROR_MESSAGES
 from open_webui.env import SRC_LOG_LEVELS
 
-
-from open_webui.utils.models import (
-    get_all_models,
-    get_filtered_models,
-)
+from open_webui.utils.models import get_all_models, get_filtered_models
 from open_webui.utils.chat import generate_chat_completion
-
-
 from open_webui.utils.auth import get_admin_user, get_verified_user
 from open_webui.utils.access_control import has_access, get_users_with_access
 from open_webui.utils.webhook import post_webhook
-from open_webui.utils.channels import extract_mentions, replace_mentions
+from open_webui.utils.channels import (
+    extract_mentions,
+    replace_mentions,
+    build_message_with_rag_context,
+)
+from open_webui.utils.misc import get_last_user_message
+from open_webui.retrieval.utils import get_sources_from_items
 
 log = logging.getLogger(__name__)
 log.setLevel(SRC_LOG_LEVELS["MODELS"])
 
 router = APIRouter()
+
+
+async def process_message_knowledge(
+    request: Request, message_content: str, knowledge_items: list[dict], user: UserModel
+) -> list[dict]:
+    """
+    Retrieve sources from knowledge bases using simplified single-query approach.
+    Optimized for channel real-time messaging (faster than multi-query generation).
+    """
+    if not knowledge_items or not message_content:
+        return []
+
+    try:
+        loop = asyncio.get_running_loop()
+        with ThreadPoolExecutor() as executor:
+            sources = await loop.run_in_executor(
+                executor,
+                lambda: get_sources_from_items(
+                    request=request,
+                    items=knowledge_items,
+                    queries=[message_content],
+                    embedding_function=lambda q, p: request.app.state.EMBEDDING_FUNCTION(
+                        q, prefix=p, user=user
+                    ),
+                    k=request.app.state.config.TOP_K,
+                    reranking_function=(
+                        lambda s: request.app.state.RERANKING_FUNCTION(s, user=user)
+                        if request.app.state.RERANKING_FUNCTION
+                        else None
+                    ),
+                    k_reranker=request.app.state.config.TOP_K_RERANKER,
+                    r=request.app.state.config.RELEVANCE_THRESHOLD,
+                    hybrid_bm25_weight=request.app.state.config.HYBRID_BM25_WEIGHT,
+                    hybrid_search=request.app.state.config.ENABLE_RAG_HYBRID_SEARCH,
+                    full_context=request.app.state.config.RAG_FULL_CONTEXT,
+                    user=user,
+                ),
+            )
+        return sources or []
+    except Exception as e:
+        log.exception(f"Error retrieving knowledge sources: {e}")
+        return []
+
 
 ############################
 # GetChatList
@@ -351,7 +392,18 @@ async def model_response_handler(request, channel, message, user):
                     ),
                 }
 
-                content = f"{user.name if user else 'User'}: {message_content}"
+                # Check if message has knowledge sources and inject RAG context
+                content = message_content
+                if message.meta and message.meta.get("sources"):
+                    # Inject knowledge context using RAG template
+                    rag_template_str = request.app.state.config.RAG_TEMPLATE
+                    content = build_message_with_rag_context(
+                        message_content, message.meta["sources"], rag_template_str
+                    )
+                    log.debug(f"Injected RAG context from {len(message.meta['sources'])} sources")
+
+                content = f"{user.name if user else 'User'}: {content}"
+                
                 if images:
                     content = [
                         {
@@ -437,23 +489,44 @@ async def new_message_handler(
         )
 
     try:
+        # Extract knowledge bases from message data
+        knowledge_items = []
+        if form_data.data and form_data.data.get("files"):
+            knowledge_items = [
+                f
+                for f in form_data.data["files"]
+                if f.get("type") == "collection" or f.get("knowledge")
+            ]
+
+        # Process knowledge for RAG retrieval
+        if knowledge_items:
+            sources = await process_message_knowledge(
+                request, form_data.content, knowledge_items, user
+            )
+            
+            if sources:
+                form_data.meta = form_data.meta or {}
+                form_data.meta["sources"] = sources
+                log.debug(f"Retrieved {len(sources)} sources from {len(knowledge_items)} knowledge bases")
+
+        # Insert message (sources already in meta)
         message = Messages.insert_new_message(form_data, channel.id, user.id)
         if message:
             message = Messages.get_message_by_id(message.id)
-            event_data = {
-                "channel_id": channel.id,
-                "message_id": message.id,
-                "data": {
-                    "type": "message",
-                    "data": message.model_dump(),
-                },
-                "user": UserNameResponse(**user.model_dump()).model_dump(),
-                "channel": channel.model_dump(),
-            }
-
+            
+            # Emit message event (includes sources in meta)
             await sio.emit(
                 "events:channel",
-                event_data,
+                {
+                    "channel_id": channel.id,
+                    "message_id": message.id,
+                    "data": {
+                        "type": "message",
+                        "data": message.model_dump(),
+                    },
+                    "user": UserNameResponse(**user.model_dump()).model_dump(),
+                    "channel": channel.model_dump(),
+                },
                 to=f"channel:{channel.id}",
             )
 

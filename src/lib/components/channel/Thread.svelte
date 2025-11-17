@@ -87,13 +87,6 @@
 				if (messages) {
 					messages = messages.filter((message) => message.id !== data.id);
 				}
-			} else if (type === 'message:sources' && messages) {
-				// Update message with knowledge sources
-				const idx = messages.findIndex((m) => m.id === data.message_id);
-				if (idx !== -1) {
-					messages[idx].meta = { ...messages[idx].meta, sources: data.sources };
-					messages = messages;
-				}
 			} else if (type.includes('message:reaction')) {
 				if (messages) {
 					const idx = messages.findIndex((message) => message.id === data.id);
