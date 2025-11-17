@@ -41,9 +41,8 @@ def upgrade():
     """
     Add JSONB optimizations for message table.
     
-    Converts JSON columns to JSONB and adds GIN indexes for:
-    - message.data (files, attachments)
-    - message.meta (sources, model info, reactions)
+    Note: GIN indexes created without CONCURRENTLY since Alembic runs in transaction.
+    This causes brief table lock but ensures atomic migration.
     """
     conn = op.get_bind()
 
@@ -53,11 +52,10 @@ def upgrade():
         return
 
     pg_major, pg_minor = _get_pg_version(conn)
-    is_pg17_or_higher = pg_major >= 17
     log.info(f"PostgreSQL {pg_major}.{pg_minor} detected")
 
     try:
-        # Convert JSON columns to JSONB for PostgreSQL
+        # Convert JSON columns to JSONB
         log.info("Converting message.data from JSON to JSONB")
         conn.execute(
             text(
@@ -79,52 +77,47 @@ def upgrade():
         conn.execute(text("ALTER TABLE message ALTER COLUMN meta SET STATISTICS 1000"))
         log.info("Set statistics targets for query optimization")
 
-        # Create GIN indexes for JSONB columns
-        # Index 1: message.data for file/knowledge queries
+        # Create GIN indexes (without CONCURRENTLY since we're in a transaction)
         log.info("Creating GIN index on message.data")
         conn.execute(
             text(
-                "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_message_data_gin "
+                "CREATE INDEX IF NOT EXISTS idx_message_data_gin "
                 "ON message USING gin (data jsonb_path_ops) "
                 "WITH (fastupdate = off)"
             )
         )
 
-        # Index 2: message.meta for sources/model queries  
         log.info("Creating GIN index on message.meta")
         conn.execute(
             text(
-                "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_message_meta_gin "
+                "CREATE INDEX IF NOT EXISTS idx_message_meta_gin "
                 "ON message USING gin (meta jsonb_path_ops) "
                 "WITH (fastupdate = off)"
             )
         )
 
-        # Index 3: Optimized for meta.sources queries (knowledge integration)
         log.info("Creating GIN index on message.meta->'sources'")
         conn.execute(
             text(
-                "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_message_meta_sources_gin "
+                "CREATE INDEX IF NOT EXISTS idx_message_meta_sources_gin "
                 "ON message USING gin ((meta->'sources') jsonb_path_ops) "
                 "WITH (fastupdate = off)"
             )
         )
 
-        # Composite index for channel + parent queries (thread performance)
+        # Composite index for thread queries
         log.info("Creating composite index for thread queries")
         conn.execute(
             text(
-                "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_message_channel_parent "
+                "CREATE INDEX IF NOT EXISTS idx_message_channel_parent "
                 "ON message (channel_id, parent_id, created_at DESC)"
             )
         )
 
-        # VACUUM ANALYZE for statistics update
-        conn.execute(text("VACUUM ANALYZE message"))
         log.info("JSONB migration completed successfully")
 
     except ProgrammingError as e:
-        if "already exists" in str(e) or "already JSONB" in str(e):
+        if "already exists" in str(e).lower() or "cannot cast" in str(e).lower():
             log.info(f"JSONB already configured: {e}")
         else:
             log.error(f"JSONB migration error: {e}")
@@ -139,15 +132,11 @@ def downgrade():
         return
 
     try:
-        # Drop indexes
-        conn.execute(text("DROP INDEX CONCURRENTLY IF EXISTS idx_message_data_gin"))
-        conn.execute(text("DROP INDEX CONCURRENTLY IF EXISTS idx_message_meta_gin"))
-        conn.execute(
-            text("DROP INDEX CONCURRENTLY IF EXISTS idx_message_meta_sources_gin")
-        )
-        conn.execute(
-            text("DROP INDEX CONCURRENTLY IF EXISTS idx_message_channel_parent")
-        )
+        # Drop indexes (without CONCURRENTLY)
+        op.drop_index("idx_message_data_gin", table_name="message", if_exists=True)
+        op.drop_index("idx_message_meta_gin", table_name="message", if_exists=True)
+        op.drop_index("idx_message_meta_sources_gin", table_name="message", if_exists=True)
+        op.drop_index("idx_message_channel_parent", table_name="message", if_exists=True)
 
         # Convert JSONB back to JSON
         conn.execute(
