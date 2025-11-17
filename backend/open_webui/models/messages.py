@@ -48,8 +48,9 @@ class Message(Base):
     parent_id = Column(Text, nullable=True)
 
     content = Column(Text)
-    data = Column(JSON, nullable=True)
-    meta = Column(JSON, nullable=True)
+    # JSON columns - PostgreSQL uses JSONB after migration for performance
+    data = Column(JSON, nullable=True)  # Files, attachments, knowledge
+    meta = Column(JSON, nullable=True)  # Sources, model info, reactions
 
     created_at = Column(BigInteger)  # time_ns
     updated_at = Column(BigInteger)  # time_ns
