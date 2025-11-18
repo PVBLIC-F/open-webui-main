@@ -296,6 +296,8 @@ async def model_response_handler(request, channel, message, user):
         model["id"]: model
         for model in get_filtered_models(await get_all_models(request, user=user), user)
     }
+    
+    log.info(f"Channel: Model response handler called for channel {channel.id}, message {message.id}")
 
     mentions = extract_mentions(message.content)
     message_content = replace_mentions(message.content)
@@ -435,12 +437,18 @@ async def model_response_handler(request, channel, message, user):
                 }
 
                 # Process through inlet filters (pre-processing)
+                log.info(f"Channel: Checking inlet filters for model {model_id}")
                 try:
+                    original_model = form_data["model"]
                     form_data = await process_pipeline_inlet_filter(
                         request, form_data, user, MODELS
                     )
+                    if form_data["model"] != original_model or form_data.get("messages") != [system_message, {"role": "user", "content": content}]:
+                        log.info(f"Channel: Inlet filters modified request for model {model_id}")
+                    else:
+                        log.info(f"Channel: No inlet filters active for model {model_id}")
                 except Exception as e:
-                    log.warning(f"Inlet filter processing failed: {e}")
+                    log.error(f"Channel: Inlet filter processing failed: {e}")
                     # Continue with unprocessed request
 
                 res = await generate_chat_completion(
@@ -451,12 +459,19 @@ async def model_response_handler(request, channel, message, user):
 
                 if res:
                     # Process through outlet filters (summary, re-rank, etc.)
+                    log.info(f"Channel: Checking outlet filters for model {model_id}")
                     try:
+                        original_content = res.get("choices", [{}])[0].get("message", {}).get("content")
                         res = await process_pipeline_outlet_filter(
                             request, res, user, MODELS
                         )
+                        new_content = res.get("choices", [{}])[0].get("message", {}).get("content")
+                        if original_content != new_content:
+                            log.info(f"Channel: Outlet filters modified response for model {model_id}")
+                        else:
+                            log.info(f"Channel: No outlet filters active for model {model_id}")
                     except Exception as e:
-                        log.warning(f"Outlet filter processing failed: {e}")
+                        log.error(f"Channel: Outlet filter processing failed: {e}")
                         # Continue with unprocessed response
 
                     if res.get("choices", []) and len(res["choices"]) > 0:
