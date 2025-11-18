@@ -39,6 +39,10 @@ from open_webui.utils.channels import (
 )
 from open_webui.utils.misc import get_last_user_message
 from open_webui.retrieval.utils import get_sources_from_items
+from open_webui.routers.pipelines import (
+    process_pipeline_inlet_filter,
+    process_pipeline_outlet_filter,
+)
 
 log = logging.getLogger(__name__)
 log.setLevel(SRC_LOG_LEVELS["MODELS"])
@@ -430,6 +434,15 @@ async def model_response_handler(request, channel, message, user):
                     "stream": False,
                 }
 
+                # Process through inlet filters (pre-processing)
+                try:
+                    form_data = await process_pipeline_inlet_filter(
+                        request, form_data, user, MODELS
+                    )
+                except Exception as e:
+                    log.warning(f"Inlet filter processing failed: {e}")
+                    # Continue with unprocessed request
+
                 res = await generate_chat_completion(
                     request,
                     form_data=form_data,
@@ -437,6 +450,15 @@ async def model_response_handler(request, channel, message, user):
                 )
 
                 if res:
+                    # Process through outlet filters (summary, re-rank, etc.)
+                    try:
+                        res = await process_pipeline_outlet_filter(
+                            request, res, user, MODELS
+                        )
+                    except Exception as e:
+                        log.warning(f"Outlet filter processing failed: {e}")
+                        # Continue with unprocessed response
+
                     if res.get("choices", []) and len(res["choices"]) > 0:
                         await update_message_by_id(
                             channel.id,
