@@ -302,6 +302,8 @@ async def model_response_handler(request, channel, message, user):
     mentions = extract_mentions(message.content)
     message_content = replace_mentions(message.content)
 
+    log.info(f"Channel: Extracted {len(mentions)} mentions from message: {mentions}")
+
     model_mentions = {}
 
     # check if the message is a reply to a message sent by a model
@@ -312,6 +314,7 @@ async def model_response_handler(request, channel, message, user):
     ):
         model_id = message.reply_to_message.meta.get("model_id", None)
         model_mentions[model_id] = {"id": model_id, "id_type": "M"}
+        log.info(f"Channel: Message is a reply to model {model_id}")
 
     # check if any of the mentions are models
     for mention in mentions:
@@ -319,7 +322,10 @@ async def model_response_handler(request, channel, message, user):
             model_mentions[mention["id"]] = mention
 
     if not model_mentions:
+        log.info("Channel: No model mentions found - skipping LLM processing")
         return False
+    
+    log.info(f"Channel: Found {len(model_mentions)} model mention(s): {list(model_mentions.keys())}")
 
     for mention in model_mentions.values():
         model_id = mention["id"]
