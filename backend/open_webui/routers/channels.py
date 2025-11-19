@@ -22,6 +22,7 @@ from open_webui.models.messages import (
     MessageResponse,
     MessageForm,
 )
+from open_webui.models.models import Models
 
 from open_webui.config import ENABLE_ADMIN_CHAT_ACCESS, ENABLE_ADMIN_EXPORT
 from open_webui.constants import ERROR_MESSAGES
@@ -349,9 +350,26 @@ async def model_response_handler(request, channel, message, user):
         model = MODELS.get(model_id, None)
 
         if model:
+            # CRITICAL: Merge pipeline config from database if model doesn't have it
+            # Pipeline config is stored in model_info.params.pipeline but params are
+            # removed from model["info"] during get_all_models() to avoid exposing sensitive info
+            # So we need to merge it from database at runtime
+            # NOTE: model is a reference to MODELS[model_id], so modifying it updates MODELS automatically
+            if "pipeline" not in model:
+                model_info = Models.get_model_by_id(model_id)
+                if model_info and model_info.params:
+                    params = model_info.params.model_dump() if hasattr(model_info.params, 'model_dump') else model_info.params
+                    if isinstance(params, dict) and "pipeline" in params:
+                        model["pipeline"] = params["pipeline"]
+                        # model is already a reference to MODELS[model_id], so MODELS is automatically updated
+                        log.info(f"Channel: Merged pipeline config from database for model {model_id}: {model['pipeline']}")
+            
+            # Re-fetch model from MODELS to ensure we have latest (in case it was updated)
+            model = MODELS.get(model_id, None)
+            
             # DEBUG: Log model structure to see if it has pipeline field
-            log.info(f"Channel: Model {model_id} structure: has pipeline={('pipeline' in model)}, keys={list(model.keys())[:10]}")
-            if "pipeline" in model:
+            log.info(f"Channel: Model {model_id} structure: has pipeline={('pipeline' in model) if model else False}, keys={list(model.keys())[:10] if model else []}")
+            if model and "pipeline" in model:
                 log.info(f"Channel: Model {model_id} pipeline config: {model.get('pipeline')}")
             
             try:
