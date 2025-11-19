@@ -304,27 +304,7 @@ async def model_response_handler(request, channel, message, user):
     # This matches how the chat interface loads models
     MODELS = request.app.state.MODELS
     
-    # DEBUG: Check if OPENAI_MODELS has filters that aren't in MODELS
-    openai_filter_models = []
-    if hasattr(request.app.state, "OPENAI_MODELS"):
-        openai_filter_models = [
-            m for m in request.app.state.OPENAI_MODELS.values()
-            if m.get("pipeline", {}).get("type") == "filter"
-        ]
-        log.info(f"Channel: OPENAI_MODELS has {len(openai_filter_models)} filter(s): {[f['id'] for f in openai_filter_models]}")
-    
-    # DEBUG: Log filter models in MODELS
-    filter_models = [m for m in MODELS.values() if m.get("pipeline", {}).get("type") == "filter"]
-    log.info(f"Channel: Loaded {len(MODELS)} total models, {len(filter_models)} are filters: {[f['id'] for f in filter_models]}")
-    
-    # If filters exist in OPENAI_MODELS but not in MODELS, merge them
-    if openai_filter_models and not filter_models:
-        log.warning(f"Channel: Filters found in OPENAI_MODELS but not in MODELS - merging")
-        for filter_model in openai_filter_models:
-            MODELS[filter_model["id"]] = filter_model
-        log.info(f"Channel: After merge, MODELS has {len([m for m in MODELS.values() if m.get('pipeline', {}).get('type') == 'filter'])} filter(s)")
-    
-    log.info(f"Channel: Model response handler called for channel {channel.id}, message {message.id}")
+    log.debug(f"Channel: Model response handler called for channel {channel.id}, message {message.id}")
 
     mentions = extract_mentions(message.content)
     message_content = replace_mentions(message.content)
@@ -359,48 +339,17 @@ async def model_response_handler(request, channel, message, user):
             # So we need to merge it from database at runtime
             # NOTE: model is a reference to MODELS[model_id], so modifying it updates MODELS automatically
             if "pipeline" not in model:
-                log.info(f"Channel: Model {model_id} has no pipeline field, checking database...")
+                log.debug(f"Channel: Model {model_id} has no pipeline field, checking database...")
                 model_info = Models.get_model_by_id(model_id)
-                if model_info:
-                    log.info(f"Channel: Found model_info for {model_id}, checking params...")
-                    if model_info.params:
-                        params = model_info.params.model_dump() if hasattr(model_info.params, 'model_dump') else model_info.params
-                        log.info(f"Channel: Model {model_id} params type: {type(params)}, keys: {list(params.keys()) if isinstance(params, dict) else 'not a dict'}")
-                        if isinstance(params, dict) and "pipeline" in params:
-                            model["pipeline"] = params["pipeline"]
-                            # model is already a reference to MODELS[model_id], so MODELS is automatically updated
-                            log.info(f"Channel: ✓ Merged pipeline config from database for model {model_id}: {model['pipeline']}")
-                        else:
-                            log.warning(f"Channel: Model {model_id} params doesn't contain 'pipeline' field")
-                    else:
-                        log.warning(f"Channel: Model {model_id} has no params")
-                else:
-                    log.warning(f"Channel: No model_info found in database for {model_id}")
-            else:
-                log.info(f"Channel: Model {model_id} already has pipeline field: {model.get('pipeline')}")
+                if model_info and model_info.params:
+                    params = model_info.params.model_dump() if hasattr(model_info.params, 'model_dump') else model_info.params
+                    if isinstance(params, dict) and "pipeline" in params:
+                        model["pipeline"] = params["pipeline"]
+                        # model is already a reference to MODELS[model_id], so MODELS is automatically updated
+                        log.debug(f"Channel: Merged pipeline config from database for model {model_id}")
             
             # Re-fetch model from MODELS to ensure we have latest (in case it was updated)
             model = MODELS.get(model_id, None)
-            
-            # DEBUG: Log model structure to see if it has pipeline field and filterIds
-            if model:
-                has_info = "info" in model
-                has_meta = has_info and "meta" in model.get("info", {})
-                filter_ids_in_meta = []
-                if has_meta:
-                    filter_ids_in_meta = model["info"]["meta"].get("filterIds", [])
-                filter_ids_top = model.get("filter_ids", [])
-                log.info(f"Channel: Model {model_id} structure:")
-                log.info(f"  - has pipeline: {('pipeline' in model)}")
-                log.info(f"  - has info: {has_info}")
-                log.info(f"  - has meta: {has_meta}")
-                log.info(f"  - filterIds in meta: {filter_ids_in_meta}")
-                log.info(f"  - filter_ids at top level: {filter_ids_top}")
-                log.info(f"  - keys: {list(model.keys())[:15]}")
-                if "pipeline" in model:
-                    log.info(f"  - pipeline config: {model.get('pipeline')}")
-                if has_meta:
-                    log.info(f"  - meta keys: {list(model['info']['meta'].keys())[:10]}")
             
             try:
                 # reverse to get in chronological order
@@ -517,37 +466,36 @@ async def model_response_handler(request, channel, message, user):
                 from open_webui.routers.pipelines import get_sorted_filters
                 sorted_filters = get_sorted_filters(model_id, MODELS)
                 
-                # DEBUG: Check if the model itself has a pipeline field
+                # Check if the model itself has a pipeline field
                 model_has_pipeline = "pipeline" in model
                 if model_has_pipeline:
-                    log.info(f"Channel: Model {model_id} has pipeline field: {model.get('pipeline')}")
                     # Note: process_pipeline_inlet_filter will add model to sorted_filters if it has pipeline
                     sorted_filters_with_model = sorted_filters + [model]
                 else:
                     sorted_filters_with_model = sorted_filters
                 
-                log.info(f"Channel: Found {len(sorted_filters)} pipeline filter model(s) for model {model_id}: {[f.get('id') for f in sorted_filters]}")
-                log.info(f"Channel: Model has pipeline={model_has_pipeline}, total pipeline filters={len(sorted_filters_with_model)}")
+                if sorted_filters_with_model:
+                    log.info(f"Channel: Processing {len(sorted_filters_with_model)} pipeline inlet filter(s) for model {model_id}: {[f.get('id') for f in sorted_filters_with_model]}")
                 
-                log.info(f"Channel: Processing pipeline inlet filters for model {model_id}")
                 try:
                     original_model = form_data["model"]
+                    original_messages = form_data.get("messages")
                     form_data = await process_pipeline_inlet_filter(
                         request, form_data, user, MODELS
                     )
-                    if form_data["model"] != original_model or form_data.get("messages") != [system_message, {"role": "user", "content": content}]:
-                        log.info(f"Channel: Pipeline inlet filters modified request for model {model_id}")
-                    else:
-                        log.info(f"Channel: No pipeline inlet filters active for model {model_id}")
+                    if form_data["model"] != original_model or form_data.get("messages") != original_messages:
+                        log.info(f"Channel: ✓ Pipeline inlet filters modified request for model {model_id}")
                 except Exception as e:
                     log.error(f"Channel: Pipeline inlet filter processing failed: {e}")
                     # Continue with unprocessed request
                 
                 # STEP 2: Function filters (database-stored filter functions like chat summarization/re-rank)
                 # Create metadata for function filters (similar to chat but for channels)
+                # NOTE: Filters expect 'chat_id' in metadata, so we pass channel.id as chat_id
                 metadata = {
                     "user_id": user.id,
-                    "channel_id": channel.id,
+                    "chat_id": channel.id,  # Filters expect chat_id, so use channel.id
+                    "channel_id": channel.id,  # Also keep channel_id for channel-specific logic
                     "message_id": response_message.id,
                     "filter_ids": [],  # Can be populated from message metadata if needed
                 }
@@ -567,25 +515,12 @@ async def model_response_handler(request, channel, message, user):
                 
                 log.info(f"Channel: Processing function inlet filters for model {model_id}")
                 try:
-                    # DEBUG: Check model structure for filterIds
-                    has_info = "info" in model
-                    has_meta = has_info and "meta" in model.get("info", {})
-                    filter_ids_in_meta = []
-                    if has_meta:
-                        filter_ids_in_meta = model["info"]["meta"].get("filterIds", [])
-                    log.info(f"Channel: Model {model_id} structure: has_info={has_info}, has_meta={has_meta}, filterIds in meta={filter_ids_in_meta}")
-                    
-                    # Get all active filter functions for debugging
-                    all_active_filters = Functions.get_functions_by_type("filter", active_only=True)
-                    global_filters = Functions.get_global_filter_functions()
-                    log.info(f"Channel: System has {len(all_active_filters)} active filter(s), {len(global_filters)} global filter(s)")
-                    log.info(f"Channel: Active filter IDs: {[f.id for f in all_active_filters]}")
-                    
                     # Get function filter IDs configured for this model
                     filter_ids = get_sorted_filter_ids(
                         request, model, metadata.get("filter_ids", [])
                     )
-                    log.info(f"Channel: Found {len(filter_ids)} function filter(s) for model {model_id}: {filter_ids}")
+                    if filter_ids:
+                        log.info(f"Channel: Found {len(filter_ids)} function inlet filter(s) for model {model_id}: {filter_ids}")
                     
                     if filter_ids:
                         filter_functions = [
@@ -601,8 +536,8 @@ async def model_response_handler(request, channel, message, user):
                             extra_params=extra_params,
                         )
                         log.info(f"Channel: Function inlet filters processed for model {model_id}, skip_files={flags.get('skip_files') if flags else None}")
-                    else:
-                        log.info(f"Channel: No function inlet filters configured for model {model_id}")
+                            else:
+                                log.debug(f"Channel: No function inlet filters configured for model {model_id}")
                 except Exception as e:
                     log.error(f"Channel: Function inlet filter processing failed: {e}")
                     # Continue with unprocessed request
@@ -616,23 +551,19 @@ async def model_response_handler(request, channel, message, user):
                 if res:
                     # Process through outlet filters (summary, re-rank, etc.)
                     # STEP 1: Pipeline outlet filters
-                    log.info(f"Channel: Processing pipeline outlet filters for model {model_id}")
                     try:
-                        original_content = res.get("choices", [{}])[0].get("message", {}).get("content")
+                        original_content = res.get("choices", [{}])[0].get("message", {}).get("content") if res.get("choices") else None
                         res = await process_pipeline_outlet_filter(
                             request, res, user, MODELS
                         )
-                        new_content = res.get("choices", [{}])[0].get("message", {}).get("content")
-                        if original_content != new_content:
-                            log.info(f"Channel: Pipeline outlet filters modified response for model {model_id}")
-                        else:
-                            log.info(f"Channel: No pipeline outlet filters active for model {model_id}")
+                        new_content = res.get("choices", [{}])[0].get("message", {}).get("content") if res.get("choices") else None
+                        if original_content and new_content and original_content != new_content:
+                            log.info(f"Channel: ✓ Pipeline outlet filters modified response for model {model_id}")
                     except Exception as e:
                         log.error(f"Channel: Pipeline outlet filter processing failed: {e}")
                         # Continue with unprocessed response
                     
                     # STEP 2: Function outlet filters (chat summarization, re-rank, etc.)
-                    log.info(f"Channel: Processing function outlet filters for model {model_id}")
                     try:
                         # Convert response to format expected by function filters
                         # Function filters expect form_data format similar to chat_completed
@@ -640,7 +571,7 @@ async def model_response_handler(request, channel, message, user):
                             "id": response_message.id,
                             "model": model_id,
                             "choices": res.get("choices", []),
-                            "chat_id": None,  # Not used for channels
+                            "chat_id": channel.id,  # Filters expect chat_id, use channel.id for channels
                             "message_id": response_message.id,
                             "session_id": None,
                             "user_id": user.id,
@@ -650,9 +581,9 @@ async def model_response_handler(request, channel, message, user):
                         filter_ids = get_sorted_filter_ids(
                             request, model, metadata.get("filter_ids", [])
                         )
-                        log.info(f"Channel: Found {len(filter_ids)} function outlet filter(s) for model {model_id}: {filter_ids}")
                         
                         if filter_ids:
+                            log.info(f"Channel: Found {len(filter_ids)} function outlet filter(s) for model {model_id}: {filter_ids}")
                             filter_functions = [
                                 Functions.get_function_by_id(filter_id)
                                 for filter_id in filter_ids
@@ -679,7 +610,7 @@ async def model_response_handler(request, channel, message, user):
                             else:
                                 log.warning(f"Channel: Function outlet filters returned no choices for model {model_id}")
                         else:
-                            log.info(f"Channel: No function outlet filters configured for model {model_id}")
+                            log.debug(f"Channel: No function outlet filters configured for model {model_id}")
                     except Exception as e:
                         log.error(f"Channel: Function outlet filter processing failed: {e}")
                         log.exception(e)
