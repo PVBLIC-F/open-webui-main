@@ -521,8 +521,6 @@ async def model_response_handler(request, channel, message, user):
                     )
                     if filter_ids:
                         log.info(f"Channel: Found {len(filter_ids)} function inlet filter(s) for model {model_id}: {filter_ids}")
-                    
-                    if filter_ids:
                         filter_functions = [
                             Functions.get_function_by_id(filter_id)
                             for filter_id in filter_ids
@@ -536,8 +534,8 @@ async def model_response_handler(request, channel, message, user):
                             extra_params=extra_params,
                         )
                         log.info(f"Channel: Function inlet filters processed for model {model_id}, skip_files={flags.get('skip_files') if flags else None}")
-                            else:
-                                log.debug(f"Channel: No function inlet filters configured for model {model_id}")
+                    else:
+                        log.debug(f"Channel: No function inlet filters configured for model {model_id}")
                 except Exception as e:
                     log.error(f"Channel: Function inlet filter processing failed: {e}")
                     # Continue with unprocessed request
