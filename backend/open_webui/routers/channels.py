@@ -382,10 +382,25 @@ async def model_response_handler(request, channel, message, user):
             # Re-fetch model from MODELS to ensure we have latest (in case it was updated)
             model = MODELS.get(model_id, None)
             
-            # DEBUG: Log model structure to see if it has pipeline field
-            log.info(f"Channel: Model {model_id} structure: has pipeline={('pipeline' in model) if model else False}, keys={list(model.keys())[:10] if model else []}")
-            if model and "pipeline" in model:
-                log.info(f"Channel: Model {model_id} pipeline config: {model.get('pipeline')}")
+            # DEBUG: Log model structure to see if it has pipeline field and filterIds
+            if model:
+                has_info = "info" in model
+                has_meta = has_info and "meta" in model.get("info", {})
+                filter_ids_in_meta = []
+                if has_meta:
+                    filter_ids_in_meta = model["info"]["meta"].get("filterIds", [])
+                filter_ids_top = model.get("filter_ids", [])
+                log.info(f"Channel: Model {model_id} structure:")
+                log.info(f"  - has pipeline: {('pipeline' in model)}")
+                log.info(f"  - has info: {has_info}")
+                log.info(f"  - has meta: {has_meta}")
+                log.info(f"  - filterIds in meta: {filter_ids_in_meta}")
+                log.info(f"  - filter_ids at top level: {filter_ids_top}")
+                log.info(f"  - keys: {list(model.keys())[:15]}")
+                if "pipeline" in model:
+                    log.info(f"  - pipeline config: {model.get('pipeline')}")
+                if has_meta:
+                    log.info(f"  - meta keys: {list(model['info']['meta'].keys())[:10]}")
             
             try:
                 # reverse to get in chronological order
@@ -552,6 +567,20 @@ async def model_response_handler(request, channel, message, user):
                 
                 log.info(f"Channel: Processing function inlet filters for model {model_id}")
                 try:
+                    # DEBUG: Check model structure for filterIds
+                    has_info = "info" in model
+                    has_meta = has_info and "meta" in model.get("info", {})
+                    filter_ids_in_meta = []
+                    if has_meta:
+                        filter_ids_in_meta = model["info"]["meta"].get("filterIds", [])
+                    log.info(f"Channel: Model {model_id} structure: has_info={has_info}, has_meta={has_meta}, filterIds in meta={filter_ids_in_meta}")
+                    
+                    # Get all active filter functions for debugging
+                    all_active_filters = Functions.get_functions_by_type("filter", active_only=True)
+                    global_filters = Functions.get_global_filter_functions()
+                    log.info(f"Channel: System has {len(all_active_filters)} active filter(s), {len(global_filters)} global filter(s)")
+                    log.info(f"Channel: Active filter IDs: {[f.id for f in all_active_filters]}")
+                    
                     # Get function filter IDs configured for this model
                     filter_ids = get_sorted_filter_ids(
                         request, model, metadata.get("filter_ids", [])
