@@ -304,7 +304,7 @@ async def model_response_handler(request, channel, message, user):
     # This matches how the chat interface loads models
     MODELS = request.app.state.MODELS
     
-    log.debug(f"Channel: Model response handler called for channel {channel.id}, message {message.id}")
+    log.info(f"Channel: Model response handler called for channel {channel.id}, message {message.id}")
 
     mentions = extract_mentions(message.content)
     message_content = replace_mentions(message.content)
@@ -462,6 +462,8 @@ async def model_response_handler(request, channel, message, user):
                 }
 
                 # Process through inlet filters (pre-processing)
+                log.info(f"Channel: Processing inlet filters for model {model_id}")
+                
                 # STEP 1: Pipeline filters (external filter services)
                 from open_webui.routers.pipelines import get_sorted_filters
                 sorted_filters = get_sorted_filters(model_id, MODELS)
@@ -475,7 +477,9 @@ async def model_response_handler(request, channel, message, user):
                     sorted_filters_with_model = sorted_filters
                 
                 if sorted_filters_with_model:
-                    log.info(f"Channel: Processing {len(sorted_filters_with_model)} pipeline inlet filter(s) for model {model_id}: {[f.get('id') for f in sorted_filters_with_model]}")
+                    log.info(f"Channel: Found {len(sorted_filters_with_model)} pipeline inlet filter(s) for model {model_id}: {[f.get('id') for f in sorted_filters_with_model]}")
+                else:
+                    log.debug(f"Channel: No pipeline inlet filters configured for model {model_id}")
                 
                 try:
                     original_model = form_data["model"]
@@ -549,6 +553,7 @@ async def model_response_handler(request, channel, message, user):
                 if res:
                     # Process through outlet filters (summary, re-rank, etc.)
                     # STEP 1: Pipeline outlet filters
+                    log.debug(f"Channel: Processing pipeline outlet filters for model {model_id}")
                     try:
                         original_content = res.get("choices", [{}])[0].get("message", {}).get("content") if res.get("choices") else None
                         res = await process_pipeline_outlet_filter(
@@ -562,6 +567,7 @@ async def model_response_handler(request, channel, message, user):
                         # Continue with unprocessed response
                     
                     # STEP 2: Function outlet filters (chat summarization, re-rank, etc.)
+                    log.info(f"Channel: Processing function outlet filters for model {model_id}")
                     try:
                         # Convert response to format expected by function filters
                         # Function filters expect form_data format similar to chat_completed
