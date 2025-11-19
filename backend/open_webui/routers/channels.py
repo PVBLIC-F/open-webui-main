@@ -27,7 +27,7 @@ from open_webui.config import ENABLE_ADMIN_CHAT_ACCESS, ENABLE_ADMIN_EXPORT
 from open_webui.constants import ERROR_MESSAGES
 from open_webui.env import SRC_LOG_LEVELS
 
-from open_webui.utils.models import get_all_models, get_filtered_models
+from open_webui.utils.models import get_all_models
 from open_webui.utils.chat import generate_chat_completion
 from open_webui.utils.auth import get_admin_user, get_verified_user
 from open_webui.utils.access_control import has_access, get_users_with_access
@@ -292,11 +292,13 @@ async def send_notification(name, webui_url, channel, message, active_user_ids):
 
 
 async def model_response_handler(request, channel, message, user):
-    all_models = await get_all_models(request, user=user)
-    MODELS = {
-        model["id"]: model
-        for model in get_filtered_models(all_models, user)
-    }
+    # Ensure models are loaded in app state (same as chat interface)
+    if not request.app.state.MODELS:
+        await get_all_models(request, user=user)
+    
+    # Use app.state.MODELS directly (includes all models including filters)
+    # This matches how the chat interface loads models
+    MODELS = request.app.state.MODELS
     
     # DEBUG: Log filter models
     filter_models = [m for m in MODELS.values() if m.get("pipeline", {}).get("type") == "filter"]
