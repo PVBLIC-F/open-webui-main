@@ -293,16 +293,32 @@ async def send_notification(name, webui_url, channel, message, active_user_ids):
 
 async def model_response_handler(request, channel, message, user):
     # Ensure models are loaded in app state (same as chat interface)
-    if not request.app.state.MODELS:
-        await get_all_models(request, user=user)
+    # Force refresh to ensure filters are loaded (they come from OpenAI API)
+    await get_all_models(request, refresh=True, user=user)
     
     # Use app.state.MODELS directly (includes all models including filters)
     # This matches how the chat interface loads models
     MODELS = request.app.state.MODELS
     
-    # DEBUG: Log filter models
+    # DEBUG: Check if OPENAI_MODELS has filters that aren't in MODELS
+    openai_filter_models = []
+    if hasattr(request.app.state, "OPENAI_MODELS"):
+        openai_filter_models = [
+            m for m in request.app.state.OPENAI_MODELS.values()
+            if m.get("pipeline", {}).get("type") == "filter"
+        ]
+        log.info(f"Channel: OPENAI_MODELS has {len(openai_filter_models)} filter(s): {[f['id'] for f in openai_filter_models]}")
+    
+    # DEBUG: Log filter models in MODELS
     filter_models = [m for m in MODELS.values() if m.get("pipeline", {}).get("type") == "filter"]
     log.info(f"Channel: Loaded {len(MODELS)} total models, {len(filter_models)} are filters: {[f['id'] for f in filter_models]}")
+    
+    # If filters exist in OPENAI_MODELS but not in MODELS, merge them
+    if openai_filter_models and not filter_models:
+        log.warning(f"Channel: Filters found in OPENAI_MODELS but not in MODELS - merging")
+        for filter_model in openai_filter_models:
+            MODELS[filter_model["id"]] = filter_model
+        log.info(f"Channel: After merge, MODELS has {len([m for m in MODELS.values() if m.get('pipeline', {}).get('type') == 'filter'])} filter(s)")
     
     log.info(f"Channel: Model response handler called for channel {channel.id}, message {message.id}")
 
