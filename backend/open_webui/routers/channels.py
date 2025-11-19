@@ -292,17 +292,20 @@ async def send_notification(name, webui_url, channel, message, active_user_ids):
 
 
 async def model_response_handler(request, channel, message, user):
+    all_models = await get_all_models(request, user=user)
     MODELS = {
         model["id"]: model
-        for model in get_filtered_models(await get_all_models(request, user=user), user)
+        for model in get_filtered_models(all_models, user)
     }
+    
+    # DEBUG: Log filter models
+    filter_models = [m for m in MODELS.values() if m.get("pipeline", {}).get("type") == "filter"]
+    log.info(f"Channel: Loaded {len(MODELS)} total models, {len(filter_models)} are filters: {[f['id'] for f in filter_models]}")
     
     log.info(f"Channel: Model response handler called for channel {channel.id}, message {message.id}")
 
     mentions = extract_mentions(message.content)
     message_content = replace_mentions(message.content)
-
-    log.info(f"Channel: Extracted {len(mentions)} mentions from message: {mentions}")
 
     model_mentions = {}
 
@@ -314,7 +317,6 @@ async def model_response_handler(request, channel, message, user):
     ):
         model_id = message.reply_to_message.meta.get("model_id", None)
         model_mentions[model_id] = {"id": model_id, "id_type": "M"}
-        log.info(f"Channel: Message is a reply to model {model_id}")
 
     # check if any of the mentions are models
     for mention in mentions:
@@ -322,10 +324,7 @@ async def model_response_handler(request, channel, message, user):
             model_mentions[mention["id"]] = mention
 
     if not model_mentions:
-        log.info("Channel: No model mentions found - skipping LLM processing")
         return False
-    
-    log.info(f"Channel: Found {len(model_mentions)} model mention(s): {list(model_mentions.keys())}")
 
     for mention in model_mentions.values():
         model_id = mention["id"]
@@ -443,6 +442,11 @@ async def model_response_handler(request, channel, message, user):
                 }
 
                 # Process through inlet filters (pre-processing)
+                # DEBUG: Check what filters exist for this specific model
+                from open_webui.routers.pipelines import get_sorted_filters
+                sorted_filters = get_sorted_filters(model_id, MODELS)
+                log.info(f"Channel: Found {len(sorted_filters)} filter(s) configured for model {model_id}: {[f.get('id') for f in sorted_filters]}")
+                
                 log.info(f"Channel: Checking inlet filters for model {model_id}")
                 try:
                     original_model = form_data["model"]
