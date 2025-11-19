@@ -349,6 +349,11 @@ async def model_response_handler(request, channel, message, user):
         model = MODELS.get(model_id, None)
 
         if model:
+            # DEBUG: Log model structure to see if it has pipeline field
+            log.info(f"Channel: Model {model_id} structure: has pipeline={('pipeline' in model)}, keys={list(model.keys())[:10]}")
+            if "pipeline" in model:
+                log.info(f"Channel: Model {model_id} pipeline config: {model.get('pipeline')}")
+            
             try:
                 # reverse to get in chronological order
                 thread_messages = Messages.get_messages_by_parent_id(
@@ -463,7 +468,18 @@ async def model_response_handler(request, channel, message, user):
                 # DEBUG: Check what filters exist for this specific model
                 from open_webui.routers.pipelines import get_sorted_filters
                 sorted_filters = get_sorted_filters(model_id, MODELS)
-                log.info(f"Channel: Found {len(sorted_filters)} filter(s) configured for model {model_id}: {[f.get('id') for f in sorted_filters]}")
+                
+                # DEBUG: Check if the model itself has a pipeline field
+                model_has_pipeline = "pipeline" in model
+                if model_has_pipeline:
+                    log.info(f"Channel: Model {model_id} has pipeline field: {model.get('pipeline')}")
+                    # Note: process_pipeline_inlet_filter will add model to sorted_filters if it has pipeline
+                    sorted_filters_with_model = sorted_filters + [model]
+                else:
+                    sorted_filters_with_model = sorted_filters
+                
+                log.info(f"Channel: Found {len(sorted_filters)} filter model(s) configured for model {model_id}: {[f.get('id') for f in sorted_filters]}")
+                log.info(f"Channel: Model has pipeline={model_has_pipeline}, total filters={len(sorted_filters_with_model)}")
                 
                 log.info(f"Channel: Checking inlet filters for model {model_id}")
                 try:
