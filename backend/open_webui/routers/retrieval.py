@@ -1998,7 +1998,7 @@ def save_docs_to_vector_db(
     docs,
     collection_name,
     metadata: Optional[dict] = None,
-    overwrite: bool = False,
+    overwrite: bool = True,  # Default to True for smooth UX (auto-replace like file systems)
     split: bool = True,
     add: bool = False,
     user=None,
@@ -2037,14 +2037,15 @@ def save_docs_to_vector_db(
         if result is not None:
             existing_doc_ids = result.ids[0]
             if existing_doc_ids:
+                filename = metadata.get("name", "Unknown file")
                 log.info(
-                    f"Document with hash {metadata['hash']} already exists in collection {collection_name}"
+                    f"Document '{filename}' with hash {metadata['hash']} already exists in collection {collection_name}"
                 )
 
                 # If overwrite is True, delete existing documents first
                 if overwrite:
                     log.info(
-                        f"Overwriting existing documents with hash {metadata['hash']}"
+                        f"Replacing existing version of '{filename}' ({len(existing_doc_ids)} vectors)"
                     )
                     try:
                         VECTOR_DB_CLIENT.delete(
@@ -2052,15 +2053,15 @@ def save_docs_to_vector_db(
                             ids=existing_doc_ids,
                             namespace=namespace,
                         )
-                        log.info(f"Deleted {len(existing_doc_ids)} existing documents")
+                        log.info(f"✓ Deleted {len(existing_doc_ids)} existing vectors for '{filename}'")
                     except Exception as e:
                         log.warning(f"Failed to delete existing documents: {e}")
                         # Continue processing instead of failing
                 else:
-                    # Provide more informative error message
-                    filename = metadata.get("name", "Unknown file")
+                    # Only error if user explicitly set overwrite=False
                     raise ValueError(
-                        f"File '{filename}' with identical content already exists in this knowledge base. To replace it, please delete the existing file first or use the overwrite option."
+                        f"File '{filename}' with identical content already exists in this knowledge base. "
+                        f"Set overwrite=true to replace it (default behavior)."
                     )
 
     if split:
@@ -2932,7 +2933,7 @@ def process_file(
                         collection_name=collection_name,
                         metadata=file_metadata,
                         add=(True if form_data.collection_name else False),
-                        overwrite=False,  # Don't overwrite - add to existing collection (critical for knowledge bases)
+                        overwrite=True,  # Auto-overwrite duplicates for smooth UX (matches file system behavior)
                         split=should_split,  # Skip splitting for transcripts (already chunked)
                         user=user,
                     )
