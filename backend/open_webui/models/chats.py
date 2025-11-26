@@ -349,8 +349,8 @@ class Chat(Base):
 
     __tablename__ = "chat"
 
-    # Primary identifier - UUID string for global uniqueness
-    id = Column(String, primary_key=True)
+# Primary identifier - UUID string for global uniqueness
+    id = Column(String, primary_key=True, unique=True)
 
     # User ownership - links to user management system
     user_id = Column(String)
@@ -432,6 +432,10 @@ class ChatImportForm(ChatForm):
     pinned: Optional[bool] = False
     created_at: Optional[int] = None
     updated_at: Optional[int] = None
+
+
+class ChatsImportForm(BaseModel):
+    chats: list[ChatImportForm]
 
 
 class ChatTitleMessagesForm(BaseModel):
@@ -785,6 +789,43 @@ class ChatTable:
 
             return and_(*conditions) if operator == "AND" else or_(*conditions)
 
+    def _clean_null_bytes(self, obj):
+        """
+        Recursively remove actual null bytes (\x00) and unicode escape \\u0000
+        from strings inside dict/list structures.
+        Safe for JSON objects.
+        """
+        if isinstance(obj, str):
+            return obj.replace("\x00", "").replace("\u0000", "")
+        elif isinstance(obj, dict):
+            return {k: self._clean_null_bytes(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [self._clean_null_bytes(v) for v in obj]
+        return obj
+
+    def _sanitize_chat_row(self, chat_item):
+        """
+        Clean a Chat SQLAlchemy model's title + chat JSON,
+        and return True if anything changed.
+        """
+        changed = False
+
+        # Clean title
+        if chat_item.title:
+            cleaned = self._clean_null_bytes(chat_item.title)
+            if cleaned != chat_item.title:
+                chat_item.title = cleaned
+                changed = True
+
+        # Clean JSON
+        if chat_item.chat:
+            cleaned = self._clean_null_bytes(chat_item.chat)
+            if cleaned != chat_item.chat:
+                chat_item.chat = cleaned
+                changed = True
+
+        return changed
+
     def insert_new_chat(self, user_id: str, form_data: ChatForm) -> Optional[ChatModel]:
         """
         Create a new chat for a user.
@@ -811,12 +852,12 @@ class ChatTable:
                 **{
                     "id": id,
                     "user_id": user_id,
-                    "title": (
+                    "title": self._clean_null_bytes(
                         form_data.chat["title"]
                         if "title" in form_data.chat
                         else "New Chat"  # Fallback for chats without explicit titles
                     ),
-                    "chat": form_data.chat,
+                    "chat": self._clean_null_bytes(form_data.chat),
                     "folder_id": form_data.folder_id,
                     "created_at": int(time.time()),  # Unix timestamp for consistency
                     "updated_at": int(time.time()),
@@ -824,17 +865,17 @@ class ChatTable:
             )
 
             # Persist to database with transaction safety
-            result = Chat(**chat.model_dump())
-            db.add(result)
+            chat_item = Chat(**chat.model_dump())
+            db.add(chat_item)
             db.commit()
-            db.refresh(result)  # Refresh to get any database-generated values
-            return ChatModel.model_validate(result) if result else None
+            db.refresh(chat_item)  # Refresh to get any database-generated values
+            return ChatModel.model_validate(chat_item) if chat_item else None
 
-    def import_chat(
+    def _chat_import_form_to_chat_model(
         self, user_id: str, form_data: ChatImportForm
-    ) -> Optional[ChatModel]:
+    ) -> ChatModel:
         """
-        Import an existing chat with preserved metadata and timestamps.
+        Create a ChatModel from import form data with sanitization.
 
         Used for:
         - Chat migration between systems
@@ -846,46 +887,49 @@ class ChatTable:
             form_data (ChatImportForm): Complete chat data including metadata
 
         Returns:
-            Optional[ChatModel]: Imported chat model or None if import failed
+            ChatModel: Sanitized chat model ready for persistence
 
         Note:
             - Preserves original timestamps if provided
             - Maintains pinned status and metadata
             - Generates new UUID for database consistency
+            - Sanitizes null bytes from title and chat content
         """
-        with get_db() as db:
-            id = str(uuid.uuid4())
-            chat = ChatModel(
-                **{
-                    "id": id,
-                    "user_id": user_id,
-                    "title": (
-                        form_data.chat["title"]
-                        if "title" in form_data.chat
-                        else "New Chat"
-                    ),
-                    "chat": form_data.chat,
-                    "meta": form_data.meta,
-                    "pinned": form_data.pinned,
-                    "folder_id": form_data.folder_id,
-                    "created_at": (
-                        form_data.created_at
-                        if form_data.created_at
-                        else int(time.time())
-                    ),
-                    "updated_at": (
-                        form_data.updated_at
-                        if form_data.updated_at
-                        else int(time.time())
-                    ),
-                }
-            )
+        id = str(uuid.uuid4())
+        chat = ChatModel(
+            **{
+                "id": id,
+                "user_id": user_id,
+                "title": self._clean_null_bytes(
+                    form_data.chat["title"] if "title" in form_data.chat else "New Chat"
+                ),
+                "chat": self._clean_null_bytes(form_data.chat),
+                "meta": form_data.meta,
+                "pinned": form_data.pinned,
+                "folder_id": form_data.folder_id,
+                "created_at": (
+                    form_data.created_at if form_data.created_at else int(time.time())
+                ),
+                "updated_at": (
+                    form_data.updated_at if form_data.updated_at else int(time.time())
+                ),
+            }
+        )
+        return chat
 
-            result = Chat(**chat.model_dump())
-            db.add(result)
+    def import_chats(
+        self, user_id: str, chat_import_forms: list[ChatImportForm]
+    ) -> list[ChatModel]:
+        with get_db() as db:
+            chats = []
+
+            for form_data in chat_import_forms:
+                chat = self._chat_import_form_to_chat_model(user_id, form_data)
+                chats.append(Chat(**chat.model_dump()))
+
+            db.add_all(chats)
             db.commit()
-            db.refresh(result)
-            return ChatModel.model_validate(result) if result else None
+            return [ChatModel.model_validate(chat) for chat in chats]
 
     def update_chat_by_id(self, id: str, chat: dict) -> Optional[ChatModel]:
         """
@@ -906,8 +950,12 @@ class ChatTable:
         try:
             with get_db() as db:
                 chat_item = db.get(Chat, id)
-                chat_item.chat = chat
-                chat_item.title = chat["title"] if "title" in chat else "New Chat"
+                chat_item.chat = self._clean_null_bytes(chat)
+                chat_item.title = (
+                    self._clean_null_bytes(chat["title"])
+                    if "title" in chat
+                    else "New Chat"
+                )
                 chat_item.updated_at = int(time.time())  # Track modification time
                 db.commit()
                 db.refresh(chat_item)
@@ -1038,6 +1086,27 @@ class ChatTable:
         chat["history"] = history
         return self.update_chat_by_id(id, chat)
 
+    def add_message_files_by_id_and_message_id(
+        self, id: str, message_id: str, files: list[dict]
+    ) -> list[dict]:
+        chat = self.get_chat_by_id(id)
+        if chat is None:
+            return None
+
+        chat = chat.chat
+        history = chat.get("history", {})
+
+        message_files = []
+
+        if message_id in history.get("messages", {}):
+            message_files = history["messages"][message_id].get("files", [])
+            message_files = message_files + files
+            history["messages"][message_id]["files"] = message_files
+
+        chat["history"] = history
+        self.update_chat_by_id(id, chat)
+        return message_files
+
     def insert_shared_chat_by_chat_id(self, chat_id: str) -> Optional[ChatModel]:
         with get_db() as db:
             # Get the existing chat to share
@@ -1148,6 +1217,7 @@ class ChatTable:
             with get_db() as db:
                 chat = db.get(Chat, id)
                 chat.archived = not chat.archived
+                chat.folder_id = None
                 chat.updated_at = int(time.time())
                 db.commit()
                 db.refresh(chat)
@@ -1306,8 +1376,15 @@ class ChatTable:
     def get_chat_by_id(self, id: str) -> Optional[ChatModel]:
         try:
             with get_db() as db:
-                chat = db.get(Chat, id)
-                return ChatModel.model_validate(chat)
+                chat_item = db.get(Chat, id)
+                if chat_item is None:
+                    return None
+
+                if self._sanitize_chat_row(chat_item):
+                    db.commit()
+                    db.refresh(chat_item)
+
+                return ChatModel.model_validate(chat_item)
         except Exception:
             return None
 
@@ -1555,6 +1632,12 @@ class ChatTable:
                 is_pg17 = pg_major >= 17
                 is_jsonb = functions.get("chat_is_jsonb", False)
 
+                # Safety filter: JSON field must not contain \u0000
+                query = query.filter(text("Chat.chat::text NOT LIKE '%\\\\u0000%'"))
+
+                # Safety filter: title must not contain actual null bytes
+                query = query.filter(text("Chat.title::text NOT LIKE '%\\x00%'"))
+
                 # PG17 New Feature: JSON_TABLE is 15-30% faster than array_elements
                 # Falls back to traditional methods for older versions or JSON (non-JSONB)
                 if is_pg17 and is_jsonb:
@@ -1586,18 +1669,14 @@ class ChatTable:
                         "    AND LOWER(message->>'content') LIKE '%' || :content_key || '%'"
                         ")"
                     )
-                
-                postgres_content_clause = text(postgres_content_sql)
 
-                # Also filter out chats with null bytes in title
-                query = query.filter(text("Chat.title::text NOT LIKE '%\\x00%'"))
-                # PG17 optimization: Index-only scans are more efficient
+                postgres_content_clause = text(postgres_content_sql)
                 query = query.filter(
                     or_(
                         Chat.title.ilike(bindparam("title_key")),
                         postgres_content_clause,
-                    ).params(title_key=f"%{search_text}%", content_key=search_text)
-                )
+                    )
+                ).params(title_key=f"%{search_text}%", content_key=search_text.lower())
 
                 if is_pg17:
                     log.debug("Using PostgreSQL 17 optimized query path")
@@ -1920,6 +1999,20 @@ class ChatTable:
         try:
             with get_db() as db:
                 db.query(Chat).filter_by(user_id=user_id, folder_id=folder_id).delete()
+                db.commit()
+
+                return True
+        except Exception:
+            return False
+
+    def move_chats_by_user_id_and_folder_id(
+        self, user_id: str, folder_id: str, new_folder_id: Optional[str]
+    ) -> bool:
+        try:
+            with get_db() as db:
+                db.query(Chat).filter_by(user_id=user_id, folder_id=folder_id).update(
+                    {"folder_id": new_folder_id}
+                )
                 db.commit()
 
                 return True

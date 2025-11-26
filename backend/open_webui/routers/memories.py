@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 import logging
+import asyncio
 from typing import Optional
 
 from open_webui.models.memories import Memories, MemoryModel
@@ -18,7 +19,7 @@ router = APIRouter()
 
 @router.get("/ef")
 async def get_embeddings(request: Request):
-    return {"result": request.app.state.EMBEDDING_FUNCTION("hello world")}
+    return {"result": await request.app.state.EMBEDDING_FUNCTION("hello world")}
 
 
 ############################
@@ -54,6 +55,7 @@ async def add_memory(
 
     memory_collection = f"user-memory-{user.id}"
     namespace = get_namespace_for_collection(memory_collection)
+    vector = await request.app.state.EMBEDDING_FUNCTION(memory.content, user=user)
 
     VECTOR_DB_CLIENT.upsert(
         collection_name=memory_collection,
@@ -61,9 +63,7 @@ async def add_memory(
             {
                 "id": memory.id,
                 "text": memory.content,
-                "vector": request.app.state.EMBEDDING_FUNCTION(
-                    memory.content, user=user
-                ),
+                "vector": vector,
                 "metadata": {"created_at": memory.created_at},
             }
         ],
@@ -93,10 +93,11 @@ async def query_memory(
 
     memory_collection = f"user-memory-{user.id}"
     namespace = get_namespace_for_collection(memory_collection)
+    vector = await request.app.state.EMBEDDING_FUNCTION(form_data.content, user=user)
 
     results = VECTOR_DB_CLIENT.search(
         collection_name=memory_collection,
-        vectors=[request.app.state.EMBEDDING_FUNCTION(form_data.content, user=user)],
+        vectors=[vector],
         limit=form_data.k,
         namespace=namespace,
     )
@@ -117,21 +118,28 @@ async def reset_memory_from_vector_db(
     VECTOR_DB_CLIENT.delete_collection(memory_collection, namespace=namespace)
 
     memories = Memories.get_memories_by_user_id(user.id)
+
+    # Generate vectors in parallel
+    vectors = await asyncio.gather(
+        *[
+            request.app.state.EMBEDDING_FUNCTION(memory.content, user=user)
+            for memory in memories
+        ]
+    )
+
     VECTOR_DB_CLIENT.upsert(
         collection_name=memory_collection,
         items=[
             {
                 "id": memory.id,
                 "text": memory.content,
-                "vector": request.app.state.EMBEDDING_FUNCTION(
-                    memory.content, user=user
-                ),
+                "vector": vectors[idx],
                 "metadata": {
                     "created_at": memory.created_at,
                     "updated_at": memory.updated_at,
                 },
             }
-            for memory in memories
+            for idx, memory in enumerate(memories)
         ],
         namespace=namespace,
     )
@@ -181,6 +189,7 @@ async def update_memory_by_id(
     if form_data.content is not None:
         memory_collection = f"user-memory-{user.id}"
         namespace = get_namespace_for_collection(memory_collection)
+        vector = await request.app.state.EMBEDDING_FUNCTION(memory.content, user=user)
 
         VECTOR_DB_CLIENT.upsert(
             collection_name=memory_collection,
@@ -188,9 +197,7 @@ async def update_memory_by_id(
                 {
                     "id": memory.id,
                     "text": memory.content,
-                    "vector": request.app.state.EMBEDDING_FUNCTION(
-                        memory.content, user=user
-                    ),
+                    "vector": vector,
                     "metadata": {
                         "created_at": memory.created_at,
                         "updated_at": memory.updated_at,
