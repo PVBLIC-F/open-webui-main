@@ -1494,54 +1494,6 @@ def generate_ollama_batch_embeddings(
         return None
 
 
-def generate_embeddings(
-    engine: str,
-    model: str,
-    text: Union[str, list[str]],
-    prefix: Union[str, None] = None,
-    **kwargs,
-):
-    url = kwargs.get("url", "")
-    key = kwargs.get("key", "")
-    user = kwargs.get("user")
-
-    if prefix is not None and RAG_EMBEDDING_PREFIX_FIELD_NAME is None:
-        if isinstance(text, list):
-            text = [f"{prefix}{text_element}" for text_element in text]
-        else:
-            text = f"{prefix}{text}"
-
-    if engine == "ollama":
-        embeddings = generate_ollama_batch_embeddings(
-            **{
-                "model": model,
-                "texts": text if isinstance(text, list) else [text],
-                "url": url,
-                "key": key,
-                "prefix": prefix,
-                "user": user,
-            }
-        )
-        return embeddings[0] if isinstance(text, str) else embeddings
-    elif engine == "openai":
-        embeddings = generate_openai_batch_embeddings(
-            model, text if isinstance(text, list) else [text], url, key, prefix, user
-        )
-        return embeddings[0] if isinstance(text, str) else embeddings
-    elif engine == "azure_openai":
-        azure_api_version = kwargs.get("azure_api_version", "")
-        embeddings = generate_azure_openai_batch_embeddings(
-            model,
-            text if isinstance(text, list) else [text],
-            url,
-            key,
-            azure_api_version,
-            prefix,
-            user,
-        )
-        return embeddings[0] if isinstance(text, str) else embeddings
-
-
 import operator
 from typing import Optional, Sequence
 
