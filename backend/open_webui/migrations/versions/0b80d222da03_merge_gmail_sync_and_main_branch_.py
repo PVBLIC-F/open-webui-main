@@ -14,7 +14,7 @@ import open_webui.internal.db
 
 # revision identifiers, used by Alembic.
 revision: str = '0b80d222da03'
-down_revision: Union[str, None] = ('33cc3721a72', '9ff8e65eafda')
+down_revision: Union[str, None] = ('33cc3721a72', '80d73eec17ce')
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

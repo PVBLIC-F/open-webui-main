@@ -17,7 +17,7 @@ from sqlalchemy.exc import ProgrammingError
 import logging
 
 revision = "80d73eec17ce"
-down_revision = "a5c220713937"
+down_revision = "37f288994c47"
 branch_labels = None
 depends_on = None
 
