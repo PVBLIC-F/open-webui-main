@@ -975,10 +975,6 @@ def get_reranking_function(reranking_engine, reranking_model, reranking_function
         return lambda query, documents, user=None: reranking_function.predict(
             [(query, doc.page_content) for doc in documents], user=user
         )
-    elif reranking_engine == "pinecone":
-        return lambda sentences, user=None: reranking_function.predict(
-            sentences, user=user
-        )
     else:
         return lambda query, documents, user=None: reranking_function.predict(
             [(query, doc.page_content) for doc in documents]
