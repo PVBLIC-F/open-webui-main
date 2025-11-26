@@ -604,6 +604,17 @@ class OAuthClientManager:
             dict: Refreshed token data, or None if refresh failed
         """
         try:
+            # Log token state before refresh attempt for diagnostics
+            token_data = session.token or {}
+            expires_at = token_data.get("expires_at")
+            has_refresh = bool(token_data.get("refresh_token"))
+            
+            log.info(
+                f"🔄 Attempting token refresh for session {session.id[:8]}... "
+                f"(provider={session.provider}, has_refresh_token={has_refresh}, "
+                f"expires_at={expires_at})"
+            )
+            
             # Perform the actual refresh
             refreshed_token = await self._perform_token_refresh(session)
 
@@ -612,14 +623,17 @@ class OAuthClientManager:
                 session = OAuthSessions.update_session_by_id(
                     session.id, refreshed_token
                 )
-                log.info(f"Successfully refreshed token for session {session.id}")
+                log.info(f"✅ Successfully refreshed token for session {session.id[:8]}...")
                 return session.token
             else:
-                log.error(f"Failed to refresh token for session {session.id}")
+                log.error(
+                    f"❌ Failed to refresh token for session {session.id[:8]}... "
+                    f"(provider={session.provider}) - User may need to re-authenticate"
+                )
                 return None
 
         except Exception as e:
-            log.error(f"Error refreshing token for session {session.id}: {e}")
+            log.exception(f"❌ Exception refreshing token for session {session.id[:8]}...: {e}")
             return None
 
     async def _perform_token_refresh(self, session) -> dict:
@@ -888,6 +902,17 @@ class OAuthManager:
             dict: Refreshed token data, or None if refresh failed
         """
         try:
+            # Log token state before refresh attempt for diagnostics
+            token_data = session.token or {}
+            expires_at = token_data.get("expires_at")
+            has_refresh = bool(token_data.get("refresh_token"))
+            
+            log.info(
+                f"🔄 Attempting token refresh for session {session.id[:8]}... "
+                f"(provider={session.provider}, has_refresh_token={has_refresh}, "
+                f"expires_at={expires_at})"
+            )
+            
             # Perform the actual refresh
             refreshed_token = await self._perform_token_refresh(session)
 
@@ -896,14 +921,17 @@ class OAuthManager:
                 session = OAuthSessions.update_session_by_id(
                     session.id, refreshed_token
                 )
-                log.info(f"Successfully refreshed token for session {session.id}")
+                log.info(f"✅ Successfully refreshed token for session {session.id[:8]}...")
                 return session.token
             else:
-                log.error(f"Failed to refresh token for session {session.id}")
+                log.error(
+                    f"❌ Failed to refresh token for session {session.id[:8]}... "
+                    f"(provider={session.provider}) - User may need to re-authenticate"
+                )
                 return None
 
         except Exception as e:
-            log.error(f"Error refreshing token for session {session.id}: {e}")
+            log.exception(f"❌ Exception refreshing token for session {session.id[:8]}...: {e}")
             return None
 
     async def _perform_token_refresh(self, session) -> dict:
@@ -988,13 +1016,36 @@ class OAuthManager:
                         return new_token_data
                     else:
                         error_text = await r.text()
-                        log.error(
-                            f"Token refresh failed for provider {provider}: {r.status} - {error_text}"
-                        )
+                        # Categorize error for better diagnostics
+                        if r.status == 400:
+                            log.error(
+                                f"🔑 Token refresh failed for {provider}: 400 Bad Request - "
+                                f"Refresh token may be invalid or expired. User needs to re-authenticate. "
+                                f"Details: {error_text[:200]}"
+                            )
+                        elif r.status == 401:
+                            log.error(
+                                f"🔑 Token refresh failed for {provider}: 401 Unauthorized - "
+                                f"Refresh token revoked or OAuth app credentials changed. "
+                                f"User needs to re-authenticate. Details: {error_text[:200]}"
+                            )
+                        elif r.status == 403:
+                            log.error(
+                                f"🔑 Token refresh failed for {provider}: 403 Forbidden - "
+                                f"OAuth app may be in 'Testing' mode (tokens expire after 7 days) "
+                                f"or user revoked access. Details: {error_text[:200]}"
+                            )
+                        else:
+                            log.error(
+                                f"🔑 Token refresh failed for {provider}: {r.status} - {error_text[:200]}"
+                            )
                         return None
 
+        except aiohttp.ClientError as e:
+            log.error(f"🌐 Network error during token refresh for {provider}: {e}")
+            return None
         except Exception as e:
-            log.error(f"Exception during token refresh for provider {provider}: {e}")
+            log.exception(f"❌ Exception during token refresh for {provider}: {e}")
             return None
 
     def get_user_role(self, user, user_data):
