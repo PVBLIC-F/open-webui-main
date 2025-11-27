@@ -48,9 +48,9 @@ class GmailSyncStatus(Base):
     last_sync_duration = Column(Integer, default=0)  # Last sync duration in seconds
 
     # Sync status and configuration
-    sync_status = Column(
-        String, default="never"
-    )  # "never", "active", "paused", "error"
+    # Valid statuses: "never" (initial), "active" (sync in progress), 
+    # "completed" (sync finished successfully), "paused", "error"
+    sync_status = Column(String, default="never")
     sync_enabled = Column(Boolean, default=True)  # Whether sync is enabled for user
     auto_sync_enabled = Column(Boolean, default=True)  # Whether to auto-sync on login
 
@@ -79,7 +79,7 @@ class GmailSyncStatusModel(BaseModel):
     last_sync_count: int = 0
     last_sync_duration: int = 0
 
-    sync_status: str = "never"  # "never", "active", "paused", "error"
+    sync_status: str = "never"  # "never", "active", "completed", "paused", "error"
     sync_enabled: bool = True
     auto_sync_enabled: bool = True
 
@@ -237,9 +237,11 @@ class GmailSyncStatusTable:
                 new_total = current_status.total_emails_synced + emails_synced
 
                 # Update with correct total
+                # Set sync_status to "completed" so user can be picked up on next cycle
+                # ("active" would cause user to be filtered out by get_users_needing_sync)
                 return self.update_sync_status(
                     user_id=user_id,
-                    sync_status="active",
+                    sync_status="completed",
                     last_sync_timestamp=int(time.time()),
                     last_sync_history_id=last_history_id,
                     last_sync_email_id=last_email_id,
@@ -277,7 +279,7 @@ class GmailSyncStatusTable:
             log.error(f"Error marking sync error for user {user_id}: {e}")
             return None
 
-    def get_users_needing_sync(self, max_hours_since_sync: int = 24) -> list[str]:
+    def get_users_needing_sync(self, max_hours_since_sync: float = 24) -> list[str]:
         """
         Get list of user IDs that need syncing (production-optimized).
         
@@ -288,14 +290,15 @@ class GmailSyncStatusTable:
         - Executes as single SELECT with WHERE clause
         
         Args:
-            max_hours_since_sync: Hours since last sync to consider stale
+            max_hours_since_sync: Hours since last sync to consider stale (can be fractional, 
+                                  e.g., 0.25 for 15 minutes)
             
         Returns:
             list[str]: User IDs needing sync
         """
         try:
             with get_db() as db:
-                cutoff_time = int(time.time()) - (max_hours_since_sync * 3600)
+                cutoff_time = int(time.time() - (max_hours_since_sync * 3600))
 
                 # Optimized query - leverages database indexes
                 # Index usage: gmail_sync_enabled_idx (sync_enabled, auto_sync_enabled)

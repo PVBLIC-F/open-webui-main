@@ -1291,6 +1291,11 @@ async def _sync_user_periodic(user_id: str) -> bool:
                 f"⏱️  Periodic sync timeout for user {user_id} "
                 f"after {duration:.1f}s (max: {sync_timeout}s)"
             )
+            # Mark sync as error so user can be picked up on next cycle
+            # (otherwise user would be stuck in "active" status)
+            gmail_sync_status.mark_sync_error(
+                user_id, f"Sync timeout after {duration:.1f}s"
+            )
             return False
 
         # If we reach here, the sync completed successfully
@@ -1301,6 +1306,8 @@ async def _sync_user_periodic(user_id: str) -> bool:
 
     except asyncio.CancelledError:
         logger.info(f"🛑 Periodic sync cancelled for user {user_id}")
+        # Mark sync as error so user can be retried on next cycle
+        gmail_sync_status.mark_sync_error(user_id, "Sync cancelled")
         raise  # Propagate cancellation
     except Exception as e:
         duration = time.time() - sync_start
@@ -1308,6 +1315,8 @@ async def _sync_user_periodic(user_id: str) -> bool:
             f"❌ Unexpected error in periodic sync for user {user_id} "
             f"after {duration:.1f}s: {type(e).__name__}: {e}"
         )
+        # Mark sync as error so user can be picked up on next cycle
+        gmail_sync_status.mark_sync_error(user_id, str(e))
         return False
 
 
