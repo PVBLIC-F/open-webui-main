@@ -25,7 +25,9 @@ import asyncio
 import re
 import hashlib
 import math
+import concurrent.futures
 from datetime import datetime
+from functools import partial
 from typing import Dict, List, Optional
 
 from open_webui.utils.gmail_processor import GmailProcessor
@@ -33,6 +35,11 @@ from open_webui.routers.retrieval import extract_enhanced_metadata
 from open_webui.config import (
     RAG_EMBEDDING_BATCH_SIZE,
     SEMANTIC_MAX_CHUNK_SIZE,
+)
+
+# Thread pool for CPU-bound operations (prevents blocking event loop)
+_CPU_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=2, thread_name_prefix="gmail_cpu"
 )
 
 logger = logging.getLogger(__name__)
@@ -152,36 +159,49 @@ class GmailIndexerV2:
             if attachment_names:
                 logger.info(f"  📎 Processed {len(attachment_names)} attachment(s)")
 
-        # Step 3: Create THREE text versions
-        # Clean body first (used by all three)
-        clean_body = (
-            self._deep_clean_for_embeddings(parsed["document_text"])
-            if parsed["document_text"]
-            else ""
-        )
-        clean_subject = self._clean_subject(base_metadata["subject"])
+        # Step 3: Create THREE text versions (run CPU-heavy work in thread executor)
+        # This prevents blocking the async event loop
+        loop = asyncio.get_running_loop()
 
-        # 3a. RERANK_TEXT: Full clean body for re-ranker (longest)
-        rerank_text = self._create_rerank_text(
-            subject=clean_subject,
-            from_name=base_metadata["from_name"],
-            body=clean_body,
-            attachment_texts=attachment_texts,
+        # Run CPU-bound text processing in thread pool
+        def _process_text_sync():
+            clean_body = (
+                self._deep_clean_for_embeddings(parsed["document_text"])
+                if parsed["document_text"]
+                else ""
+            )
+            clean_subject = self._clean_subject(base_metadata["subject"])
+
+            # 3a. RERANK_TEXT: Full clean body for re-ranker (longest)
+            rerank_text = self._create_rerank_text(
+                subject=clean_subject,
+                from_name=base_metadata["from_name"],
+                body=clean_body,
+                attachment_texts=attachment_texts,
+            )
+
+            # 3b. EMBEDDING_TEXT: Semantic-optimized for vector (medium)
+            embedding_text = self._create_embedding_text(
+                subject=clean_subject,
+                from_name=base_metadata["from_name"],
+                body=clean_body,
+                attachment_texts=attachment_texts,
+            )
+
+            # 3c. SNIPPET: Short preview for display (shortest)
+            snippet = self._create_snippet(
+                subject=clean_subject,
+                body=clean_body,
+            )
+
+            return clean_body, clean_subject, rerank_text, embedding_text, snippet
+
+        clean_body, clean_subject, rerank_text, embedding_text, snippet = (
+            await loop.run_in_executor(_CPU_EXECUTOR, _process_text_sync)
         )
 
-        # 3b. EMBEDDING_TEXT: Semantic-optimized for vector (medium)
-        embedding_text = self._create_embedding_text(
-            subject=clean_subject,
-            from_name=base_metadata["from_name"],
-            body=clean_body,
-            attachment_texts=attachment_texts,
-        )
-
-        # 3c. SNIPPET: Short preview for display (shortest)
-        snippet = self._create_snippet(
-            subject=clean_subject,
-            body=clean_body,
-        )
+        # Yield after heavy processing
+        await asyncio.sleep(0)
 
         # Fallback if embedding_text is empty
         if not embedding_text or not embedding_text.strip():
@@ -190,16 +210,28 @@ class GmailIndexerV2:
                 f"Using subject + snippet as fallback"
             )
             embedding_text = f"{clean_subject}\n\n{parsed.get('snippet', '')}"
-            embedding_text = self._deep_clean_for_embeddings(embedding_text)
+            embedding_text = await loop.run_in_executor(
+                _CPU_EXECUTOR, self._deep_clean_for_embeddings, embedding_text
+            )
 
         logger.debug(f"  Rerank text: {len(rerank_text)} chars")
         logger.debug(f"  Embedding text: {len(embedding_text)} chars")
         logger.debug(f"  Snippet: {len(snippet)} chars")
 
-        # Step 4: Extract enhanced metadata as ARRAYS
-        enhanced_metadata = (
-            extract_enhanced_metadata(clean_body, use_llm=False) if clean_body else {}
+        # Step 4: Extract enhanced metadata as ARRAYS (CPU-bound, run in thread)
+        def _extract_metadata_sync():
+            return (
+                extract_enhanced_metadata(clean_body, use_llm=False)
+                if clean_body
+                else {}
+            )
+
+        enhanced_metadata = await loop.run_in_executor(
+            _CPU_EXECUTOR, _extract_metadata_sync
         )
+
+        # Yield after metadata extraction
+        await asyncio.sleep(0)
 
         # Step 5: Calculate recency score (exponential decay)
         recency_score = self._calculate_recency_score(base_metadata["date_timestamp"])
@@ -273,7 +305,7 @@ class GmailIndexerV2:
             f"📦 Processing batch of {len(emails)} emails (V3 - Semantic + Rerank)"
         )
 
-        for email_data in emails:
+        for idx, email_data in enumerate(emails):
             try:
                 email_id = email_data.get("id", "unknown")
                 snippet = email_data.get("snippet", "")
@@ -311,14 +343,24 @@ class GmailIndexerV2:
                 # Clear email data to free memory
                 email_data.clear()
 
-                # Yield to event loop every 10 emails
-                if processed_count % 10 == 0:
-                    await asyncio.sleep(0)
+                # CRITICAL: Yield to event loop frequently to keep server responsive
+                # Yield every email to prevent blocking
+                await asyncio.sleep(0)
+
+                # Add small delay every 5 emails to prevent CPU starvation
+                if processed_count % 5 == 0:
+                    await asyncio.sleep(0.01)  # 10ms delay
+
+                # Longer delay every 20 emails for server breathing room
+                if processed_count % 20 == 0:
+                    await asyncio.sleep(0.05)  # 50ms delay
 
             except Exception as e:
                 email_id = email_data.get("id", "unknown")
                 logger.error(f"  ❌ Error processing {email_id[:8]}: {e}")
                 error_count += 1
+                # Still yield even on error
+                await asyncio.sleep(0)
                 continue
 
         batch_time = time.time() - batch_start

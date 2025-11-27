@@ -689,23 +689,21 @@ async def _background_gmail_sync(request, user_id: str, oauth_token: dict):
                             dim = 1536
                         return [0.0] * dim
 
-                # Process embeddings concurrently but with small batches to avoid overwhelming
+                # Process embeddings SEQUENTIALLY with yields to keep server responsive
+                # Concurrent embedding was causing CPU starvation
                 embeddings = []
-                batch_size = 3  # Even smaller batch to keep event loop responsive
 
-                for i in range(0, len(texts), batch_size):
-                    batch = texts[i : i + batch_size]
-                    batch_embeddings = await asyncio.gather(
-                        *[embed_single(t) for t in batch]
-                    )
-                    embeddings.extend(batch_embeddings)
+                for i, text in enumerate(texts):
+                    # Generate embedding for single text
+                    embedding = await embed_single(text)
+                    embeddings.append(embedding)
 
-                    # Yield control to event loop between batches
+                    # CRITICAL: Yield after EVERY embedding to prevent blocking
                     await asyncio.sleep(0)
 
-                    # Additional yield every few batches
-                    if (i // batch_size) % 3 == 0:
-                        await asyncio.sleep(0.001)  # Small delay every 3 batches
+                    # Add small delay every 2 embeddings for breathing room
+                    if (i + 1) % 2 == 0:
+                        await asyncio.sleep(0.02)  # 20ms delay
 
                 return embeddings
 
