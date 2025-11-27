@@ -595,6 +595,33 @@ class GmailIndexerV2:
         text = text.replace("\\\\", "")
         text = text.replace("\\/", "/")
 
+        # STEP 1.5: Strip HTML completely (defense in depth)
+        # Remove DOCTYPE declarations (<!DOCTYPE...>)
+        text = re.sub(r"<![^>]*>", "", text, flags=re.IGNORECASE)
+        # Remove XML declarations (<?xml...?>)
+        text = re.sub(r"<\?[^>]*\?>", "", text, flags=re.IGNORECASE)
+        # Remove CDATA sections
+        text = re.sub(r"<!\[CDATA\[.*?\]\]>", "", text, flags=re.DOTALL)
+        # Remove HTML comments (<!--...-->)
+        text = re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL)
+        # Remove script and style tags with content
+        text = re.sub(
+            r"<script[^>]*>.*?</script>", "", text, flags=re.DOTALL | re.IGNORECASE
+        )
+        text = re.sub(
+            r"<style[^>]*>.*?</style>", "", text, flags=re.DOTALL | re.IGNORECASE
+        )
+        # Remove inline styles (style="...") before removing tags
+        text = re.sub(
+            r'\s*style\s*=\s*["\'][^"\']*["\']', "", text, flags=re.IGNORECASE
+        )
+        # Remove all HTML tags
+        text = re.sub(r"<[^>]+>", "", text)
+        # Remove MSO (Microsoft Office) conditional comments
+        text = re.sub(
+            r"\[if[^\]]*\].*?\[endif\]", "", text, flags=re.DOTALL | re.IGNORECASE
+        )
+
         # STEP 2: Remove quoted reply blocks
         text = re.sub(r"On .{1,100}wrote:.*", "", text, flags=re.DOTALL | re.IGNORECASE)
         text = re.sub(r"^>.*$", "", text, flags=re.MULTILINE)
