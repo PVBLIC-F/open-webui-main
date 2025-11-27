@@ -1,22 +1,22 @@
 """
-Gmail Indexer V2 - Optimized Single-Vector Strategy
+Gmail Indexer V3 - Optimized for Semantic Search + Re-ranking
 
-Production-grade email indexing optimized for semantic search at scale.
+Production-grade email indexing optimized for semantic search with re-ranking.
 
-Key Improvements:
-- Single high-quality vector per email (not 6+ chunks)
-- Advanced text cleaning for better embeddings
-- Rich metadata for precise filtering
-- Optimized for 100,000+ email repositories
-- 6x faster search, 6x lower costs vs multi-chunk approach
-- Integrates with admin panel Document/RAG settings
+Key Improvements over V2:
+- Longer text for better re-ranking (3000 chars vs 500)
+- Smart text composition prioritizing semantic value
+- Pinecone arrays for multi-value filtering (not comma-separated)
+- Separate fields: rerank_text, snippet, chunk_text
+- Recency score for temporal ranking boost
+- Optimized for Cohere/Pinecone re-ranker pipeline
 
 Architecture:
 - One email = One vector = One search result
-- Metadata-rich for filtering (sender, date, labels, etc.)
-- Uses admin-configured embedding model and batch size
-- Respects embedding model token limits
-- Clean, readable code for maintainability
+- rerank_text: Full clean body for re-ranker (up to 3000 chars)
+- chunk_text: Embedding text (subject + key content, ~1500 chars)
+- snippet: Display preview (150 chars)
+- Arrays for filtering: labels, topics, keywords, entities
 """
 
 import logging
@@ -24,6 +24,7 @@ import time
 import asyncio
 import re
 import hashlib
+import math
 from datetime import datetime
 from typing import Dict, List, Optional
 
@@ -40,24 +41,33 @@ logger.setLevel(logging.INFO)
 
 class GmailIndexerV2:
     """
-    Optimized email indexer using single-vector strategy.
-    
+    Optimized email indexer for semantic search + re-ranking.
+
+    V3 Strategy:
+    - rerank_text: Long text (3000 chars) for Cohere/Pinecone re-ranker
+    - chunk_text: Embedding text (~1500 chars) with semantic priority
+    - snippet: Short preview (150 chars) for UI display
+    - Arrays for filtering (not comma-separated strings)
+    - Recency score for temporal boosting
+
     Performance Characteristics:
-    - 10,000 emails = 10,000 vectors (vs 60,000 with chunking)
-    - Average processing: 10-30 emails/second (with embeddings)
+    - 10,000 emails = 10,000 vectors
+    - Average processing: 10-30 emails/second
     - Average search: <100ms for 100,000+ emails
-    - Storage: ~1.5KB per email (vector + metadata)
-    
-    Note: Processing speed depends on:
-    - Embedding model (local vs API)
-    - Attachment processing enabled
-    - Network latency
-    - Hardware (CPU/GPU)
+    - Re-ranking: Adds ~50-100ms but significantly improves relevance
     """
-    
-    # Index version for tracking and A/B testing
-    INDEX_VERSION = "v2-single-vector"
-    
+
+    # Index version for tracking - V3 optimized for semantic search + re-ranking
+    INDEX_VERSION = "v3-semantic-rerank"
+
+    # Text length limits optimized for re-ranking
+    RERANK_TEXT_LENGTH = (
+        3000  # Long text for re-ranker (Cohere handles up to 4096 tokens)
+    )
+    EMBEDDING_TEXT_LENGTH = 1500  # Optimal for embeddings (semantic density)
+    SNIPPET_LENGTH = 150  # Short preview for UI
+    ATTACHMENT_TEXT_LENGTH = 500  # Attachment content to include
+
     def __init__(
         self,
         embedding_service,
@@ -66,7 +76,7 @@ class GmailIndexerV2:
     ):
         """
         Initialize optimized indexer.
-        
+
         Args:
             embedding_service: EmbeddingService from Open WebUI
             document_processor: DocumentProcessor for quality scoring
@@ -76,26 +86,17 @@ class GmailIndexerV2:
         self.embeddings = embedding_service
         self.doc_processor = document_processor
         self.app_config = app_config
-        
-        # Get optimal text length from admin settings
-        # Use SEMANTIC_MAX_CHUNK_SIZE but cap at safe limits for default model
-        # Default model (all-MiniLM-L6-v2): 256 tokens max (~800-1000 chars)
-        # OpenAI (text-embedding-3-small): 8191 tokens (~32k chars)
-        
-        semantic_max = SEMANTIC_MAX_CHUNK_SIZE.value if SEMANTIC_MAX_CHUNK_SIZE else 2000
-        
-        # For email embeddings, be conservative
-        # If admin set high chunk size (for docs), cap it at safe email limit
-        self.OPTIMAL_TEXT_LENGTH = min(semantic_max, 800)  # chars
-        self.MAX_TEXT_LENGTH = min(semantic_max + 400, 1200)  # with buffer
-        
+
         # Get batch size from settings
-        self.BATCH_SIZE = RAG_EMBEDDING_BATCH_SIZE.value if RAG_EMBEDDING_BATCH_SIZE else 1
-        
+        self.BATCH_SIZE = (
+            RAG_EMBEDDING_BATCH_SIZE.value if RAG_EMBEDDING_BATCH_SIZE else 1
+        )
+
         logger.info(f"GmailIndexerV2 initialized - {self.INDEX_VERSION}")
-        logger.info(f"  Text limits: optimal={self.OPTIMAL_TEXT_LENGTH}, max={self.MAX_TEXT_LENGTH}")
+        logger.info(f"  Rerank text length: {self.RERANK_TEXT_LENGTH} chars")
+        logger.info(f"  Embedding text length: {self.EMBEDDING_TEXT_LENGTH} chars")
+        logger.info(f"  Snippet length: {self.SNIPPET_LENGTH} chars")
         logger.info(f"  Embedding batch size: {self.BATCH_SIZE}")
-        logger.info(f"  Using admin RAG settings: SEMANTIC_MAX_CHUNK_SIZE={semantic_max}")
 
     async def process_email_for_indexing(
         self,
@@ -107,130 +108,137 @@ class GmailIndexerV2:
         allowed_attachment_types: str = ".pdf,.docx,.doc,.xlsx,.xls,.pptx,.ppt,.txt,.csv,.md,.html,.eml",
     ) -> Dict:
         """
-        Process a single email into optimized single-vector format.
-        
+        Process a single email into optimized format for semantic search + re-ranking.
+
         Pipeline:
         1. Parse email → structured data
         2. Process attachments (if enabled)
-        3. Deep clean text → embedding-ready format
-        4. Create optimal search text
-        5. Generate ONE high-quality embedding
-        6. Build rich metadata
+        3. Create THREE text versions:
+           - rerank_text: Full clean body for re-ranker
+           - embedding_text: Semantic-optimized for vector
+           - snippet: Short preview for display
+        4. Extract enhanced metadata as ARRAYS
+        5. Calculate recency score
+        6. Generate embedding
         7. Return upsert-ready data
-        
-        Args:
-            email_data: Gmail API message response
-            user_id: User ID for isolation
-            fetcher: GmailFetcher for attachment downloads
-            process_attachments: Enable attachment processing
-            max_attachment_size_mb: Max attachment size
-            allowed_attachment_types: Allowed file extensions
-            
-        Returns:
-            Dict with upsert_data ready for vector DB
         """
         start_time = time.time()
-        
+
         # Step 1: Parse email into structured format
         parsed = self.gmail_processor.parse_email(email_data, user_id)
         email_id = parsed["email_id"]
         base_metadata = parsed["metadata"]
-        
+
         logger.info(
             f"Processing email {email_id[:8]}... "
             f"({base_metadata['subject'][:50]}...)"
         )
-        
+
         # Step 2: Process attachments (if enabled)
         attachment_texts = []
         attachment_names = []
-        
+
         if process_attachments and parsed.get("attachments") and fetcher:
             attachment_results = await self._process_email_attachments(
                 parsed["attachments"],
                 fetcher,
                 email_id,
                 max_attachment_size_mb,
-                allowed_attachment_types
+                allowed_attachment_types,
             )
             attachment_texts = [att["text"] for att in attachment_results]
             attachment_names = [att["filename"] for att in attachment_results]
-            
+
             if attachment_names:
                 logger.info(f"  📎 Processed {len(attachment_names)} attachment(s)")
-        
-        # Step 3: Create optimal search text (what gets embedded)
-        search_text = self._create_optimal_search_text(
-            subject=base_metadata["subject"],
+
+        # Step 3: Create THREE text versions
+        # Clean body first (used by all three)
+        clean_body = (
+            self._deep_clean_for_embeddings(parsed["document_text"])
+            if parsed["document_text"]
+            else ""
+        )
+        clean_subject = self._clean_subject(base_metadata["subject"])
+
+        # 3a. RERANK_TEXT: Full clean body for re-ranker (longest)
+        rerank_text = self._create_rerank_text(
+            subject=clean_subject,
             from_name=base_metadata["from_name"],
-            body=parsed["document_text"],
+            body=clean_body,
             attachment_texts=attachment_texts,
         )
-        
-        # Debug: Check if search_text is empty
-        if not search_text or not search_text.strip():
-            logger.warning(
-                f"  ⚠️ Email {email_id[:8]} has empty search_text after cleaning! "
-                f"Subject: {base_metadata['subject'][:50]}, "
-                f"Body length: {len(parsed['document_text'])}"
-            )
-            # Fallback: use cleaned subject + snippet if body is empty
-            search_text = f"{base_metadata['subject']}\n\n{parsed.get('snippet', '')}"
-            search_text = self._deep_clean_for_embeddings(search_text)
-        
-        logger.debug(f"  Search text length: {len(search_text)} chars")
-        logger.debug(f"  Search text preview: {search_text[:200]}...")
-        
-        # Step 4: Extract enhanced metadata for filtering/enrichment
-        # Use just the clean body for metadata extraction (not subject/from labels)
-        # This gives better entity/topic extraction
-        body_for_metadata = self._deep_clean_for_embeddings(parsed["document_text"]) if parsed["document_text"] else ""
-        
-        # Use LLM=False for speed (rule-based extraction)
-        enhanced_metadata = extract_enhanced_metadata(body_for_metadata, use_llm=False) if body_for_metadata else {}
-        
-        # Debug: Check enhanced metadata quality AND content
-        logger.debug(
-            f"  Enhanced metadata: "
-            f"topics={len(enhanced_metadata.get('topics', []))}, "
-            f"keywords={len(enhanced_metadata.get('keywords', []))}, "
-            f"entities_people={len(enhanced_metadata.get('entities_people', []))}"
+
+        # 3b. EMBEDDING_TEXT: Semantic-optimized for vector (medium)
+        embedding_text = self._create_embedding_text(
+            subject=clean_subject,
+            from_name=base_metadata["from_name"],
+            body=clean_body,
+            attachment_texts=attachment_texts,
         )
-        logger.debug(f"  RAW entity_people from extract: {enhanced_metadata.get('entities_people', [])}")
-        logger.debug(f"  RAW topics from extract: {enhanced_metadata.get('topics', [])}")
-        logger.debug(f"  RAW entity_locations from extract: {enhanced_metadata.get('entities_locations', [])}")
-        
-        # Step 5: Generate ONE high-quality embedding
-        # Note: embedding service only has embed_batch, so we pass single-item list
-        embeddings = await self.embeddings.embed_batch([search_text])
+
+        # 3c. SNIPPET: Short preview for display (shortest)
+        snippet = self._create_snippet(
+            subject=clean_subject,
+            body=clean_body,
+        )
+
+        # Fallback if embedding_text is empty
+        if not embedding_text or not embedding_text.strip():
+            logger.warning(
+                f"  ⚠️ Email {email_id[:8]} has empty embedding_text! "
+                f"Using subject + snippet as fallback"
+            )
+            embedding_text = f"{clean_subject}\n\n{parsed.get('snippet', '')}"
+            embedding_text = self._deep_clean_for_embeddings(embedding_text)
+
+        logger.debug(f"  Rerank text: {len(rerank_text)} chars")
+        logger.debug(f"  Embedding text: {len(embedding_text)} chars")
+        logger.debug(f"  Snippet: {len(snippet)} chars")
+
+        # Step 4: Extract enhanced metadata as ARRAYS
+        enhanced_metadata = (
+            extract_enhanced_metadata(clean_body, use_llm=False) if clean_body else {}
+        )
+
+        # Step 5: Calculate recency score (exponential decay)
+        recency_score = self._calculate_recency_score(base_metadata["date_timestamp"])
+
+        # Step 6: Generate embedding
+        embeddings = await self.embeddings.embed_batch([embedding_text])
         embedding = embeddings[0] if embeddings else [0.0] * 1536
-        
-        # Step 6: Calculate quality score
-        quality_score = self.doc_processor.quick_quality_score(search_text)
-        
-        # Step 7: Build comprehensive metadata
+
+        # Step 7: Calculate quality score
+        quality_score = self.doc_processor.quick_quality_score(embedding_text)
+
+        # Step 8: Build comprehensive metadata with ARRAYS
         metadata = self._build_optimized_metadata(
             base_metadata=base_metadata,
             enhanced_metadata=enhanced_metadata,
-            search_text=search_text,
+            rerank_text=rerank_text,
+            embedding_text=embedding_text,
+            snippet=snippet,
             quality_score=quality_score,
+            recency_score=recency_score,
             attachment_names=attachment_names,
         )
-        
-        # Step 8: Create upsert data
-        upsert_data = [{
-            "id": f"email-{email_id}",
-            "values": [float(v) if v is not None else 0.0 for v in embedding],
-            "metadata": metadata,
-        }]
-        
+
+        # Step 9: Create upsert data
+        upsert_data = [
+            {
+                "id": f"email-{email_id}",
+                "values": [float(v) if v is not None else 0.0 for v in embedding],
+                "metadata": metadata,
+            }
+        ]
+
         processing_time = time.time() - start_time
-        
+
         logger.info(
             f"  ✅ Email {email_id[:8]} indexed: "
-            f"1 vector, quality={quality_score}, {processing_time:.2f}s"
+            f"quality={quality_score}, recency={recency_score:.2f}, {processing_time:.2f}s"
         )
-        
+
         return {
             "email_id": email_id,
             "upsert_data": upsert_data,
@@ -250,13 +258,6 @@ class GmailIndexerV2:
     ) -> Dict:
         """
         Process multiple emails in batch with deduplication.
-        
-        Performance: 10-30 emails/second (depends on embedding model/hardware)
-        
-        Deduplication: Detects mass emails by comparing subject + snippet hash
-        
-        Returns:
-            Dict with batch statistics and upsert data
         """
         batch_start = time.time()
         all_upsert_data = []
@@ -264,36 +265,35 @@ class GmailIndexerV2:
         error_count = 0
         duplicate_count = 0
         total_quality_score = 0
-        
+
         # Track content fingerprints for mass email detection
         seen_content = {}
-        
-        logger.info(f"📦 Processing batch of {len(emails)} emails")
-        
+
+        logger.info(
+            f"📦 Processing batch of {len(emails)} emails (V3 - Semantic + Rerank)"
+        )
+
         for email_data in emails:
             try:
                 email_id = email_data.get("id", "unknown")
                 snippet = email_data.get("snippet", "")
-                
+
                 # Detect mass emails (same content sent to many recipients)
-                # Use subject + first 100 chars of snippet for more accurate deduplication
                 headers = email_data.get("payload", {}).get("headers", [])
-                subject = next((h["value"] for h in headers if h["name"] == "Subject"), "")
+                subject = next(
+                    (h["value"] for h in headers if h["name"] == "Subject"), ""
+                )
                 content_fingerprint = hashlib.md5(
                     f"{subject[:100]}{snippet[:100]}".encode()
                 ).hexdigest()
-                
+
                 if content_fingerprint in seen_content:
                     duplicate_count += 1
-                    original_id = seen_content[content_fingerprint]
-                    logger.debug(
-                        f"  ⏭️  Skipping duplicate: {email_id[:8]} "
-                        f"(same as {original_id[:8]})"
-                    )
+                    logger.debug(f"  ⏭️  Skipping duplicate: {email_id[:8]}")
                     continue
-                
+
                 seen_content[content_fingerprint] = email_id
-                
+
                 # Process email
                 result = await self.process_email_for_indexing(
                     email_data,
@@ -303,34 +303,36 @@ class GmailIndexerV2:
                     max_attachment_size_mb=max_attachment_size_mb,
                     allowed_attachment_types=allowed_attachment_types,
                 )
-                
+
                 all_upsert_data.extend(result["upsert_data"])
                 processed_count += 1
                 total_quality_score += result.get("quality_score", 0)
-                
+
                 # Clear email data to free memory
                 email_data.clear()
-                
+
                 # Yield to event loop every 10 emails
                 if processed_count % 10 == 0:
                     await asyncio.sleep(0)
-                    
+
             except Exception as e:
                 email_id = email_data.get("id", "unknown")
                 logger.error(f"  ❌ Error processing {email_id[:8]}: {e}")
                 error_count += 1
                 continue
-        
+
         batch_time = time.time() - batch_start
-        avg_quality = total_quality_score / processed_count if processed_count > 0 else 0
+        avg_quality = (
+            total_quality_score / processed_count if processed_count > 0 else 0
+        )
         emails_per_second = processed_count / batch_time if batch_time > 0 else 0
-        
+
         logger.info(
             f"✅ Batch complete: {processed_count} emails, "
             f"{duplicate_count} duplicates, {error_count} errors, "
             f"{emails_per_second:.1f} emails/s, avg quality={avg_quality:.1f}"
         )
-        
+
         return {
             "processed": processed_count,
             "duplicates_skipped": duplicate_count,
@@ -341,7 +343,15 @@ class GmailIndexerV2:
             "avg_quality_score": avg_quality,
         }
 
-    def _create_optimal_search_text(
+    def _clean_subject(self, subject: str) -> str:
+        """Clean subject line by removing Re:/Fwd: prefixes."""
+        if not subject:
+            return ""
+        return re.sub(
+            r"^\s*(Re|RE|Fwd|FW|Fw):\s*", "", subject, flags=re.IGNORECASE
+        ).strip()
+
+    def _create_rerank_text(
         self,
         subject: str,
         from_name: str,
@@ -349,258 +359,347 @@ class GmailIndexerV2:
         attachment_texts: List[str] = None,
     ) -> str:
         """
-        Create optimal text for semantic embedding.
-        
-        SIMPLE APPROACH (Best Practice):
-        - Clean the email body thoroughly
-        - Include subject for context
-        - Include sender for "emails from X" queries
-        - Keep it simple and readable
-        
-        The subject and from_name are already in structured fields,
-        but including them here helps with semantic search.
-        
-        Returns:
-            Clean, semantically-rich text optimized for embeddings
+        Create LONG text for re-ranker (Cohere/Pinecone rerank).
+
+        Strategy: Include as much clean content as possible.
+        Re-ranker models can handle 4096+ tokens, so we use up to 3000 chars.
+
+        The re-ranker compares this text against the user's query to
+        determine relevance, so more context = better ranking.
         """
-        # SIMPLE APPROACH: Just combine clean parts
         parts = []
-        
-        # 1. Clean subject (remove Re:, Fwd:)
-        subject_clean = re.sub(r'^\s*(Re|RE|Fwd|FW|Fw):\s*', '', subject, flags=re.IGNORECASE).strip()
-        if subject_clean:
-            parts.append(subject_clean)
-        
-        # 2. From name (for "emails from X" queries)
+
+        # Subject (high semantic weight)
+        if subject:
+            parts.append(f"Subject: {subject}")
+
+        # From (for "emails from X" queries)
+        if from_name:
+            parts.append(f"From: {from_name}")
+
+        # Full body (up to limit)
+        if body:
+            body_limited = body[
+                : self.RERANK_TEXT_LENGTH - 200
+            ]  # Leave room for subject/from
+            if body_limited:
+                parts.append(body_limited)
+
+        # Attachment content (valuable for search)
+        if attachment_texts:
+            att_text = " ".join(attachment_texts)[: self.ATTACHMENT_TEXT_LENGTH]
+            if att_text:
+                parts.append(f"Attachments: {att_text}")
+
+        final_text = "\n\n".join(parts).strip()
+
+        # Ensure we don't exceed limit
+        if len(final_text) > self.RERANK_TEXT_LENGTH:
+            final_text = final_text[: self.RERANK_TEXT_LENGTH]
+
+        return self._clean_for_pinecone(final_text)
+
+    def _create_embedding_text(
+        self,
+        subject: str,
+        from_name: str,
+        body: str,
+        attachment_texts: List[str] = None,
+    ) -> str:
+        """
+        Create MEDIUM text for semantic embedding.
+
+        Strategy: Prioritize high-semantic-value content.
+        - Subject (users often search by subject)
+        - From name (for "emails from X" queries)
+        - First paragraph + key sentences from body
+        - Attachment names (for "email with PDF about budget")
+
+        This text gets vectorized, so semantic density matters more than length.
+        """
+        parts = []
+
+        # Subject (high priority for search)
+        if subject:
+            parts.append(subject)
+
+        # From name
         if from_name:
             parts.append(f"From {from_name}")
-        
-        # 3. Clean body
+
+        # Body: Smart extraction
         if body:
-            body_clean = self._deep_clean_for_embeddings(body)
-            
-            # Limit to optimal length
-            if len(body_clean) > self.OPTIMAL_TEXT_LENGTH:
-                body_clean = body_clean[:self.OPTIMAL_TEXT_LENGTH]
-                # Find last sentence
-                last_period = body_clean.rfind('. ')
-                if last_period > self.OPTIMAL_TEXT_LENGTH * 0.8:
-                    body_clean = body_clean[:last_period + 1]
-            
-            if body_clean:
-                parts.append(body_clean)
-        
-        # 4. Attachments (if present)
+            # First paragraph (usually contains key info)
+            first_para = self._extract_first_paragraph(body, max_chars=600)
+            if first_para:
+                parts.append(first_para)
+
+            # Key sentences (action items, decisions, questions)
+            key_sentences = self._extract_key_sentences(body, max_sentences=3)
+            if key_sentences and key_sentences != first_para:
+                parts.append(key_sentences)
+
+        # Attachment names (brief)
         if attachment_texts:
-            att_text = " ".join(attachment_texts)
-            att_clean = self._deep_clean_for_embeddings(att_text)[:200]
-            if att_clean:
-                parts.append(att_clean)
-        
-        # Combine parts
+            att_preview = " ".join(att[:100] for att in attachment_texts[:3])
+            if att_preview:
+                parts.append(f"Attachments: {att_preview}")
+
         final_text = "\n\n".join(parts).strip()
-        
-        # Final escape sequence cleanup
-        if '\\n' in final_text:
-            final_text = final_text.replace('\\n', '\n')
-        
+
+        # Ensure we don't exceed limit
+        if len(final_text) > self.EMBEDDING_TEXT_LENGTH:
+            final_text = final_text[: self.EMBEDDING_TEXT_LENGTH]
+            # Try to end at sentence boundary
+            last_period = final_text.rfind(". ")
+            if last_period > self.EMBEDDING_TEXT_LENGTH * 0.8:
+                final_text = final_text[: last_period + 1]
+
         return final_text
+
+    def _create_snippet(self, subject: str, body: str) -> str:
+        """
+        Create SHORT snippet for UI display.
+
+        Shows just enough to identify the email in search results.
+        """
+        if subject and body:
+            # Subject + first part of body
+            snippet = f"{subject}: {body[:100]}"
+        elif subject:
+            snippet = subject
+        elif body:
+            snippet = body[: self.SNIPPET_LENGTH]
+        else:
+            snippet = "No content"
+
+        # Limit and clean
+        snippet = snippet[: self.SNIPPET_LENGTH].strip()
+        if len(snippet) == self.SNIPPET_LENGTH:
+            snippet = snippet.rsplit(" ", 1)[0] + "..."
+
+        return self._clean_for_pinecone(snippet)
+
+    def _extract_first_paragraph(self, text: str, max_chars: int = 500) -> str:
+        """Extract the first meaningful paragraph from email body."""
+        if not text:
+            return ""
+
+        # Split by double newlines (paragraphs)
+        paragraphs = re.split(r"\n\s*\n", text)
+
+        for para in paragraphs:
+            para = para.strip()
+            # Skip very short paragraphs (likely greetings)
+            if len(para) > 20:
+                return para[:max_chars]
+
+        # Fallback: just return first chunk
+        return text[:max_chars]
+
+    def _extract_key_sentences(self, text: str, max_sentences: int = 3) -> str:
+        """
+        Extract key sentences that likely contain important information.
+
+        Looks for:
+        - Questions (often contain the main ask)
+        - Action items (please, need, should, must)
+        - Decisions (decided, agreed, confirmed)
+        - Dates/deadlines (by, on, before)
+        """
+        if not text:
+            return ""
+
+        # Split into sentences
+        sentences = re.split(r"[.!?]+\s+", text)
+
+        # Keywords that indicate important content
+        important_patterns = [
+            r"\?",  # Questions
+            r"\b(please|need|required|urgent|asap|deadline)\b",
+            r"\b(decided|agreed|confirmed|approved|scheduled)\b",
+            r"\b(by|before|on)\s+\w+\s+\d",  # Dates
+            r"\b(meeting|call|discuss|review)\b",
+            r"\b(attached|attachment|see below)\b",
+        ]
+
+        key_sentences = []
+        for sentence in sentences:
+            sentence = sentence.strip()
+            if len(sentence) < 10:
+                continue
+
+            # Check if sentence contains important patterns
+            for pattern in important_patterns:
+                if re.search(pattern, sentence, re.IGNORECASE):
+                    key_sentences.append(sentence)
+                    break
+
+            if len(key_sentences) >= max_sentences:
+                break
+
+        return ". ".join(key_sentences) + "." if key_sentences else ""
+
+    def _calculate_recency_score(self, timestamp: int) -> float:
+        """
+        Calculate recency score using exponential decay.
+
+        Score ranges from 0.0 (very old) to 1.0 (very recent).
+        Half-life: 30 days (email 30 days old has score ~0.5)
+
+        This can be used to boost recent emails in search ranking.
+        """
+        if not timestamp:
+            return 0.5  # Default for unknown dates
+
+        now = time.time()
+        age_seconds = max(0, now - timestamp)
+        age_days = age_seconds / (24 * 3600)
+
+        # Exponential decay with 30-day half-life
+        half_life_days = 30
+        decay_rate = math.log(2) / half_life_days
+        score = math.exp(-decay_rate * age_days)
+
+        # Clamp to [0.0, 1.0]
+        return max(0.0, min(1.0, score))
 
     @staticmethod
     def _deep_clean_for_embeddings(text: str) -> str:
         """
         Production-grade text cleaning for optimal embeddings.
-        
-        This is DEFENSIVE cleaning - even though gmail_processor does basic cleaning,
-        we apply comprehensive cleaning here to ensure optimal embedding quality.
-        
-        This function eliminates ALL artifacts that degrade embedding quality:
-        - Escape sequences (\n\n, \", etc.) - Often present in API responses
-        - URLs and tracking links - Semantic noise
-        - Email addresses - Privacy + reduces noise
-        - Quoted reply text - Redundant content
-        - Email signatures - Not searchable content
-        - Control characters - Can break embeddings
-        - Excessive whitespace - Wastes token budget
-        - Line break artifacts - Improve readability
-        
-        Returns:
-            Clean, natural text optimized for neural network understanding
+
+        Eliminates ALL artifacts that degrade embedding quality:
+        - Escape sequences
+        - URLs and tracking links
+        - Email addresses (privacy + noise)
+        - Quoted reply text
+        - Email signatures
+        - Confidentiality notices
+        - Control characters
+        - Excessive whitespace
         """
         if not text:
             return ""
-        
-        # STEP 1: Fix escape sequences (critical for embedding quality)
-        # These MUST be handled first - handle both single and double-escaped
-        
-        # First, handle double-escaped sequences (\\n → \n)
-        text = text.replace('\\\\n', '\n')
-        text = text.replace('\\\\t', '\t')
-        text = text.replace('\\\\r', '\r')
-        text = text.replace('\\\\\\\\', '\\')
-        
-        # Then handle single-escaped sequences (\n → actual newline)
-        text = text.replace('\\n\\n', '\n\n')
-        text = text.replace('\\n', '\n')
-        text = text.replace('\\t', '    ')  # Convert tabs to spaces
-        text = text.replace('\\r', '')
+
+        # STEP 1: Fix escape sequences
+        text = text.replace("\\\\n", "\n")
+        text = text.replace("\\\\t", "\t")
+        text = text.replace("\\\\r", "\r")
+        text = text.replace("\\n\\n", "\n\n")
+        text = text.replace("\\n", "\n")
+        text = text.replace("\\t", "    ")
+        text = text.replace("\\r", "")
         text = text.replace('\\"', '"')
         text = text.replace("\\'", "'")
-        text = text.replace('\\\\', '')
-        text = text.replace('\\/', '/')
-        
-        # STEP 2: Remove quoted reply blocks (noise for search)
-        # "On Mon, Oct 14, 2024, John wrote:" and everything after
+        text = text.replace("\\\\", "")
+        text = text.replace("\\/", "/")
+
+        # STEP 2: Remove quoted reply blocks
+        text = re.sub(r"On .{1,100}wrote:.*", "", text, flags=re.DOTALL | re.IGNORECASE)
+        text = re.sub(r"^>.*$", "", text, flags=re.MULTILINE)
         text = re.sub(
-            r'On .{1,100}wrote:.*',
-            '',
+            r"From:.*?\nSent:.*?\nTo:.*?\nSubject:.*?\n",
+            "",
             text,
-            flags=re.DOTALL | re.IGNORECASE
+            flags=re.DOTALL | re.IGNORECASE,
         )
-        
-        # Remove lines starting with > (quoted text)
-        text = re.sub(r'^>.*$', '', text, flags=re.MULTILINE)
-        
-        # Remove Outlook-style forwarded headers
-        text = re.sub(
-            r'From:.*?\nSent:.*?\nTo:.*?\nSubject:.*?\n',
-            '',
-            text,
-            flags=re.DOTALL | re.IGNORECASE
-        )
-        
+
         # STEP 3: Remove email signatures
-        # Standard signature delimiter
-        text = re.sub(r'--\s*\n.*', '', text, flags=re.DOTALL)
-        
-        # "Sent from my iPhone" etc
+        text = re.sub(r"--\s*\n.*", "", text, flags=re.DOTALL)
         text = re.sub(
-            r'Sent from my (iPhone|iPad|Android|Mobile).*',
-            '',
+            r"Sent from my (iPhone|iPad|Android|Mobile).*",
+            "",
             text,
-            flags=re.IGNORECASE | re.DOTALL
+            flags=re.IGNORECASE | re.DOTALL,
         )
-        
-        # Common signature patterns
-        signature_markers = [
-            r'Thanks?,?\s*\n[A-Z][a-z]+\s*$',  # "Thanks, John"
-            r'Best,?\s*\n[A-Z][a-z]+\s*$',     # "Best, Sarah"
-            r'Regards?,?\s*\n[A-Z][a-z]+\s*$', # "Regards, Mike"
-        ]
-        for pattern in signature_markers:
-            text = re.sub(pattern, '', text, flags=re.IGNORECASE)
-        
-        # STEP 4: Remove URLs (they're semantic noise)
+
+        # STEP 4: Remove URLs
         text = re.sub(
-            r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+',
-            '[link]',
-            text
+            r"http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+",
+            "",
+            text,
         )
-        
-        # STEP 5: Remove email addresses (privacy + noise reduction)
-        text = re.sub(
-            r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',
-            '[email]',
-            text
-        )
-        
-        # STEP 6: Fix line break artifacts (critical for readability)
-        # Hyphenated line breaks: "discus-\nsion" → "discussion"
-        text = re.sub(r'(\w)-\s*\n\s*(\w)', r'\1\2', text)
-        
-        # Word wrapping: "to\nshare" → "to share"
-        text = re.sub(r'(?<=\w)\n(?=\w)', ' ', text)
-        
+
+        # STEP 5: Remove email addresses
+        text = re.sub(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b", "", text)
+
+        # STEP 6: Fix line break artifacts
+        text = re.sub(r"(\w)-\s*\n\s*(\w)", r"\1\2", text)
+        text = re.sub(r"(?<=\w)\n(?=\w)", " ", text)
+
         # STEP 7: Remove HTML entities
         from html import unescape
+
         text = unescape(text)
-        
-        # STEP 8: Remove control characters (except newlines/spaces)
-        text = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]', '', text)
-        
+
+        # STEP 8: Remove control characters
+        text = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]", "", text)
+
         # STEP 9: Normalize whitespace
-        # Multiple spaces → single space
-        text = re.sub(r' {2,}', ' ', text)
-        
-        # Excessive newlines → max 2
-        text = re.sub(r'\n{3,}', '\n\n', text)
-        
-        # Trim whitespace from each line
-        lines = text.split('\n')
-        text = '\n'.join(line.strip() for line in lines)
-        
+        text = re.sub(r" {2,}", " ", text)
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        lines = text.split("\n")
+        text = "\n".join(line.strip() for line in lines)
+
         # STEP 10: Fix orphaned punctuation
-        text = re.sub(r'\s+([.,!?;:])', r'\1', text)  # " ." → "."
-        text = re.sub(r'([.,!?;:])([A-Za-z])', r'\1 \2', text)  # ".Hi" → ". Hi"
-        
-        # STEP 11: Remove confidentiality notices and disclaimers
+        text = re.sub(r"\s+([.,!?;:])", r"\1", text)
+        text = re.sub(r"([.,!?;:])([A-Za-z])", r"\1 \2", text)
+
+        # STEP 11: Remove confidentiality notices
         text = re.sub(
-            r'(This email|This message|CONFIDENTIAL|DISCLAIMER).*?(intended recipient|confidential).*?\.',
-            '',
+            r"(This email|This message|CONFIDENTIAL|DISCLAIMER).*?(intended recipient|confidential).*?\.",
+            "",
             text,
-            flags=re.IGNORECASE | re.DOTALL
+            flags=re.IGNORECASE | re.DOTALL,
         )
-        
-        # Final trim
-        text = text.strip()
-        
-        return text
+
+        return text.strip()
 
     def _build_optimized_metadata(
         self,
         base_metadata: Dict,
         enhanced_metadata: Dict,
-        search_text: str,
+        rerank_text: str,
+        embedding_text: str,
+        snippet: str,
         quality_score: int,
+        recency_score: float,
         attachment_names: List[str] = None,
     ) -> Dict:
         """
-        Build comprehensive metadata for filtering and display.
-        
-        Metadata Strategy:
-        - Structured fields for precise filtering
-        - Searchable text snippet for result display
-        - Enhanced fields for faceted search
-        - Version tracking for A/B testing
-        
-        Returns:
-            Complete metadata dict ready for vector DB
+        Build metadata optimized for semantic search + re-ranking.
+
+        Key changes from V2:
+        - rerank_text: Long text for re-ranker (3000 chars)
+        - snippet: Short preview for UI (150 chars)
+        - chunk_text: Embedding text for compatibility
+        - Arrays: labels, topics, keywords, entities (not comma-separated)
+        - recency_score: Temporal ranking boost
+        - Removed redundant 'text' field
         """
         email_id = base_metadata["email_id"]
         user_id = base_metadata["user_id"]
-        
-        # Create clean text snippet for display (first 500 chars)
-        text_snippet = search_text[:500].strip()
-        if len(search_text) > 500:
-            text_snippet += "..."
-        
-        # CRITICAL FIX: If text_snippet is empty, use subject as fallback
-        if not text_snippet or len(text_snippet) < 10:
-            logger.warning(
-                f"  ⚠️ text_snippet empty or too short ({len(text_snippet)} chars), "
-                f"using subject as fallback"
-            )
-            text_snippet = base_metadata["subject"]
-            if not text_snippet:
-                text_snippet = f"Email {email_id[:8]}"
-        
-        # Apply final Pinecone cleaning (single-line, clean text)
-        text_snippet_clean = self._clean_for_pinecone(text_snippet)
-        
-        # Simple cleanup: Remove Re:/Fwd: prefixes (already done in search_text creation)
-        text_snippet_clean = re.sub(r'\b(Re|RE|Fwd|FW|Fw):\s*', '', text_snippet_clean, flags=re.IGNORECASE)
-        text_snippet_clean = text_snippet_clean.strip()
-        
-        # Debug: Log text_snippet creation
-        logger.debug(
-            f"  Text snippet: search_text={len(search_text)} chars, "
-            f"snippet={len(text_snippet_clean)} chars, "
-            f"preview: {text_snippet_clean[:100]}"
+
+        # Extract arrays from enhanced metadata (keep as arrays, not strings!)
+        topics = self._clean_list(enhanced_metadata.get("topics", []))
+        keywords = self._clean_list(enhanced_metadata.get("keywords", []))
+        entity_people = self._clean_list(enhanced_metadata.get("entities_people", []))
+        entity_organizations = self._clean_list(
+            enhanced_metadata.get("entities_organizations", [])
         )
-        
-        # Final sanity check before building metadata
-        logger.debug(f"  Building metadata with text_snippet_clean: {len(text_snippet_clean)} chars")
-        
+        entity_locations = self._clean_list(
+            enhanced_metadata.get("entities_locations", [])
+        )
+
+        # Labels as array
+        labels = base_metadata.get("labels", [])
+        if isinstance(labels, str):
+            labels = [l.strip() for l in labels.split(",") if l.strip()]
+
+        # Attachment names as array
+        attachments = attachment_names if attachment_names else []
+
         metadata = {
             # === Core Identification ===
             "type": "email",
@@ -608,13 +707,10 @@ class GmailIndexerV2:
             "thread_id": base_metadata["thread_id"],
             "user_id": user_id,
             "index_version": self.INDEX_VERSION,
-            
-            # === Searchable Text (PRIMARY - matches chat summary format) ===
-            # Use chunk_text as primary field (standard for all Open WebUI content)
-            # Fallback to text for backward compatibility
-            "chunk_text": text_snippet_clean,  # PRIMARY: Used for search/display (Pinecone-cleaned)
-            "text": text_snippet_clean,  # FALLBACK: For compatibility
-            
+            # === Text Fields (optimized for search + re-ranking) ===
+            "rerank_text": rerank_text,  # LONG: For Cohere/Pinecone re-ranker (3000 chars)
+            "chunk_text": embedding_text,  # MEDIUM: Embedding text, compatible with Open WebUI (1500 chars)
+            "snippet": snippet,  # SHORT: UI preview (150 chars)
             # === Structured Email Fields (for filtering) ===
             "subject": base_metadata["subject"],
             "from_name": base_metadata["from_name"],
@@ -622,172 +718,121 @@ class GmailIndexerV2:
             "to_name": base_metadata.get("to_name", ""),
             "to_email": base_metadata.get("to_email", ""),
             "cc": base_metadata.get("cc", ""),
-            
-            # === Temporal Fields (critical for filtering) ===
+            # === Temporal Fields ===
             "date": base_metadata["date"],
             "date_timestamp": base_metadata["date_timestamp"],
             "timestamp": datetime.utcnow().isoformat() + "Z",
-            
-            # === Gmail Labels (for filtering) ===
-            "labels": (
-                ",".join(base_metadata["labels"])
-                if isinstance(base_metadata["labels"], list)
-                else base_metadata["labels"]
-            ),
-            
+            # === ARRAYS for Pinecone Filtering (not comma-separated!) ===
+            "labels": labels,  # Array: ["SENT", "IMPORTANT"]
+            "topics": topics,  # Array: ["meeting", "budget"]
+            "keywords": keywords,  # Array: ["quarterly", "report"]
+            "entity_people": entity_people,  # Array: ["John Smith", "Jane Doe"]
+            "entity_organizations": entity_organizations,  # Array: ["Acme Corp"]
+            "entity_locations": entity_locations,  # Array: ["New York", "London"]
+            "attachments": attachments,  # Array: ["report.pdf", "data.xlsx"]
             # === Email Properties ===
             "has_attachments": base_metadata["has_attachments"],
-            "attachment_count": len(attachment_names) if attachment_names else 0,
-            "attachment_names": ",".join(attachment_names) if attachment_names else "",
+            "attachment_count": len(attachments),
             "is_reply": base_metadata.get("is_reply", False),
-            "word_count": len(search_text.split()),
-            
-            # === Quality Metrics ===
+            "word_count": len(embedding_text.split()),
+            # === Quality & Ranking Metrics ===
             "quality_score": quality_score,
-            "vector_dim": 1536,  # Standard OpenAI embedding dimension
-            
-            # === Chunk Information (matches chat summary format) ===
-            "chunk_index": 0,  # Single vector per email
-            "total_chunks": 1,  # No chunking in V2
-            
-            # === Enhanced Metadata (from extract_enhanced_metadata) ===
-            # Clean each field to remove escape sequences
-            "topics": self._clean_metadata_field(
-                self._extract_list_values(enhanced_metadata.get("topics", []))
-            ),
-            "keywords": self._clean_metadata_field(
-                self._extract_list_values(enhanced_metadata.get("keywords", []))
-            ),
-            "entity_people": self._clean_metadata_field(
-                self._extract_list_values(enhanced_metadata.get("entities_people", []))
-            ),
-            "entity_organizations": self._clean_metadata_field(
-                self._extract_list_values(enhanced_metadata.get("entities_organizations", []))
-            ),
-            "entity_locations": self._clean_metadata_field(
-                self._extract_list_values(enhanced_metadata.get("entities_locations", []))
-            ),
-            
-            # === Source & Type ===
+            "recency_score": round(recency_score, 3),  # 0.0-1.0, higher = more recent
+            # === Technical ===
             "source": "gmail",
             "doc_type": "email",
-            
-            # === Summary/Record ID (matches chat summary format) ===
-            "summary_id": f"email-{email_id}",  # Consistent with chat summaries
-            
-            # === Deduplication ===
-            "hash": hashlib.sha256(
-                f"{email_id}{user_id}".encode()
-            ).hexdigest(),
+            "hash": hashlib.sha256(f"{email_id}{user_id}".encode()).hexdigest(),
         }
-        
-        # FINAL DEBUG: Verify text fields are set
+
         logger.debug(
-            f"  Metadata built: chunk_text={len(metadata['chunk_text'])} chars, "
-            f"text={len(metadata['text'])} chars, "
-            f"subject={len(metadata['subject'])} chars, "
-            f"word_count={metadata['word_count']}"
+            f"  Metadata built: rerank_text={len(metadata['rerank_text'])} chars, "
+            f"chunk_text={len(metadata['chunk_text'])} chars, "
+            f"snippet={len(metadata['snippet'])} chars, "
+            f"recency_score={metadata['recency_score']}"
         )
-        
+
         return metadata
 
     @staticmethod
-    def _clean_metadata_field(text: str) -> str:
+    def _clean_list(items: List) -> List[str]:
         """
-        Aggressively clean a metadata field value.
-        
-        This removes ALL escape sequences and normalizes text for clean storage.
-        Applied to entity_people, topics, keywords, etc.
+        Clean a list of strings for Pinecone array storage.
+
+        Returns a clean list (not comma-separated string).
+        Pinecone supports arrays for $in filtering.
         """
-        if not text:
-            return ""
-        
-        # Remove ALL forms of escape sequences
-        text = text.replace('\\n\\n', ' ')  # Double newline
-        text = text.replace('\\n', ' ')     # Single newline
-        text = text.replace('\\t', ' ')     # Tab
-        text = text.replace('\\r', '')      # Carriage return
-        text = text.replace('\\\\', '')     # Backslash
-        text = text.replace('\\"', '"')     # Escaped quote
-        text = text.replace("\\'", "'")     # Escaped single quote
-        
-        # Normalize whitespace
-        text = re.sub(r'\s+', ' ', text)
-        
-        return text.strip()
-    
+        if not items:
+            return []
+
+        if isinstance(items, str):
+            # Handle case where it's already a comma-separated string
+            items = [i.strip() for i in items.split(",")]
+
+        cleaned = []
+        for item in items:
+            if item:
+                item_str = str(item).strip()
+                # Remove escape sequences
+                item_str = (
+                    item_str.replace("\\n", " ").replace("\\t", " ").replace("\\r", "")
+                )
+                item_str = re.sub(r"\s+", " ", item_str).strip()
+                if item_str and len(item_str) > 1:  # Skip single chars
+                    cleaned.append(item_str)
+
+        # Remove duplicates while preserving order
+        seen = set()
+        unique = []
+        for item in cleaned:
+            if item.lower() not in seen:
+                seen.add(item.lower())
+                unique.append(item)
+
+        return unique[:20]  # Limit to 20 items per array
+
     @staticmethod
     def _clean_for_pinecone(text: str) -> str:
         """
-        Final cleaning for Pinecone storage (matches TextCleaner.clean_for_pinecone).
-        
-        This is CRITICAL for metadata storage:
-        - Converts ANY remaining escape sequences to actual chars
-        - Removes control characters (including newlines for single-line storage)
-        - Normalizes to single-line format with PROPER space separation
-        - Ensures valid UTF-8
-        
-        Returns single-line text suitable for Pinecone metadata storage.
+        Final cleaning for Pinecone storage.
+
+        Ensures:
+        - No escape sequences
+        - No control characters
+        - Single-line format
+        - Valid UTF-8
+        - Within size limits
         """
         if not text:
             return ""
-        
-        # STEP 0: Handle any remaining escape sequences (defensive)
-        # This catches any escape sequences that slipped through earlier cleaning
-        text = text.replace('\\n\\n', '  ')  # Double newline → double space (paragraph break)
-        text = text.replace('\\n', ' ')  # Single newline → single space
-        text = text.replace('\\t', ' ')  # Tab → space
-        text = text.replace('\\r', '')   # Remove carriage return
-        text = text.replace('\\\\', '')  # Remove literal backslash
-        
-        # STEP 1: Convert ACTUAL newlines to spaces BEFORE removing control chars
-        # This ensures proper word spacing (critical fix!)
-        text = text.replace('\n\n', '  ')  # Paragraph break → double space
-        text = text.replace('\n', ' ')     # Line break → single space
-        text = text.replace('\t', ' ')     # Tab → space
-        
-        # STEP 2: Remove remaining control characters and zero-width chars
+
+        # Handle escape sequences
+        text = text.replace("\\n\\n", "  ")
+        text = text.replace("\\n", " ")
+        text = text.replace("\\t", " ")
+        text = text.replace("\\r", "")
+        text = text.replace("\\\\", "")
+
+        # Convert actual newlines to spaces
+        text = text.replace("\n\n", "  ")
+        text = text.replace("\n", " ")
+        text = text.replace("\t", " ")
+
+        # Remove control characters
         text = re.sub(r"[\x00-\x1F\x7F-\x9F\u200B-\u200D\uFEFF]", "", text)
-        
-        # STEP 3: Normalize whitespace to single spaces
-        text = re.sub(r" {2,}", " ", text)  # Multiple spaces → single space
+
+        # Normalize whitespace
+        text = re.sub(r" {2,}", " ", text)
         text = text.strip()
-        
-        # STEP 4: Ensure valid UTF-8
+
+        # Ensure valid UTF-8
         text = text.encode("utf-8", "ignore").decode("utf-8")
-        
-        # STEP 5: Limit length for Pinecone (40KB metadata limit)
+
+        # Limit length (Pinecone 40KB metadata limit per field)
         max_length = 10000
         if len(text) > max_length:
             text = text[:max_length] + "..."
-        
+
         return text
-    
-    @staticmethod
-    def _extract_list_values(items: List[str]) -> str:
-        """
-        Convert list of strings to comma-separated string for Pinecone.
-        
-        Handles both list and string inputs safely.
-        Also cleans escape sequences from the values.
-        """
-        if isinstance(items, list):
-            # Clean each item and join
-            cleaned_items = []
-            for item in items:
-                if item:
-                    # Convert to string and clean escape sequences
-                    item_str = str(item)
-                    item_str = item_str.replace('\\n', ' ').replace('\\t', ' ').replace('\\r', '')
-                    item_str = item_str.strip()
-                    if item_str:
-                        cleaned_items.append(item_str)
-            return ",".join(cleaned_items)
-        elif isinstance(items, str):
-            # Clean the string
-            cleaned = items.replace('\\n', ' ').replace('\\t', ' ').replace('\\r', '')
-            return cleaned.strip()
-        return ""
 
     async def _process_email_attachments(
         self,
@@ -797,24 +842,13 @@ class GmailIndexerV2:
         max_size_mb: int,
         allowed_types: str,
     ) -> List[Dict]:
-        """
-        Process email attachments using unstructured.io.
-        
-        Performance: Processes in parallel when possible
-        
-        Returns:
-            List of processed attachment dicts
-        """
+        """Process email attachments using unstructured.io."""
         from open_webui.utils.gmail_attachment_processor import GmailAttachmentProcessor
-        
+
         att_processor = GmailAttachmentProcessor(
-            max_size_mb=max_size_mb,
-            allowed_extensions=allowed_types
-        )
-        
-        return await att_processor.process_attachments_batch(
-            attachments_info,
-            fetcher,
-            email_id
+            max_size_mb=max_size_mb, allowed_extensions=allowed_types
         )
 
+        return await att_processor.process_attachments_batch(
+            attachments_info, fetcher, email_id
+        )
