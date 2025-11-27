@@ -538,6 +538,127 @@ def _extract_enhanced_entities(text: str) -> dict:
     Returns:
         Dictionary with lists of entities by type
     """
+    # Email-specific terms that should never be extracted as entities
+    EMAIL_STOPWORDS = {
+        # Email actions/prefixes
+        "Re",
+        "Fwd",
+        "Fw",
+        "Reply",
+        "Forward",
+        "Forwarded",
+        "Help",
+        "Thanks",
+        "Thank",
+        "Hello",
+        "Hi",
+        "Hey",
+        "Dear",
+        "Best",
+        "Regards",
+        "Sincerely",
+        "Cheers",
+        # Email metadata terms
+        "Subject",
+        "From",
+        "To",
+        "Cc",
+        "Bcc",
+        "Date",
+        "Sent",
+        "Received",
+        "Inbox",
+        "Outbox",
+        "Draft",
+        "Spam",
+        "Trash",
+        "Attachment",
+        "Attachments",
+        "Attached",
+        "File",
+        "Files",
+        # Common email phrases
+        "Please",
+        "Kindly",
+        "See",
+        "Below",
+        "Above",
+        "Following",
+        "Updated",
+        "Update",
+        "New",
+        "Old",
+        "Latest",
+        "Recent",
+        "Important",
+        "Urgent",
+        "Action",
+        "Required",
+        "Needed",
+        "Meeting",
+        "Call",
+        "Reminder",
+        "Notice",
+        "Alert",
+        "Invoice",
+        "Receipt",
+        "Order",
+        "Confirmation",
+        "Summary",
+        # Calendar/scheduling
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+        "Saturday",
+        "Sunday",
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+        "Today",
+        "Tomorrow",
+        "Weekly",
+        "Monthly",
+        "Daily",
+        "Annual",
+        "Quarterly",
+        # Technical terms that look like names
+        "Total",
+        "Amount",
+        "Due",
+        "Balance",
+        "Payment",
+        "Status",
+        "View",
+        "Click",
+        "Download",
+        "Open",
+        "Read",
+        "More",
+    }
+
+    def is_valid_person_name(name: str) -> bool:
+        """Check if extracted text is likely a real person name."""
+        words = name.split()
+        # All words must not be stopwords
+        for word in words:
+            if word in EMAIL_STOPWORDS:
+                return False
+        # At least one word should be longer than 2 chars
+        if not any(len(w) > 2 for w in words):
+            return False
+        return True
+
     # ===== PEOPLE EXTRACTION =====
     people = set()
 
@@ -610,9 +731,12 @@ def _extract_enhanced_entities(text: str) -> dict:
     # Remove people names that appear in organizations (keep most specific)
     people_clean = [p for p in people if not any(p in org for org in organizations)]
 
+    # Apply email stopword filtering to people
+    people_filtered = [p for p in people_clean if is_valid_person_name(p)]
+
     # Filter by minimum length and convert to sorted lists for consistency
     return {
-        "people": sorted([p.strip() for p in people_clean if len(p.strip()) > 2]),
+        "people": sorted([p.strip() for p in people_filtered if len(p.strip()) > 2]),
         "organizations": sorted(
             [o.strip() for o in organizations if len(o.strip()) > 2]
         ),
@@ -1996,7 +2120,9 @@ def save_docs_to_vector_db(
                             ids=existing_doc_ids,
                             namespace=namespace,
                         )
-                        log.info(f"✓ Deleted {len(existing_doc_ids)} existing vectors for '{filename}'")
+                        log.info(
+                            f"✓ Deleted {len(existing_doc_ids)} existing vectors for '{filename}'"
+                        )
                     except Exception as e:
                         log.warning(f"Failed to delete existing documents: {e}")
                         # Continue processing instead of failing
