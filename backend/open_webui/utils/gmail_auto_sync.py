@@ -1118,6 +1118,7 @@ async def periodic_gmail_sync_scheduler():
                 batch_size = 2 if total_users > 10 else 3
                 successful_syncs = 0
                 failed_syncs = 0
+                skipped_syncs = 0
 
                 # Process users in batches with rate limiting
                 for i in range(0, total_users, batch_size):
@@ -1144,8 +1145,10 @@ async def periodic_gmail_sync_scheduler():
                                 f"❌ Periodic sync failed for user {batch[j]}: "
                                 f"{type(result).__name__}: {result}"
                             )
-                        elif result:  # Successful sync
+                        elif result is True:  # Successful sync (explicitly True)
                             successful_syncs += 1
+                        elif result is False:  # Skipped (validation failed)
+                            skipped_syncs += 1
 
                     batch_duration = time.time() - batch_start
 
@@ -1158,15 +1161,18 @@ async def periodic_gmail_sync_scheduler():
                 # Summary logging
                 logger.info(
                     f"✅ Periodic sync cycle complete: "
-                    f"{successful_syncs} succeeded, {failed_syncs} failed "
-                    f"(total: {total_users})"
+                    f"{successful_syncs} succeeded, {failed_syncs} failed, "
+                    f"{skipped_syncs} skipped (total: {total_users})"
                 )
 
-                # Reset error counter on successful cycle
-                if successful_syncs > 0:
+                # Reset error counter on successful cycle or if all were just skipped
+                # (skips are not errors - they're intentional validation failures)
+                if successful_syncs > 0 or (failed_syncs == 0 and skipped_syncs > 0):
                     consecutive_errors = 0
-                else:
+                elif failed_syncs > 0:
+                    # Only count as error if there were actual failures (not just skips)
                     consecutive_errors += 1
+                # If all skipped (no success, no failure), don't increment error counter
             else:
                 logger.debug(
                     f"📧 No users need sync at this time (interval: {sync_interval_minutes}min)"
@@ -1214,7 +1220,7 @@ async def _sync_user_periodic(user_id: str) -> bool:
     sync_start = time.time()
 
     try:
-        logger.debug(f"🔄 Periodic sync starting for user: {user_id}")
+        logger.info(f"🔄 Periodic sync starting for user: {user_id}")
 
         # Validation: Check user exists
         user = Users.get_user_by_id(user_id)
@@ -1224,8 +1230,9 @@ async def _sync_user_periodic(user_id: str) -> bool:
 
         # Validation: Check admin enabled sync
         admin_sync_enabled = getattr(user, "gmail_sync_enabled", 0) == 1
+        logger.info(f"   Admin sync enabled: {admin_sync_enabled} (value: {getattr(user, 'gmail_sync_enabled', 'N/A')})")
         if not admin_sync_enabled:
-            logger.debug(f"⏭️  Gmail sync disabled by admin for user {user_id}")
+            logger.info(f"⏭️  Gmail sync disabled by admin for user {user_id}, skipping")
             return False
 
         # Validation: Check OAuth session exists
@@ -1233,8 +1240,10 @@ async def _sync_user_periodic(user_id: str) -> bool:
             "google", user_id
         )
         if not oauth_session:
-            logger.debug(f"⏭️  No Google OAuth session for user {user_id}")
+            logger.info(f"⏭️  No Google OAuth session for user {user_id}, skipping")
             return False
+        
+        logger.info(f"   OAuth session found: {oauth_session.id[:8]}...")
 
         # Get refreshed OAuth token using OAuth manager (auto-refreshes if expired)
         # This is critical for long-running syncs where token may expire mid-process
