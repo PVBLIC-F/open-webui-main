@@ -335,6 +335,16 @@ class GmailAutoSync:
 
             raise
 
+        finally:
+            # Close fetcher session to prevent "Unclosed client session" error
+            # Use try/except in case fetcher wasn't created before an exception
+            try:
+                if fetcher:
+                    await fetcher.close()
+                    logger.debug(f"Closed Gmail fetcher session for user {user_id}")
+            except NameError:
+                pass  # fetcher wasn't created yet
+
     async def _process_and_index_batch(
         self,
         emails: List[dict],
@@ -1230,7 +1240,9 @@ async def _sync_user_periodic(user_id: str) -> bool:
 
         # Validation: Check admin enabled sync
         admin_sync_enabled = getattr(user, "gmail_sync_enabled", 0) == 1
-        logger.info(f"   Admin sync enabled: {admin_sync_enabled} (value: {getattr(user, 'gmail_sync_enabled', 'N/A')})")
+        logger.info(
+            f"   Admin sync enabled: {admin_sync_enabled} (value: {getattr(user, 'gmail_sync_enabled', 'N/A')})"
+        )
         if not admin_sync_enabled:
             logger.info(f"⏭️  Gmail sync disabled by admin for user {user_id}, skipping")
             return False
@@ -1242,7 +1254,7 @@ async def _sync_user_periodic(user_id: str) -> bool:
         if not oauth_session:
             logger.info(f"⏭️  No Google OAuth session for user {user_id}, skipping")
             return False
-        
+
         logger.info(f"   OAuth session found: {oauth_session.id[:8]}...")
 
         # Get refreshed OAuth token using OAuth manager (auto-refreshes if expired)
