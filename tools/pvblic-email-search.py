@@ -627,12 +627,22 @@ class Tools:
 
         # Generate new embedding
         try:
+            import asyncio
+            import inspect
+            
             # Check if embedding_func is callable
             if not callable(embedding_func):
                 logger.error(f"❌ embedding_func is not callable, type: {type(embedding_func)}")
                 raise ValueError(f"embedding_func is not callable, got {type(embedding_func)}")
             
-            embedding = embedding_func(query, prefix="", user=None)
+            # Call the embedding function
+            result = embedding_func(query, prefix="", user=None)
+            
+            # Handle if result is a coroutine (async function)
+            if inspect.iscoroutine(result):
+                embedding = await result
+            else:
+                embedding = result
 
             # Cache it
             self._query_cache[query_hash] = (embedding, time.time())
@@ -1310,9 +1320,11 @@ class Tools:
         result += f"**Date:** {date}  \n"
 
         if labels and len(labels) > 0:
-            # Show relevant labels (exclude common ones)
+            # Show relevant labels (exclude common ones and raw label IDs)
             interesting_labels = [
-                l for l in labels if l not in ["UNREAD", "CATEGORY_PERSONAL"]
+                l for l in labels 
+                if l not in ["UNREAD", "CATEGORY_PERSONAL", "CATEGORY_UPDATES", "CATEGORY_PROMOTIONS", "CATEGORY_SOCIAL", "CATEGORY_FORUMS"]
+                and not l.startswith("Label_")  # Filter out raw label IDs
             ]
             if interesting_labels:
                 labels_str = ", ".join(interesting_labels[:3])
@@ -1326,8 +1338,9 @@ class Tools:
                 display_content += "..."
             result += f"\n**Content:**\n>{display_content}\n"
 
+        # Ensure word_count and quality_score display as integers
         result += (
-            f"\n_Words: {word_count} | Relevance: {score:.2f} | Quality: {quality_score}_"
+            f"\n_Words: {int(word_count)} | Relevance: {score:.2f} | Quality: {int(quality_score)}_"
         )
 
         return result
