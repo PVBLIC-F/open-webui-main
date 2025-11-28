@@ -2,9 +2,9 @@
 title: Gmail Semantic Search
 author: Open WebUI
 author_url: https://github.com/open-webui
-version: 3.1.0
+version: 3.2.0
 license: MIT
-description: High-accuracy Gmail semantic search with per-user data isolation. Features: Cohere reranking (default), query-aware boosting (sender/recipient/attachment detection), optimized scoring weights (80% semantic), stop word filtering, and V4 metadata schema support. Uses Pinecone namespaces for secure per-user isolation.
+description: High-accuracy Gmail semantic search with per-user data isolation. Features: Cohere reranking, query-aware boosting AND penalties (sender/recipient queries penalize non-matches), optimized scoring weights (80% semantic), stop word filtering, and V5 metadata schema support. Uses Pinecone namespaces for secure per-user isolation.
 required_open_webui_version: 0.3.0
 requirements: openai
 """
@@ -309,7 +309,7 @@ class Tools:
         
         # VERSION CHECK
         logger.info("=" * 80)
-        logger.info("🚀 GMAIL SEARCH V3.1.0 - HIGH ACCURACY MODE")
+        logger.info("🚀 GMAIL SEARCH V3.2.0 - SENDER/RECIPIENT PENALTIES")
         logger.info("=" * 80)
         
         # Step 1: Validate user and prepare query
@@ -799,13 +799,15 @@ class Tools:
     
     def _apply_query_hint_boosts(self, matches: list, query_hints: dict) -> list:
         """
-        Apply query-specific boosts based on extracted hints.
+        Apply query-specific boosts AND penalties based on extracted hints.
         This runs AFTER Pinecone reranking to fine-tune results.
         
-        Boosts:
-        - Sender match: +25% if sender hint matches from_name/from_email
-        - Recipient match: +20% if recipient hint matches to_name/to_email
-        - Attachment match: +15% if expects_attachment and has_attachments
+        V3.2 - Now includes PENALTIES for non-matching hints:
+        - Sender match: +50% boost / -60% penalty if explicitly mentioned
+        - Recipient match: +40% boost / -50% penalty if explicitly mentioned  
+        - Attachment match: +20% boost if expects_attachment
+        
+        When user says "from Sergio", emails NOT from Sergio get heavily penalized.
         """
         if not query_hints:
             return matches
@@ -818,46 +820,74 @@ class Tools:
             return matches  # No hints to apply
         
         boosted_count = 0
+        penalized_count = 0
+        filtered_matches = []
         
         for match in matches:
             metadata = match.metadata
             boost = 1.0
+            sender_matched = False
+            recipient_matched = False
             
-            # Sender boost
+            # === SENDER MATCHING ===
             if sender_hints:
                 from_name = metadata.get('from_name', '').lower()
                 from_email = metadata.get('from_email', '').lower()
+                
                 for hint in sender_hints:
                     if hint in from_name or hint in from_email:
-                        boost *= 1.25  # +25% boost
-                        logger.debug(f"  📧 Sender boost applied for '{hint}' in {from_name or from_email}")
+                        boost *= 1.50  # +50% boost for match
+                        sender_matched = True
+                        logger.debug(f"  📧 Sender MATCH: '{hint}' in {from_name or from_email}")
                         break
+                
+                # PENALTY: If sender explicitly mentioned but doesn't match
+                if not sender_matched:
+                    boost *= 0.40  # -60% penalty (multiply by 0.4)
+                    penalized_count += 1
+                    logger.debug(f"  📧 Sender PENALTY: '{sender_hints}' not in {from_name or from_email}")
             
-            # Recipient boost
+            # === RECIPIENT MATCHING ===
             if recipient_hints:
                 to_name = metadata.get('to_name', '').lower()
                 to_email = metadata.get('to_email', '').lower()
+                
                 for hint in recipient_hints:
                     if hint in to_name or hint in to_email:
-                        boost *= 1.20  # +20% boost
-                        logger.debug(f"  📧 Recipient boost applied for '{hint}' in {to_name or to_email}")
+                        boost *= 1.40  # +40% boost for match
+                        recipient_matched = True
+                        logger.debug(f"  📧 Recipient MATCH: '{hint}' in {to_name or to_email}")
                         break
+                
+                # PENALTY: If recipient explicitly mentioned but doesn't match
+                if not recipient_matched:
+                    boost *= 0.50  # -50% penalty
+                    penalized_count += 1
+                    logger.debug(f"  📧 Recipient PENALTY: '{recipient_hints}' not in {to_name or to_email}")
             
-            # Attachment boost
-            if expects_attachment and metadata.get('has_attachments', False):
-                boost *= 1.15  # +15% boost
-                logger.debug(f"  📎 Attachment boost applied")
+            # === ATTACHMENT MATCHING ===
+            if expects_attachment:
+                if metadata.get('has_attachments', False):
+                    boost *= 1.20  # +20% boost
+                    logger.debug(f"  📎 Attachment boost applied")
+                # No penalty for missing attachments (less strict)
+            
+            # Apply boost/penalty
+            match.score = max(0.01, min(1.0, match.score * boost))  # Clamp to [0.01, 1.0]
             
             if boost > 1.0:
-                match.score = min(1.0, match.score * boost)  # Cap at 1.0
                 boosted_count += 1
+            
+            # Keep match (we'll re-sort, not filter)
+            filtered_matches.append(match)
         
-        if boosted_count > 0:
-            logger.info(f"🎯 Applied query hint boosts to {boosted_count} emails")
-            # Re-sort by new scores
-            matches.sort(key=lambda m: m.score, reverse=True)
+        if boosted_count > 0 or penalized_count > 0:
+            logger.info(f"🎯 Query hints: {boosted_count} boosted, {penalized_count} penalized")
         
-        return matches
+        # Re-sort by new scores
+        filtered_matches.sort(key=lambda m: m.score, reverse=True)
+        
+        return filtered_matches
 
     def _rerank_with_pinecone(self, matches: list, query: str) -> list:
         """
