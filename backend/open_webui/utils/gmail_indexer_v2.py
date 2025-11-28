@@ -1,22 +1,25 @@
 """
-Gmail Indexer V3 - Optimized for Semantic Search + Re-ranking
+Gmail Indexer V4 - Clean Metadata for Semantic Search + Re-ranking
 
-Production-grade email indexing optimized for semantic search with re-ranking.
+Production-grade email indexing with ONLY reliable metadata.
 
-Key Improvements over V2:
-- Longer text for better re-ranking (3000 chars vs 500)
-- Smart text composition prioritizing semantic value
-- Pinecone arrays for multi-value filtering (not comma-separated)
-- Separate fields: rerank_text, snippet, chunk_text
-- Recency score for temporal ranking boost
-- Optimized for Cohere/Pinecone re-ranker pipeline
+V4 Changes (simplified from V3):
+- REMOVED: topics, keywords, entity_people, entity_organizations, entity_locations
+  (regex-based extraction was producing garbage like "ONLY" as org, subjects as names)
+- KEPT: All text fields for semantic search (rerank_text, chunk_text, snippet)
+- KEPT: Reliable header data (from, to, subject, date, labels)
+- KEPT: Gmail API data (attachments, labels)
+- FIXED: All text fields cleaned with _clean_for_pinecone (no more \n in records)
+
+Philosophy: Let semantic search + re-ranking find entities naturally in the text.
+Garbage metadata is worse than no metadata.
 
 Architecture:
 - One email = One vector = One search result
 - rerank_text: Full clean body for re-ranker (up to 3000 chars)
 - chunk_text: Embedding text (subject + key content, ~1500 chars)
 - snippet: Display preview (150 chars)
-- Arrays for filtering: labels, topics, keywords, entities
+- Arrays for filtering: labels, attachments (reliable data only)
 """
 
 import logging
@@ -31,7 +34,6 @@ from functools import partial
 from typing import Dict, List, Optional
 
 from open_webui.utils.gmail_processor import GmailProcessor
-from open_webui.routers.retrieval import extract_enhanced_metadata
 from open_webui.config import (
     RAG_EMBEDDING_BATCH_SIZE,
     SEMANTIC_MAX_CHUNK_SIZE,
@@ -64,8 +66,8 @@ class GmailIndexerV2:
     - Re-ranking: Adds ~50-100ms but significantly improves relevance
     """
 
-    # Index version for tracking - V3 optimized for semantic search + re-ranking
-    INDEX_VERSION = "v3-semantic-rerank"
+    # Index version for tracking - V4 simplified metadata (removed unreliable entity extraction)
+    INDEX_VERSION = "v4-clean-metadata"
 
     # Text length limits optimized for re-ranking
     RERANK_TEXT_LENGTH = (
@@ -218,35 +220,22 @@ class GmailIndexerV2:
         logger.debug(f"  Embedding text: {len(embedding_text)} chars")
         logger.debug(f"  Snippet: {len(snippet)} chars")
 
-        # Step 4: Extract enhanced metadata as ARRAYS (CPU-bound, run in thread)
-        def _extract_metadata_sync():
-            return (
-                extract_enhanced_metadata(clean_body, use_llm=False)
-                if clean_body
-                else {}
-            )
-
-        enhanced_metadata = await loop.run_in_executor(
-            _CPU_EXECUTOR, _extract_metadata_sync
-        )
-
-        # Yield after metadata extraction
-        await asyncio.sleep(0)
-
-        # Step 5: Calculate recency score (exponential decay)
+        # Step 4: Calculate recency score (exponential decay)
+        # NOTE: Removed extract_enhanced_metadata - regex-based entity extraction
+        # was producing garbage (e.g., "ONLY" as organization, subject as person name).
+        # Semantic search + reranking will find entities in text naturally.
         recency_score = self._calculate_recency_score(base_metadata["date_timestamp"])
 
-        # Step 6: Generate embedding
+        # Step 5: Generate embedding
         embeddings = await self.embeddings.embed_batch([embedding_text])
         embedding = embeddings[0] if embeddings else [0.0] * 1536
 
-        # Step 7: Calculate quality score
+        # Step 6: Calculate quality score
         quality_score = self.doc_processor.quick_quality_score(embedding_text)
 
-        # Step 8: Build comprehensive metadata with ARRAYS
+        # Step 7: Build metadata (only reliable fields, no regex-extracted entities)
         metadata = self._build_optimized_metadata(
             base_metadata=base_metadata,
-            enhanced_metadata=enhanced_metadata,
             rerank_text=rerank_text,
             embedding_text=embedding_text,
             snippet=snippet,
@@ -255,7 +244,7 @@ class GmailIndexerV2:
             attachment_names=attachment_names,
         )
 
-        # Step 9: Create upsert data
+        # Step 8: Create upsert data
         upsert_data = [
             {
                 "id": f"email-{email_id}",
@@ -728,7 +717,6 @@ class GmailIndexerV2:
     def _build_optimized_metadata(
         self,
         base_metadata: Dict,
-        enhanced_metadata: Dict,
         rerank_text: str,
         embedding_text: str,
         snippet: str,
@@ -739,35 +727,29 @@ class GmailIndexerV2:
         """
         Build metadata optimized for semantic search + re-ranking.
 
-        Key changes from V2:
-        - rerank_text: Long text for re-ranker (3000 chars)
-        - snippet: Short preview for UI (150 chars)
-        - chunk_text: Embedding text for compatibility
-        - Arrays: labels, topics, keywords, entities (not comma-separated)
-        - recency_score: Temporal ranking boost
-        - Removed redundant 'text' field
+        V4 - Simplified metadata (removed unreliable regex-extracted fields):
+        - KEPT: rerank_text, chunk_text, snippet (text for search)
+        - KEPT: from_*, to_*, subject, date, labels (reliable header data)
+        - KEPT: attachments, has_attachments (reliable Gmail API data)
+        - REMOVED: topics, keywords, entity_* (regex extraction was garbage)
+
+        Semantic search + re-ranking finds entities in text naturally.
         """
         email_id = base_metadata["email_id"]
         user_id = base_metadata["user_id"]
 
-        # Extract arrays from enhanced metadata (keep as arrays, not strings!)
-        topics = self._clean_list(enhanced_metadata.get("topics", []))
-        keywords = self._clean_list(enhanced_metadata.get("keywords", []))
-        entity_people = self._clean_list(enhanced_metadata.get("entities_people", []))
-        entity_organizations = self._clean_list(
-            enhanced_metadata.get("entities_organizations", [])
-        )
-        entity_locations = self._clean_list(
-            enhanced_metadata.get("entities_locations", [])
-        )
-
-        # Labels as array
+        # Labels as array (from Gmail API - reliable)
         labels = base_metadata.get("labels", [])
         if isinstance(labels, str):
             labels = [l.strip() for l in labels.split(",") if l.strip()]
 
-        # Attachment names as array
+        # Attachment names as array (from Gmail API - reliable)
         attachments = attachment_names if attachment_names else []
+
+        # Clean text fields for Pinecone (remove \n, control chars, etc.)
+        clean_rerank = self._clean_for_pinecone(rerank_text)
+        clean_chunk = self._clean_for_pinecone(embedding_text)
+        clean_snippet = self._clean_for_pinecone(snippet)
 
         metadata = {
             # === Core Identification ===
@@ -776,29 +758,24 @@ class GmailIndexerV2:
             "thread_id": base_metadata["thread_id"],
             "user_id": user_id,
             "index_version": self.INDEX_VERSION,
-            # === Text Fields (optimized for search + re-ranking) ===
-            "rerank_text": rerank_text,  # LONG: For Cohere/Pinecone re-ranker (3000 chars)
-            "chunk_text": embedding_text,  # MEDIUM: Embedding text, compatible with Open WebUI (1500 chars)
-            "snippet": snippet,  # SHORT: UI preview (150 chars)
-            # === Structured Email Fields (for filtering) ===
-            "subject": base_metadata["subject"],
-            "from_name": base_metadata["from_name"],
+            # === Text Fields (cleaned for Pinecone, no \n) ===
+            "rerank_text": clean_rerank,  # LONG: For re-ranker (up to 3000 chars)
+            "chunk_text": clean_chunk,  # MEDIUM: For display (up to 1500 chars)
+            "snippet": clean_snippet,  # SHORT: UI preview (up to 150 chars)
+            # === Structured Email Fields (from headers - reliable) ===
+            "subject": self._clean_for_pinecone(base_metadata["subject"]),
+            "from_name": self._clean_for_pinecone(base_metadata["from_name"]),
             "from_email": base_metadata["from_email"],
-            "to_name": base_metadata.get("to_name", ""),
+            "to_name": self._clean_for_pinecone(base_metadata.get("to_name", "")),
             "to_email": base_metadata.get("to_email", ""),
             "cc": base_metadata.get("cc", ""),
             # === Temporal Fields ===
             "date": base_metadata["date"],
             "date_timestamp": base_metadata["date_timestamp"],
             "timestamp": datetime.utcnow().isoformat() + "Z",
-            # === ARRAYS for Pinecone Filtering (not comma-separated!) ===
-            "labels": labels,  # Array: ["SENT", "IMPORTANT"]
-            "topics": topics,  # Array: ["meeting", "budget"]
-            "keywords": keywords,  # Array: ["quarterly", "report"]
-            "entity_people": entity_people,  # Array: ["John Smith", "Jane Doe"]
-            "entity_organizations": entity_organizations,  # Array: ["Acme Corp"]
-            "entity_locations": entity_locations,  # Array: ["New York", "London"]
-            "attachments": attachments,  # Array: ["report.pdf", "data.xlsx"]
+            # === Arrays for Pinecone Filtering ===
+            "labels": labels,  # From Gmail API: ["SENT", "IMPORTANT", "INBOX"]
+            "attachments": attachments,  # Filenames: ["report.pdf", "data.xlsx"]
             # === Email Properties ===
             "has_attachments": base_metadata["has_attachments"],
             "attachment_count": len(attachments),
