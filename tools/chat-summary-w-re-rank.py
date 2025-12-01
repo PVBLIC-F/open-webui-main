@@ -1,28 +1,41 @@
 """
 Advanced Chat Summarization Filter for OpenWebUI
 
-This filter provides intelligent chat summarization and retrieval using Pinecone:
-1. Chat History Management: Uses Pinecone for intelligent chat summarization and retrieval
-2. Pinecone Reranking: Uses Pinecone's hosted reranking models for improved relevance
+Provides intelligent long-term chat memory for users through automatic summarization
+and semantic retrieval. Reduces token usage while maintaining conversation context.
 
 Key Features:
-- Pinecone vector database for chat history storage and retrieval
-- Content-aware text splitting optimized for conversations
-- Intelligent quality scoring and filtering
-- Comprehensive caching and rate limiting
-- Background processing with Redis/RQ
-- Professional error handling and logging
-- Pinecone reranking for improved search relevance
+- Hybrid Memory Retrieval: Combines current chat + cross-chat memories in parallel
+- Single LLM Call Optimization: Generates summary AND topic in one API call (50% cost savings)
+- Pinecone Vector Database: Stores and retrieves chat summaries with semantic search
+- Pinecone Reranking: Uses hosted reranking models for improved relevance
+- Redis Caching: Embedding cache with configurable TTL
+- Background Processing: Async summary generation via Redis/RQ
+- Quality Scoring: Filters low-quality summaries (0-5 scale)
 
 Architecture:
-- Pinecone: Chat summaries and conversation history (type="chat")
-- Pinecone Reranking: Uses Pinecone's inference API for document reranking
+- Filter (Orchestrator): Coordinates inlet/outlet flow
+- ChatHistoryRetriever: Hybrid retrieval with parallel queries
+- SummarizationService: LLM-based summary + topic generation
+- EmbeddingService: Cached embedding generation with rate limiting
+- PineconeManager: Vector operations with query deduplication
 
-Refactored Structure:
-- Organized into focused service classes within single file
-- Clean separation of concerns
-- Orchestrator pattern for coordination
-- Performance optimized with no code duplication
+Security:
+- All queries filtered by user_id (strict user isolation)
+- Cross-chat memory only accesses same user's data
+- No data leakage between users
+
+Configuration (Environment Variables):
+- CROSS_CHAT_TOP_K: Number of cross-chat memories to retrieve (default: 3, set 0 to disable)
+- TOP_K: Number of current chat memories to retrieve
+- MIN_SCORE_CHAT: Minimum similarity score threshold
+- RAG_ENABLE_RERANK: Enable Pinecone reranking (default: true)
+
+Performance Optimizations:
+- Parallel Pinecone queries via asyncio.gather()
+- Embedding cache in Redis
+- Query deduplication to avoid redundant API calls
+- Background upserts via RQ workers
 """
 
 import os
@@ -35,30 +48,27 @@ import hashlib
 import uuid
 import unicodedata
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple, Set
+from typing import Optional, Tuple
 from functools import lru_cache
 
 import httpx
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
-from pinecone import Pinecone, ServerlessSpec
+from pinecone import Pinecone
 from redis import Redis
 from rq import Queue, Retry
-from langchain_text_splitters import RecursiveCharacterTextSplitter, TokenTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from tiktoken import get_encoding
 
-# Try to import unstructured.io for advanced document processing
+# Optional: unstructured.io for advanced document processing (not currently used)
+UNSTRUCTURED_AVAILABLE = False
 try:
-    from unstructured.partition.auto import partition
-    from unstructured.chunking.title import chunk_by_title
-
+    from unstructured.partition.auto import partition  # noqa: F401
+    from unstructured.chunking.title import chunk_by_title  # noqa: F401
     UNSTRUCTURED_AVAILABLE = True
 except ImportError:
-    UNSTRUCTURED_AVAILABLE = False
-    logging.warning(
-        "Unstructured.io not available. Document processing will be limited."
-    )
+    pass  # Optional dependency, not required for core functionality
 
 # Load environment variables
 dotenv_path = os.getenv("DOTENV_PATH")
@@ -74,11 +84,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger("chat_history_filter_optimized")
 
-# Configure token-aware and semantic splitters (module level)
+# Configure text splitters (module level for reuse)
 encoding = get_encoding("cl100k_base")
-token_splitter = TokenTextSplitter(
-    encoding_name="cl100k_base", chunk_size=1500, chunk_overlap=150
-)
 recursive_splitter = RecursiveCharacterTextSplitter(
     separators=["\n\n", "\n", ".", "!", "?", ",", " ", ""],
     chunk_size=1500,
@@ -87,16 +94,21 @@ recursive_splitter = RecursiveCharacterTextSplitter(
 
 
 def _debug_message_log(stage: str, messages: list) -> None:
-    """Debug logging helper for message state"""
-    logger.info(
-        f"[DEBUG] {stage}: num={len(messages)} roles={[m.get('role') for m in messages]}"
+    """
+    Debug logging helper for message state tracking.
+    Only logs when DEBUG level is enabled to avoid performance impact.
+    """
+    if not logger.isEnabledFor(logging.DEBUG):
+        return
+        
+    logger.debug(
+        f"{stage}: num={len(messages)} roles={[m.get('role') for m in messages]}"
     )
-    logger.info(
-        f"[DEBUG] {stage} SYSTEM MSGS: {[(m.get('content','')[:60]) for m in messages if m.get('role')=='system']}"
-    )
-    logger.info(
-        f"[DEBUG] {stage} FIRST MSGS: {[m.get('content','')[:40] for m in messages[:5]]}"
-    )
+    system_msgs = [(m.get('content', '')[:60]) for m in messages if m.get('role') == 'system']
+    if system_msgs:
+        logger.debug(f"{stage} SYSTEM MSGS: {system_msgs}")
+    first_msgs = [m.get('content', '')[:40] for m in messages[:5]]
+    logger.debug(f"{stage} FIRST MSGS: {first_msgs}")
 
 
 # ============================================================================
@@ -843,7 +855,26 @@ class PineconeManager:
 
 
 class ChatHistoryRetriever:
-    """Retrieves chat history from Pinecone with quality filtering"""
+    """
+    Retrieves chat history from Pinecone using a hybrid approach.
+    
+    Hybrid Retrieval Strategy:
+    1. Query current chat (top_k results) - prioritizes recent context
+    2. Query cross-chat memories (cross_chat_top_k results) - brings in relevant past conversations
+    3. Execute both queries in PARALLEL for performance
+    4. Combine, deduplicate, and sort by relevance score
+    
+    Security:
+    - All queries include user_id filter (mandatory)
+    - Cross-chat only accesses same user's data
+    - No data leakage between users
+    
+    Configuration:
+    - top_k: Results from current chat
+    - cross_chat_top_k: Results from other chats (0 to disable)
+    - min_score_chat: Minimum similarity threshold
+    - enable_rerank: Use Pinecone reranking for better relevance
+    """
 
     def __init__(
         self,
@@ -854,6 +885,7 @@ class ChatHistoryRetriever:
         enable_rerank: bool = False,
         reranking_model: str = "pinecone-rerank-v0",
         reranking_multiplier: int = 3,
+        cross_chat_top_k: int = 3,
     ):
         self.pinecone = pinecone_manager
         self.min_quality_score = min_quality_score
@@ -862,86 +894,218 @@ class ChatHistoryRetriever:
         self.enable_rerank = enable_rerank
         self.reranking_model = reranking_model
         self.reranking_multiplier = reranking_multiplier
+        self.cross_chat_top_k = cross_chat_top_k
 
     async def retrieve(
         self, vector: list, user_id: str, chat_id: str, query_text: str = None
     ) -> list:
-        """Retrieve relevant chat history for the user and chat with optional re-ranking"""
-        logger.info("=== STARTING PINECONE CHAT HISTORY RETRIEVAL ===")
+        """
+        Retrieve relevant chat history using hybrid approach:
+        1. Query current chat + cross-chat in PARALLEL (performance optimization)
+        2. Combine and deduplicate results
+        3. Return sorted by relevance score
+        """
+        logger.info("=== STARTING PINECONE CHAT HISTORY RETRIEVAL (HYBRID) ===")
 
-        if not user_id or not chat_id:
-            logger.info("Missing user_id or chat_id")
+        if not user_id:
+            logger.warning("Missing user_id, cannot retrieve chat history")
             return []
 
-        # Build filter
+        try:
+            start_time = time.time()
+            
+            # Build list of queries to run in parallel
+            tasks = []
+            task_names = []
+            
+            # Current chat query (if chat_id provided)
+            if chat_id:
+                tasks.append(self._query_current_chat(vector, user_id, chat_id, query_text))
+                task_names.append("current")
+            
+            # Cross-chat query (if enabled)
+            if self.cross_chat_top_k > 0:
+                tasks.append(self._query_cross_chat(vector, user_id, chat_id, query_text))
+                task_names.append("cross")
+            
+            # Execute queries in PARALLEL for performance
+            if not tasks:
+                logger.info("No queries to execute")
+                return []
+            
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # Process results
+            current_chat_matches = []
+            cross_chat_matches = []
+            
+            for i, result in enumerate(results):
+                if isinstance(result, Exception):
+                    logger.error(f"Query '{task_names[i]}' failed: {result}")
+                    continue
+                    
+                if task_names[i] == "current":
+                    current_chat_matches = result or []
+                elif task_names[i] == "cross":
+                    cross_chat_matches = result or []
+            
+            # Combine matches (deduplicate by ID, sort by score)
+            all_matches = self._combine_matches(current_chat_matches, cross_chat_matches)
+            
+            query_time = time.time() - start_time
+            logger.info(
+                f"Hybrid retrieval: {len(all_matches)} matches in {query_time:.3f}s "
+                f"(current={len(current_chat_matches)}, cross={len(cross_chat_matches)}) [PARALLEL]"
+            )
+
+            # Debug logging (only in debug scenarios, limit output)
+            if logger.isEnabledFor(logging.DEBUG):
+                self._log_matches_debug(all_matches)
+
+            # Progressive refinement if current chat has poor results
+            if chat_id and self._needs_refinement(all_matches):
+                refined_matches = await self._progressive_refinement(
+                    vector, user_id, chat_id, current_chat_matches, query_text
+                )
+                all_matches = self._combine_matches(refined_matches, cross_chat_matches)
+
+            # Process and return results
+            items = self._process_matches(all_matches)
+
+            # Log summary
+            if items:
+                current_count = sum(1 for i in items if i.get("source") == "current_chat")
+                cross_count = sum(1 for i in items if i.get("source") == "cross_chat")
+                logger.info(
+                    f"Retrieved {len(items)} items: {current_count} current, {cross_count} cross-chat"
+                )
+            else:
+                logger.info("No matching chat history found")
+            
+            logger.info("=== COMPLETED PINECONE CHAT HISTORY RETRIEVAL (HYBRID) ===")
+            return items
+
+        except Exception as e:
+            logger.error(f"Pinecone chat query failed: {e}", exc_info=True)
+            return []
+
+    async def _query_current_chat(
+        self, vector: list, user_id: str, chat_id: str, query_text: str = None
+    ) -> list:
+        """
+        Query memories from the current chat only.
+        Security: Filters by both user_id AND chat_id for strict isolation.
+        """
         filter_expr = {
             "type": {"$eq": "chat"},
-            "user_id": {"$eq": user_id},
-            "chat_id": {"$eq": chat_id},
+            "user_id": {"$eq": user_id},  # CRITICAL: User isolation
+            "chat_id": {"$eq": chat_id},  # Current chat only
             "$or": [
                 {"quality_score": {"$gte": self.min_quality_score}},
                 {"quality_score": {"$exists": False}},
             ],
         }
 
-        try:
-            # Query Pinecone with optional re-ranking
-            start_time = time.time()
-            res = await self.pinecone.query(
-                vector=vector,
-                filter_expr=filter_expr,
-                top_k=self.top_k,
-                enable_rerank=self.enable_rerank,
-                reranking_model=self.reranking_model,
-                query_text=query_text,
-                reranking_multiplier=self.reranking_multiplier,
+        res = await self.pinecone.query(
+            vector=vector,
+            filter_expr=filter_expr,
+            top_k=self.top_k,
+            enable_rerank=self.enable_rerank,
+            reranking_model=self.reranking_model,
+            query_text=query_text,
+            reranking_multiplier=self.reranking_multiplier,
+        )
+        
+        matches = getattr(res, "matches", []) or []
+        
+        # Tag matches with source for tracking
+        for m in matches:
+            if hasattr(m, "metadata"):
+                m.metadata["_source"] = "current_chat"
+        
+        return matches
+
+    async def _query_cross_chat(
+        self, vector: list, user_id: str, current_chat_id: str, query_text: str = None
+    ) -> list:
+        """
+        Query memories from user's OTHER chats (excluding current).
+        Security: Always filters by user_id to ensure data isolation.
+        """
+        filter_expr = {
+            "type": {"$eq": "chat"},
+            "user_id": {"$eq": user_id},  # CRITICAL: User isolation
+            "$or": [
+                {"quality_score": {"$gte": self.min_quality_score}},
+                {"quality_score": {"$exists": False}},
+            ],
+        }
+        
+        # Exclude current chat to avoid duplicates
+        if current_chat_id:
+            filter_expr["chat_id"] = {"$ne": current_chat_id}
+
+        res = await self.pinecone.query(
+            vector=vector,
+            filter_expr=filter_expr,
+            top_k=self.cross_chat_top_k,
+            enable_rerank=self.enable_rerank,
+            reranking_model=self.reranking_model,
+            query_text=query_text,
+            reranking_multiplier=self.reranking_multiplier,
+        )
+        
+        matches = getattr(res, "matches", []) or []
+        
+        # Tag matches with source for tracking
+        for m in matches:
+            if hasattr(m, "metadata"):
+                m.metadata["_source"] = "cross_chat"
+        
+        return matches
+
+    def _combine_matches(self, current_matches: list, cross_matches: list) -> list:
+        """Combine and deduplicate matches from current and cross-chat queries"""
+        seen_ids = set()
+        combined = []
+        
+        # Add current chat matches first (priority)
+        for m in current_matches:
+            match_id = getattr(m, "id", None)
+            if match_id and match_id not in seen_ids:
+                seen_ids.add(match_id)
+                combined.append(m)
+        
+        # Add cross-chat matches (supplementary)
+        for m in cross_matches:
+            match_id = getattr(m, "id", None)
+            if match_id and match_id not in seen_ids:
+                seen_ids.add(match_id)
+                combined.append(m)
+        
+        # Sort by score (highest first)
+        combined.sort(key=lambda m: getattr(m, "score", 0), reverse=True)
+        
+        return combined
+
+    def _log_matches_debug(self, matches: list) -> None:
+        """Debug logging for match details (only called when DEBUG level enabled)"""
+        if matches:
+            logger.debug(
+                f"All matches with scores (min_score_chat={self.min_score_chat}):"
             )
-            query_time = time.time() - start_time
-            matches = getattr(res, "matches", []) or []
-
-            logger.info(
-                f"Pinecone chat query returned {len(matches)} matches in {query_time:.3f}s"
-            )
-
-            # Debug: Show all chat matches and their scores first
-            if matches:
-                logger.info(
-                    f"[DEBUG] All Pinecone chat matches with scores (min_score_chat={self.min_score_chat}):"
+            for i, match in enumerate(matches[:10]):  # Limit to first 10
+                score = getattr(match, "score", 0)
+                metadata = getattr(match, "metadata", {})
+                source = metadata.get("_source", "unknown")
+                topic = metadata.get("topic", "unknown")
+                chat_id_str = metadata.get("chat_id", "unknown")
+                chat_id_short = chat_id_str[:8] if len(chat_id_str) > 8 else chat_id_str
+                logger.debug(
+                    f"  {i+1}. [{source}] {topic} (chat:{chat_id_short}...) - Score: {score:.4f}"
                 )
-                for i, match in enumerate(matches):
-                    score = getattr(match, "score", 0)
-                    metadata = getattr(match, "metadata", {})
-                    summary_type = metadata.get("summary_type", "unknown")
-                    timestamp = metadata.get("timestamp", "no-timestamp")
-                    logger.info(
-                        f"[DEBUG]   {i+1}. {summary_type} ({timestamp}) - Score: {score:.4f}"
-                    )
-            else:
-                logger.info("[DEBUG] No chat matches returned from Pinecone")
-
-            # Progressive refinement if needed
-            if self._needs_refinement(matches):
-                matches = await self._progressive_refinement(
-                    vector, user_id, chat_id, matches, query_text
-                )
-
-            # Process results
-            items = self._process_matches(matches)
-
-            logger.info(
-                f"[DEBUG] Retrieved {len(items)} chat history items from Pinecone"
-            )
-            if items:
-                logger.info(
-                    f"[DEBUG] Pinecone results preview: topic={items[0]['document_name']} (score: {items[0]['score']:.3f})"
-                )
-            logger.info("=== COMPLETED PINECONE CHAT HISTORY RETRIEVAL ===")
-            return items
-
-        except Exception as e:
-            logger.error(f"Pinecone chat query failed: {e}")
-            logger.info("=== FAILED PINECONE CHAT HISTORY RETRIEVAL ===")
-            return []
+        else:
+            logger.debug("No matches returned from Pinecone")
 
     def _needs_refinement(self, matches: list) -> bool:
         """Check if we need progressive refinement"""
@@ -993,7 +1157,7 @@ class ChatHistoryRetriever:
         return original_matches
 
     def _process_matches(self, matches: list) -> list:
-        """Process Pinecone matches into standard format"""
+        """Process Pinecone matches into standard format with source tracking"""
         items = []
         filtered_count = 0
 
@@ -1003,20 +1167,24 @@ class ChatHistoryRetriever:
                 filtered_count += 1
                 continue
 
-            quality_score = m.metadata.get("quality_score", 0)
+            metadata = getattr(m, "metadata", {})
+            
+            quality_score = metadata.get("quality_score", 0)
             if isinstance(quality_score, str):
                 try:
                     quality_score = int(quality_score)
-                except:
+                except Exception:
                     quality_score = 0
 
-            topic = m.metadata.get("topic", "General")
+            topic = metadata.get("topic", "General")
             text = TextCleaner.clean_text(
-                m.metadata.get("chunk_text") or m.metadata.get("text", "")
+                metadata.get("chunk_text") or metadata.get("text", "")
             )
+            source = metadata.get("_source", "current_chat")
+            chat_id = metadata.get("chat_id", "unknown")
 
             logger.info(
-                f"[CHAT MATCH] topic={topic}, score={score:.4f}, quality={quality_score}"
+                f"[CHAT MATCH] [{source}] topic={topic}, score={score:.4f}, quality={quality_score}"
             )
 
             items.append(
@@ -1026,6 +1194,8 @@ class ChatHistoryRetriever:
                     "document_name": topic,
                     "score": score,
                     "quality_score": quality_score,
+                    "source": source,
+                    "chat_id": chat_id,
                 }
             )
 
@@ -1043,15 +1213,150 @@ class ChatHistoryRetriever:
 
 
 class SummarizationService:
-    """Handles chat summarization using OpenRouter"""
+    """
+    Generates chat summaries and topics using LLM (via OpenRouter).
+    
+    Optimization:
+    - Single API call generates both summary AND topic (50% cost reduction)
+    - Structured output format for reliable parsing
+    - Fallback generation when API fails
+    
+    Output Format:
+    - Summary: 100-150 words capturing key facts and decisions
+    - Topic: 1-3 word identifier for the conversation
+    
+    Storage:
+    - Summaries are embedded and stored in Pinecone
+    - Background upserts via Redis/RQ for non-blocking operation
+    """
 
     def __init__(self, client: AsyncOpenAI, model: str, limiter: AsyncLimiter):
         self.client = client
         self.model = model
         self.limiter = limiter
 
+    async def generate_summary_with_topic(
+        self, conversation_text: str
+    ) -> Tuple[str, str]:
+        """
+        Generate summary AND topic in a single LLM call (50% cost savings).
+        
+        Returns:
+            Tuple of (summary, topic)
+        """
+        try:
+            messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are an expert summarization assistant. Your task is to:\n"
+                        "1. Summarize the conversation in 100-150 words, capturing key facts, decisions, and details\n"
+                        "2. Identify the main topic in 1-3 words\n\n"
+                        "Guidelines:\n"
+                        "- Begin with a clear statement of the user's primary question or request\n"
+                        "- Provide a thorough account of the assistant's response\n"
+                        "- Include specific numerical data and details when present\n"
+                        "- Write in a neutral, informative tone\n\n"
+                        "Output format (follow exactly):\n"
+                        "SUMMARY: [your comprehensive summary here]\n"
+                        "TOPIC: [1-3 word topic]"
+                    ),
+                },
+                {"role": "user", "content": conversation_text},
+            ]
+
+            resp = await self._call_api(messages, timeout=15.0)
+            content = resp.choices[0].message.content.strip()
+
+            # Parse the structured response
+            summary, topic = self._parse_summary_response(content)
+            
+            logger.info(f"Generated summary ({len(summary)} chars) with topic: {topic}")
+            return summary, topic
+
+        except Exception as e:
+            logger.warning(f"Summary+topic generation failed: {e}. Using fallback.")
+            return self._generate_fallback_summary_with_topic(conversation_text)
+
+    def _parse_summary_response(self, content: str) -> Tuple[str, str]:
+        """Parse LLM response to extract summary and topic"""
+        # Try to parse structured format
+        summary_match = re.search(
+            r"SUMMARY:\s*(.+?)(?=\nTOPIC:|$)", content, re.DOTALL | re.IGNORECASE
+        )
+        topic_match = re.search(r"TOPIC:\s*(.+?)$", content, re.IGNORECASE)
+
+        if summary_match and topic_match:
+            summary = summary_match.group(1).strip()
+            topic = topic_match.group(1).strip()
+        else:
+            # Fallback: use full content as summary, extract topic from first words
+            logger.warning("Could not parse structured response, using fallback parsing")
+            summary = content
+            # Try to extract topic from first line or use first 3 words
+            first_line = content.split("\n")[0]
+            topic = " ".join(first_line.split()[:3])
+
+        # Clean topic
+        topic = self._clean_topic(topic)
+        
+        return summary, topic
+
+    def _clean_topic(self, topic: str) -> str:
+        """Clean and normalize topic string"""
+        if not topic:
+            return "General"
+            
+        # Take first 3 words max
+        words = topic.split()[:3]
+        topic = " ".join(words) if words else "General"
+
+        # Remove problematic punctuation but KEEP spaces
+        topic = re.sub(r"[^\w\s-]", "", topic)
+
+        # Capitalize each word for better display
+        topic = " ".join(word.capitalize() for word in topic.split())
+
+        return topic if topic.strip() else "General"
+
+    def _generate_fallback_summary_with_topic(
+        self, conversation_text: str
+    ) -> Tuple[str, str]:
+        """Generate basic summary and topic when API fails"""
+        try:
+            # Split conversation into parts
+            lines = conversation_text.split("\n")
+            user_lines = [l for l in lines if l.lower().startswith("user:")]
+            assistant_lines = [l for l in lines if l.lower().startswith("assistant:")]
+
+            user_content = " ".join(user_lines)[:150] if user_lines else ""
+            assistant_content = " ".join(assistant_lines)[:200] if assistant_lines else ""
+
+            # Generate simple summary
+            if user_content and assistant_content:
+                summary = f"User asked about {user_content}. Assistant provided information about {assistant_content}."
+            elif user_content:
+                summary = f"User asked about {user_content}."
+            else:
+                summary = "A conversation occurred between user and assistant."
+
+            # Extract topic from user content
+            if user_content:
+                words = user_content.replace("user:", "").strip().split()[:3]
+                topic = " ".join(words).capitalize() if words else "General"
+                topic = re.sub(r"[^\w\s-]", "", topic)
+            else:
+                topic = "General"
+
+            return summary, topic
+
+        except Exception as e:
+            logger.error(f"Fallback summary generation failed: {e}")
+            return "A conversation occurred.", "General"
+
+    # Keep legacy methods for backward compatibility
     async def generate_summary(self, messages: list) -> str:
-        """Generate summary from conversation messages"""
+        """Generate summary from conversation messages (legacy method)"""
         try:
             resp = await self._call_api(messages, timeout=15.0)
             return resp.choices[0].message.content.strip()
@@ -1060,7 +1365,7 @@ class SummarizationService:
             return self._generate_fallback_summary(messages)
 
     async def generate_topic(self, summary: str) -> str:
-        """Generate short topic phrase from summary (1-3 words for readability)"""
+        """Generate short topic phrase from summary (legacy method - prefer generate_summary_with_topic)"""
         try:
             topic_resp = await self._call_api(
                 messages=[
@@ -1079,18 +1384,7 @@ class SummarizationService:
                 timeout=8.0,
             )
             topic = topic_resp.choices[0].message.content.strip()
-
-            # Take first 3 words max if LLM returned more
-            words = topic.split()[:3]
-            topic = " ".join(words) if words else "General"
-
-            # Remove problematic punctuation but KEEP spaces
-            topic = re.sub(r"[^\w\s-]", "", topic)
-
-            # Capitalize each word for better display
-            topic = " ".join(word.capitalize() for word in topic.split())
-
-            return topic if topic else "General"
+            return self._clean_topic(topic)
         except Exception as e:
             logger.warning(f"Topic generation failed: {e}")
             return "General"
@@ -1187,57 +1481,25 @@ class SummarizationService:
                     {"role": msg.get("role", ""), "content": content}
                 )
 
-            # Build prompt
+            # Build conversation text for summarization
             conversation_text = "\n".join(
                 f"{m['role']}: {m['content']}" for m in cleaned_messages
             )
 
-            messages_for_api = [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are an expert summarization assistant who creates comprehensive, informative summaries. "
-                        "When summarizing the conversation exchange between the user and assistant:\n\n"
-                        "1. Begin with a clear statement of the user's primary question or request\n"
-                        "2. Provide a thorough account of the assistant's response\n"
-                        "3. Include specific numerical data and details when present\n"
-                        "4. Structure the summary in 2-3 well-developed paragraphs\n"
-                        "5. Write in a neutral, informative tone\n\n"
-                        "Your summaries should be approximately 100-150 words."
-                    ),
-                },
-                {"role": "user", "content": conversation_text},
-            ]
+            # Generate summary AND topic in single LLM call (50% cost savings)
+            logger.info(f"Background: Requesting summary+topic for chat {chat_id}")
+            summary, topic = await self.generate_summary_with_topic(conversation_text)
+            
+            # Detect if fallback was used
+            using_fallback = "A conversation occurred" in summary or summary.startswith("User asked about")
 
-            # Generate summary
-            logger.info(f"Background: Requesting summary for chat {chat_id}")
-            summary = await self.generate_summary(messages_for_api)
-            using_fallback = "The user asked about" in summary  # Simple heuristic
-
+            # Clean the summary
             summary = TextCleaner.clean_text(summary)
-            # Additional cleaning for summary text to remove any remaining escape sequences
             summary = TextCleaner._clean_summary_text(summary)
+            
             logger.info(
-                f"Background: Summary generated: {summary[:100]}... {'(FALLBACK)' if using_fallback else ''}"
+                f"Background: Summary generated ({len(summary)} chars), topic='{topic}' {'(FALLBACK)' if using_fallback else ''}"
             )
-
-            # Generate topic
-            if using_fallback:
-                # Simple topic extraction when already in fallback mode
-                user_content = next(
-                    (
-                        m.get("content", "")
-                        for m in cleaned_messages
-                        if m.get("role") == "user"
-                    ),
-                    "",
-                )
-                words = user_content.strip().split()[:3] if user_content.strip() else []
-                topic = " ".join(words).capitalize() if words else "General"
-                topic = re.sub(r"[^\w\s-]", "", topic)  # Clean but keep spaces
-                logger.info(f"Using fallback topic extraction: {topic}")
-            else:
-                topic = await self.generate_topic(summary)
 
             # Chunk if needed
             summary_chunks = await self._chunk_summary(summary, document_processor)
@@ -1646,8 +1908,27 @@ class DocumentProcessor:
 
 class Filter:
     """
-    Main orchestrator for chat summarization and knowledge retrieval.
-    Coordinates specialized services but delegates actual work to them.
+    Main orchestrator for chat summarization and long-term memory retrieval.
+    
+    Flow:
+    - inlet(): Retrieves relevant memories and injects context before LLM call
+    - outlet(): Generates and stores summaries after LLM response
+    
+    Services Coordinated:
+    - EmbeddingService: Generates and caches embeddings
+    - ChatHistoryRetriever: Hybrid retrieval (current + cross-chat)
+    - SummarizationService: LLM-based summary generation
+    - PineconeManager: Vector storage and querying
+    
+    Key Configuration (via environment variables):
+    - CROSS_CHAT_TOP_K: Cross-chat memories to retrieve (default: 3)
+    - TOP_K: Current chat memories to retrieve
+    - TURNS_BEFORE_SUMMARY: Conversation turns before generating summary
+    - RAG_ENABLE_RERANK: Enable Pinecone reranking
+    
+    Security:
+    - All operations scoped to authenticated user_id
+    - Cross-chat memory respects user isolation
     """
 
     # Shared HTTP client for performance
@@ -1658,7 +1939,24 @@ class Filter:
     )
 
     class Valves(BaseModel):
-        """Configuration for the filter"""
+        """
+        Configuration for the filter (loaded from environment variables).
+        
+        Required:
+        - PINECONE_API_KEY, PINECONE_INDEX_NAME: Vector database connection
+        - OPENAI_API_KEY: For embedding generation
+        - OPENROUTER_API_KEY: For summary generation
+        - REDIS_URL: For caching and background jobs
+        
+        Memory Retrieval:
+        - TOP_K: Current chat results (default from env)
+        - CROSS_CHAT_TOP_K: Cross-chat results (default: 3, set 0 to disable)
+        - MIN_SCORE_CHAT: Minimum similarity threshold
+        
+        Reranking:
+        - RAG_ENABLE_RERANK: Enable Pinecone reranking (default: true)
+        - RAG_RERANKING_MODEL: Model for reranking (default: pinecone-rerank-v0)
+        """
 
         pinecone_api_key: str = Field(
             default_factory=lambda: os.getenv("PINECONE_API_KEY", "")
@@ -1729,6 +2027,11 @@ class Filter:
             default_factory=lambda: max(
                 2, min(5, int(os.getenv("RAG_RERANKING_MULTIPLIER", "3")))
             )
+        )
+        # Cross-chat memory: retrieve memories from user's other chats
+        # Set to 0 to disable cross-chat memory
+        cross_chat_top_k: int = Field(
+            default_factory=lambda: int(os.getenv("CROSS_CHAT_TOP_K", "3"))
         )
 
     def __init__(self):
@@ -1843,7 +2146,17 @@ class Filter:
             and self.valves.rag_reranking_engine == "pinecone",
             reranking_model=self.valves.rag_reranking_model,
             reranking_multiplier=self.valves.rag_reranking_multiplier,
+            cross_chat_top_k=self.valves.cross_chat_top_k,
         )
+        
+        # Log cross-chat memory configuration
+        if self.valves.cross_chat_top_k > 0:
+            logger.info(
+                f"✅ Cross-chat memory enabled: retrieving up to {self.valves.cross_chat_top_k} "
+                f"memories from other conversations"
+            )
+        else:
+            logger.info("Cross-chat memory disabled (CROSS_CHAT_TOP_K=0)")
 
         self.summarizer = SummarizationService(
             client=chat_client,

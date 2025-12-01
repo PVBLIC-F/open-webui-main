@@ -1248,6 +1248,15 @@ async def _sync_user_periodic(user_id: str) -> bool:
             return False
 
         # Validation: Check OAuth session exists
+        # Debug: List all OAuth sessions for this user to see what providers exist
+        all_sessions = OAuthSessions.get_sessions_by_user_id(user_id)
+        if all_sessions:
+            logger.info(f"   Found {len(all_sessions)} OAuth session(s) for user:")
+            for s in all_sessions:
+                logger.info(f"      - provider='{s.provider}', id={s.id[:8]}..., expires_at={s.expires_at}")
+        else:
+            logger.info(f"   No OAuth sessions found for user {user_id}")
+        
         oauth_session = OAuthSessions.get_session_by_provider_and_user_id(
             "google", user_id
         )
