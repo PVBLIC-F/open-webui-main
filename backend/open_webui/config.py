@@ -771,6 +771,11 @@ def load_oauth_providers():
                         else {}
                     ),
                 },
+                # Required for refresh tokens - keeps user logged in
+                authorize_params={
+                    "access_type": "offline",  # Request refresh token
+                    "prompt": "consent",       # Force consent to always get refresh token
+                },
                 redirect_uri=GOOGLE_REDIRECT_URI.value,
             )
             return client
