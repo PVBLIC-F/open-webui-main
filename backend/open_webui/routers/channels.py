@@ -1,8 +1,6 @@
 import json
 import logging
-import asyncio
 from typing import Optional
-from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status, BackgroundTasks
 from pydantic import BaseModel
@@ -85,31 +83,31 @@ async def process_message_knowledge(
         return []
 
     try:
-        loop = asyncio.get_running_loop()
-        with ThreadPoolExecutor() as executor:
-            sources = await loop.run_in_executor(
-                executor,
-                lambda: get_sources_from_items(
-                    request=request,
-                    items=knowledge_items,
-                    queries=[message_content],
-                    embedding_function=lambda q, p: request.app.state.EMBEDDING_FUNCTION(
-                        q, prefix=p, user=user
-                    ),
-                    k=request.app.state.config.TOP_K,
-                    reranking_function=(
-                        lambda s: request.app.state.RERANKING_FUNCTION(s, user=user)
-                        if request.app.state.RERANKING_FUNCTION
-                        else None
-                    ),
-                    k_reranker=request.app.state.config.TOP_K_RERANKER,
-                    r=request.app.state.config.RELEVANCE_THRESHOLD,
-                    hybrid_bm25_weight=request.app.state.config.HYBRID_BM25_WEIGHT,
-                    hybrid_search=request.app.state.config.ENABLE_RAG_HYBRID_SEARCH,
-                    full_context=request.app.state.config.RAG_FULL_CONTEXT,
-                    user=user,
-                ),
-            )
+        # Directly await async get_sources_from_items (no thread needed - fully async)
+        sources = await get_sources_from_items(
+            request=request,
+            items=knowledge_items,
+            queries=[message_content],
+            embedding_function=lambda query, prefix: request.app.state.EMBEDDING_FUNCTION(
+                query, prefix=prefix, user=user
+            ),
+            k=request.app.state.config.TOP_K,
+            reranking_function=(
+                (
+                    lambda query, documents: request.app.state.RERANKING_FUNCTION(
+                        query, documents, user=user
+                    )
+                )
+                if request.app.state.RERANKING_FUNCTION
+                else None
+            ),
+            k_reranker=request.app.state.config.TOP_K_RERANKER,
+            r=request.app.state.config.RELEVANCE_THRESHOLD,
+            hybrid_bm25_weight=request.app.state.config.HYBRID_BM25_WEIGHT,
+            hybrid_search=request.app.state.config.ENABLE_RAG_HYBRID_SEARCH,
+            full_context=request.app.state.config.RAG_FULL_CONTEXT,
+            user=user,
+        )
         return sources or []
     except Exception as e:
         log.exception(f"Error retrieving knowledge sources: {e}")
