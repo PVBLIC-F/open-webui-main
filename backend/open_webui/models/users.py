@@ -1,7 +1,7 @@
 import time
 from typing import Optional
 
-from open_webui.internal.db import Base, get_db
+from open_webui.internal.db import Base, JSONField, get_db
 
 
 from open_webui.env import DATABASE_USER_ACTIVE_STATUS_UPDATE_INTERVAL
@@ -70,12 +70,12 @@ class User(Base):
 
     oauth = Column(JSON, nullable=True)
 
-    # Gmail sync settings
-    gmail_sync_enabled = Column(BigInteger, default=0)  # 0 = disabled, 1 = enabled
-
     last_active_at = Column(BigInteger)
     updated_at = Column(BigInteger)
     created_at = Column(BigInteger)
+
+    # Gmail sync settings
+    gmail_sync_enabled = Column(BigInteger, default=0)  # 0 = disabled, 1 = enabled
 
 
 class UserModel(BaseModel):

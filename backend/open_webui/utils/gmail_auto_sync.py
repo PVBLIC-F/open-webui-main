@@ -27,6 +27,7 @@ from datetime import datetime
 
 from open_webui.utils.gmail_fetcher import GmailFetcher
 from open_webui.utils.gmail_indexer_v2 import GmailIndexerV2
+from open_webui.utils.temp_cleanup import run_cleanup, get_cache_stats
 from open_webui.models.users import Users
 from open_webui.models.oauth_sessions import OAuthSessions
 from open_webui.models.gmail_sync import gmail_sync_status
@@ -116,6 +117,12 @@ class GmailAutoSync:
         logger.info(f"   Incremental: {incremental}")
         logger.info(f"   Namespace: email-{user_id} (per-user isolation)")
         logger.info("=" * 70)
+
+        # Clean up temp files before starting sync (prevents /tmp overflow on Render)
+        cache_stats = get_cache_stats()
+        if cache_stats["total_size_mb"] > 100:
+            logger.info(f"🧹 Pre-sync cleanup: {cache_stats['total_size_mb']:.1f}MB in temp cache")
+            run_cleanup(max_age_minutes=15, max_size_mb=300)  # Aggressive cleanup before sync
 
         # Get or create sync status
         sync_status = gmail_sync_status.get_sync_status(user_id)

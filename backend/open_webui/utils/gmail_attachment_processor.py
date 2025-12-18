@@ -11,6 +11,8 @@ import os
 from typing import Optional, List, Dict
 from pathlib import Path
 
+from open_webui.utils.temp_cleanup import ensure_cache_space
+
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
@@ -89,6 +91,11 @@ class GmailAttachmentProcessor:
         try:
             # Import unstructured loader
             from open_webui.retrieval.loaders.unstructured_loader import UnstructuredUnifiedLoader
+            
+            # Ensure cache space before creating temp files (prevents /tmp overflow on Render)
+            # Estimate needed space: attachment size + some processing overhead
+            needed_mb = max(10, len(attachment_data) // (1024 * 1024) + 5)
+            ensure_cache_space(required_mb=needed_mb)
             
             # Create temporary file for processing
             with tempfile.NamedTemporaryFile(

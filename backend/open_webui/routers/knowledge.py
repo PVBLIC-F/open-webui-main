@@ -473,30 +473,14 @@ def remove_file_from_knowledge_by_id(
             f"Attempting to delete vectors for file_id: {form_data.file_id} from collection: {knowledge.id}"
         )
 
-        # First, let's check if there are any vectors with this file_id
-        result = VECTOR_DB_CLIENT.query(
-            collection_name=knowledge.id,
-            filter={"file_id": form_data.file_id},
-            namespace=namespace,
-        )
-
-        if result and result.ids and result.ids[0]:
-            log.info(
-                f"Found {len(result.ids[0])} vectors to delete for file_id: {form_data.file_id}"
-            )
-        else:
-            log.warning(
-                f"No vectors found for file_id: {form_data.file_id} in collection: {knowledge.id}"
-            )
-
-        # Remove by file_id first
+        # Delete by file_id with namespace support
         VECTOR_DB_CLIENT.delete(
             collection_name=knowledge.id,
             filter={"file_id": form_data.file_id},
             namespace=namespace,
         )
 
-        # Remove by hash as well in case of duplicates
+        # Also delete by hash in case of duplicates
         VECTOR_DB_CLIENT.delete(
             collection_name=knowledge.id,
             filter={"hash": file.hash},

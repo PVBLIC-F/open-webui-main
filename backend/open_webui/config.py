@@ -480,6 +480,14 @@ GMAIL_ATTACHMENT_TYPES = PersistentConfig(
     ),
 )
 
+####################################
+# Temp File Cleanup (critical for Render's 2GB /tmp limit)
+####################################
+
+TEMP_CLEANUP_INTERVAL_MINUTES = int(os.environ.get("TEMP_CLEANUP_INTERVAL_MINUTES", "5"))
+TEMP_CLEANUP_MAX_AGE_MINUTES = int(os.environ.get("TEMP_CLEANUP_MAX_AGE_MINUTES", "30"))
+TEMP_CLEANUP_MAX_SIZE_MB = int(os.environ.get("TEMP_CLEANUP_MAX_SIZE_MB", "500"))
+
 
 ####################################
 # GCS Storage Configuration

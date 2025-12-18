@@ -39,6 +39,7 @@ from pydantic import BaseModel
 
 
 from open_webui.utils.auth import get_admin_user, get_verified_user
+from open_webui.utils.temp_cleanup import ensure_cache_space
 from open_webui.models.files import Files
 from open_webui.storage.provider import Storage
 from open_webui.utils.headers import include_user_info_headers
@@ -1551,6 +1552,9 @@ async def get_audio_segment(
                 detail="Original file not found on storage"
             )
         
+        # Ensure cache space before creating new files (prevents /tmp overflow on Render)
+        ensure_cache_space(required_mb=50)
+        
         # Create temporary output file with cache key
         cache_key = f"{file_id}_{int(start)}_{int(end)}"
         output_filename = f"segment_{cache_key}.mp3"
@@ -1713,6 +1717,9 @@ async def get_video_segment(
                 status_code=404,
                 detail="Original file not found on storage"
             )
+        
+        # Ensure cache space before creating new files (prevents /tmp overflow on Render)
+        ensure_cache_space(required_mb=100)  # Video segments can be larger
         
         # Create temporary output file with cache key
         cache_key = f"{file_id}_{int(start)}_{int(end)}"

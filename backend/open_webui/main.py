@@ -626,6 +626,11 @@ async def lifespan(app: FastAPI):
 
     asyncio.create_task(periodic_usage_pool_cleanup())
 
+    # Start temp file cleanup scheduler (critical for Render's 2GB /tmp limit)
+    from open_webui.utils.temp_cleanup import periodic_temp_cleanup
+    asyncio.create_task(periodic_temp_cleanup())
+    log.info("🧹 Temp file cleanup scheduler started")
+
     # Start Gmail periodic sync if enabled
     if (
         app.state.config.ENABLE_GMAIL_AUTO_SYNC

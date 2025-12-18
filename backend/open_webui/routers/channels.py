@@ -1279,7 +1279,7 @@ async def new_message_handler(
 
             message = Messages.get_message_by_id(message.id)
 
-            # Emit message event (includes sources in meta and temp_id for tracking)
+            # Emit message event
             await sio.emit(
                 "events:channel",
                 {
@@ -1287,7 +1287,7 @@ async def new_message_handler(
                     "message_id": message.id,
                     "data": {
                         "type": "message",
-                        "data": {"temp_id": form_data.temp_id, **message.model_dump()},
+                        "data": message.model_dump(),
                     },
                     "user": UserNameResponse(**user.model_dump()).model_dump(),
                     "channel": channel.model_dump(),

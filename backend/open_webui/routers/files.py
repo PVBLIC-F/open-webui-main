@@ -25,6 +25,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 import tempfile
 import subprocess
 
+from open_webui.utils.temp_cleanup import ensure_cache_space
 from open_webui.constants import ERROR_MESSAGES
 from open_webui.env import SRC_LOG_LEVELS
 from open_webui.retrieval.vector.factory import VECTOR_DB_CLIENT
@@ -675,6 +676,9 @@ async def stream_video_by_id(
     try:
         ext_lower = src_path.suffix.lower()
         if ext_lower in (".mp4", ".mov"):
+            # Ensure cache space before creating new files (prevents /tmp overflow on Render)
+            ensure_cache_space(required_mb=200)  # Video remux can be large
+            
             cache_name = f"stream_{id}.mp4"
             cache_path = Path(tempfile.gettempdir()) / cache_name
 
