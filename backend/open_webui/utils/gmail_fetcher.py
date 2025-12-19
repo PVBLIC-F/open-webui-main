@@ -40,6 +40,11 @@ RETRYABLE_EXCEPTIONS = (
 )
 
 
+class TokenExpiredError(Exception):
+    """Raised when OAuth token has expired and needs refresh."""
+    pass
+
+
 class GmailFetcher:
     """
     Fetches emails from Gmail API with proper rate limiting and pagination.
@@ -74,6 +79,7 @@ class GmailFetcher:
         max_requests_per_second: int = DEFAULT_MAX_REQUESTS_PER_SECOND,
         timeout: int = 30,
         batch_size: int = None,
+        token_refresh_callback=None,
     ):
         """
         Initialize Gmail fetcher.
@@ -83,6 +89,8 @@ class GmailFetcher:
             max_requests_per_second: Rate limit (default: 40 req/s)
             timeout: Request timeout in seconds (default: 30)
             batch_size: Concurrent requests (default: from config or 20)
+            token_refresh_callback: Async callback to refresh token when expired
+                                   Should return new access_token string or None
         """
         self.oauth_token = oauth_token
         self.max_requests_per_second = max_requests_per_second
@@ -90,6 +98,8 @@ class GmailFetcher:
         self.default_batch_size = batch_size or self._get_config_concurrency()
         logger.info(f"GmailFetcher initialized: concurrency={self.default_batch_size}")
         self.timeout = timeout
+        self.token_refresh_callback = token_refresh_callback
+        self._token_refresh_lock = asyncio.Lock()
 
         # Rate limiting tracking
         self.request_times = []
@@ -102,7 +112,37 @@ class GmailFetcher:
             "errors": 0,
             "rate_limit_waits": 0,
             "retries": 0,
+            "token_refreshes": 0,
         }
+
+    async def _refresh_token_if_needed(self) -> bool:
+        """
+        Attempt to refresh the OAuth token using the callback.
+        
+        Returns:
+            True if token was refreshed successfully, False otherwise
+        """
+        if not self.token_refresh_callback:
+            logger.warning("No token refresh callback configured - cannot refresh token")
+            return False
+        
+        async with self._token_refresh_lock:
+            try:
+                logger.info("🔄 Attempting to refresh OAuth token...")
+                new_token = await self.token_refresh_callback()
+                
+                if new_token:
+                    self.oauth_token = new_token
+                    self.stats["token_refreshes"] += 1
+                    logger.info("✅ OAuth token refreshed successfully")
+                    return True
+                else:
+                    logger.error("❌ Token refresh callback returned None")
+                    return False
+                    
+            except Exception as e:
+                logger.error(f"❌ Token refresh failed: {e}")
+                return False
 
         # Reusable session (created lazily)
         self._session: Optional[aiohttp.ClientSession] = None
@@ -151,12 +191,18 @@ class GmailFetcher:
 
         Returns:
             The response from request_func, or None if all retries fail
+            
+        Raises:
+            TokenExpiredError: If OAuth token has expired (handled by caller)
         """
         last_exception = None
 
         for attempt in range(max_retries):
             try:
                 return await request_func()
+            except TokenExpiredError:
+                # Don't retry token expiration - let caller handle refresh
+                raise
             except RETRYABLE_EXCEPTIONS as e:
                 last_exception = e
                 self.stats["retries"] += 1
@@ -346,25 +392,29 @@ class GmailFetcher:
     async def fetch_email(
         self,
         message_id: str,
+        _retry_after_refresh: bool = False,
     ) -> Optional[Dict]:
         """
-        Fetch a single email's full content with retry logic.
+        Fetch a single email's full content with retry logic and token refresh.
 
         Args:
             message_id: Gmail message ID
+            _retry_after_refresh: Internal flag to prevent infinite refresh loops
 
         Returns:
             Gmail API message response (format='full') or None if error
         """
 
         url = f"{self.GMAIL_API_BASE}/users/me/messages/{message_id}"
-        headers = {
-            "Authorization": f"Bearer {self.oauth_token}",
-            "Accept": "application/json",
-        }
         params = {"format": "full"}
 
         async def _do_fetch():
+            # Use current token (may have been refreshed)
+            headers = {
+                "Authorization": f"Bearer {self.oauth_token}",
+                "Accept": "application/json",
+            }
+            
             # Rate limiting
             await self._rate_limit()
 
@@ -377,7 +427,8 @@ class GmailFetcher:
                 self.stats["api_calls"] += 1
 
                 if response.status == 401:
-                    raise Exception("OAuth token expired or invalid")
+                    # Token expired - signal for refresh
+                    raise TokenExpiredError("OAuth token expired or invalid")
 
                 if response.status != 200:
                     error_text = await response.text()
@@ -392,15 +443,26 @@ class GmailFetcher:
                 self.stats["emails_fetched"] += 1
                 return email_data
 
-        result = await self._retry_request(
-            _do_fetch,
-            operation_name=f"Fetch email {message_id[:8]}",
-        )
+        try:
+            result = await self._retry_request(
+                _do_fetch,
+                operation_name=f"Fetch email {message_id[:8]}",
+            )
 
-        if result is None:
-            self.stats["errors"] += 1
+            if result is None:
+                self.stats["errors"] += 1
 
-        return result
+            return result
+            
+        except TokenExpiredError:
+            # Try to refresh token and retry (only once)
+            if not _retry_after_refresh and await self._refresh_token_if_needed():
+                logger.info(f"Retrying fetch for email {message_id[:8]} with refreshed token")
+                return await self.fetch_email(message_id, _retry_after_refresh=True)
+            else:
+                logger.error(f"Cannot fetch email {message_id[:8]} - token refresh failed or already retried")
+                self.stats["errors"] += 1
+                return None
 
     async def fetch_emails_batch(
         self,
@@ -516,15 +578,17 @@ class GmailFetcher:
         return self.stats.copy()
 
     async def fetch_attachment(
-        self, message_id: str, attachment_id: str, filename: str
+        self, message_id: str, attachment_id: str, filename: str,
+        _retry_after_refresh: bool = False,
     ) -> Optional[bytes]:
         """
-        Fetch an email attachment by ID with retry logic.
+        Fetch an email attachment by ID with retry logic and token refresh.
 
         Args:
             message_id: The Gmail message ID
             attachment_id: The attachment ID from the message
             filename: The attachment filename (for logging)
+            _retry_after_refresh: Internal flag to prevent infinite refresh loops
 
         Returns:
             bytes: The attachment data, or None if failed
@@ -532,12 +596,14 @@ class GmailFetcher:
         import base64
 
         url = f"{self.GMAIL_API_BASE}/users/me/messages/{message_id}/attachments/{attachment_id}"
-        headers = {
-            "Authorization": f"Bearer {self.oauth_token}",
-            "Accept": "application/json",
-        }
 
         async def _do_fetch():
+            # Use current token (may have been refreshed)
+            headers = {
+                "Authorization": f"Bearer {self.oauth_token}",
+                "Accept": "application/json",
+            }
+            
             await self._rate_limit()
 
             session = await self._get_session()
@@ -545,7 +611,7 @@ class GmailFetcher:
                 self.stats["api_calls"] += 1
 
                 if response.status == 401:
-                    raise Exception("OAuth token expired or invalid")
+                    raise TokenExpiredError("OAuth token expired or invalid")
 
                 if response.status == 200:
                     attachment_data = await response.json()
@@ -567,13 +633,28 @@ class GmailFetcher:
                     )
                     return None
 
-        result = await self._retry_request(
-            _do_fetch,
-            operation_name=f"Fetch attachment '{filename}'",
-        )
+        try:
+            result = await self._retry_request(
+                _do_fetch,
+                operation_name=f"Fetch attachment '{filename}'",
+            )
 
-        if result is None:
-            self.stats["errors"] += 1
+            if result is None:
+                self.stats["errors"] += 1
+                
+            return result
+            
+        except TokenExpiredError:
+            # Try to refresh token and retry (only once)
+            if not _retry_after_refresh and await self._refresh_token_if_needed():
+                logger.info(f"Retrying fetch for attachment '{filename}' with refreshed token")
+                return await self.fetch_attachment(
+                    message_id, attachment_id, filename, _retry_after_refresh=True
+                )
+            else:
+                logger.error(f"Cannot fetch attachment '{filename}' - token refresh failed or already retried")
+                self.stats["errors"] += 1
+                return None
 
         return result
 

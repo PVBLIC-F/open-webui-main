@@ -93,6 +93,7 @@ class GmailAutoSync:
         max_emails: int = 5000,
         skip_spam_trash: bool = True,
         incremental: bool = True,
+        token_refresh_callback=None,
     ) -> Dict:
         """
         Sync a user's Gmail inbox to Pinecone.
@@ -105,6 +106,8 @@ class GmailAutoSync:
             max_emails: Maximum emails to sync (default: 5000)
             skip_spam_trash: Skip SPAM and TRASH folders (default: True)
             incremental: Whether to do incremental sync (default: True)
+            token_refresh_callback: Async callback to refresh OAuth token when expired
+                                   Should return new access_token string or None
 
         Returns:
             Dict with sync statistics
@@ -174,7 +177,11 @@ class GmailAutoSync:
                 oauth_token=access_token,
                 max_requests_per_second=40,  # Conservative rate limit
                 timeout=30,
+                token_refresh_callback=token_refresh_callback,
             )
+            
+            if token_refresh_callback:
+                logger.info(f"   Token refresh callback configured for long-running sync")
 
             # Determine sync query based on incremental mode
             if incremental and sync_status.last_sync_timestamp:
@@ -670,6 +677,38 @@ async def _background_gmail_sync(request, user_id: str, oauth_token: dict):
             f"attachments={process_attachments}"
         )
 
+        # Create token refresh callback for long-running syncs
+        # This allows the GmailFetcher to refresh the token if it expires mid-sync
+        async def token_refresh_callback():
+            """Refresh OAuth token using oauth_manager"""
+            try:
+                # Get OAuth session for this user
+                oauth_session = OAuthSessions.get_session_by_provider_and_user_id(
+                    "google", user_id
+                )
+                if not oauth_session:
+                    logger.error(f"No OAuth session found for user {user_id}")
+                    return None
+                
+                # Refresh token using oauth_manager
+                refreshed_token = await request.app.state.oauth_manager.get_oauth_token(
+                    user_id=user_id,
+                    session_id=oauth_session.id,
+                    force_refresh=True,  # Force refresh to get new token
+                )
+                
+                if refreshed_token and refreshed_token.get("access_token"):
+                    # Update the oauth_token dict so future references use new token
+                    oauth_token.update(refreshed_token)
+                    return refreshed_token.get("access_token")
+                else:
+                    logger.error("Token refresh returned None or missing access_token")
+                    return None
+                    
+            except Exception as e:
+                logger.error(f"Token refresh callback error: {e}")
+                return None
+
         # Create simple wrapper services for the background task
         # We'll use Open WebUI's existing embedding and Pinecone infrastructure
 
@@ -981,6 +1020,7 @@ async def _background_gmail_sync(request, user_id: str, oauth_token: dict):
             max_emails=max_emails,
             skip_spam_trash=skip_spam_trash,
             incremental=True,  # Enable incremental sync by default
+            token_refresh_callback=token_refresh_callback,  # Enable mid-sync token refresh
         )
 
         logger.info("\n" + "🎉" * 35)
