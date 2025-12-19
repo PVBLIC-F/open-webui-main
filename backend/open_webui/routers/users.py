@@ -818,22 +818,24 @@ async def force_gmail_sync(user_id: str, request: Request, user=Depends(get_admi
         )
         log.info(f"Reset Gmail sync status for user {user_id} - will do full sync")
     
-    # Trigger sync immediately in background
+    # Trigger sync immediately in background with force_full_sync=True
+    # This will delete existing vectors and reprocess entire mailbox
     try:
         await trigger_gmail_sync_if_needed(
             request=request,
             user_id=user_id,
             provider="google",
             token=oauth_token,
-            is_new_user=False
+            is_new_user=False,
+            force_full_sync=True,  # Delete existing vectors and reprocess all
         )
         
         return {
             "success": True,
-            "message": "Full Gmail sync started in background",
+            "message": "Full Gmail sync started in background (existing vectors will be deleted)",
             "user_id": user_id,
             "sync_type": "full",
-            "note": "This may take several minutes. Check sync status for progress."
+            "note": "This may take several minutes. All emails will be reprocessed from scratch."
         }
     except Exception as e:
         log.error(f"Error triggering Gmail sync for user {user_id}: {e}")

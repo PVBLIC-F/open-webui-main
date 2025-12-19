@@ -574,6 +574,7 @@ async def trigger_gmail_sync_if_needed(
     provider: str,
     token: dict,
     is_new_user: bool = False,
+    force_full_sync: bool = False,
 ):
     """
     Trigger Gmail sync if conditions are met.
@@ -586,6 +587,7 @@ async def trigger_gmail_sync_if_needed(
         provider: OAuth provider (e.g., "google")
         token: OAuth token dict
         is_new_user: True if this is first-time signup
+        force_full_sync: If True, delete existing vectors and reprocess entire mailbox
 
     Conditions for triggering:
     - Provider must be "google"
@@ -680,6 +682,7 @@ async def trigger_gmail_sync_if_needed(
         f"\n🚀 TRIGGERING AUTOMATIC GMAIL SYNC"
         f"\n   User: {user_id}"
         f"\n   New user: {is_new_user}"
+        f"\n   Force full sync: {force_full_sync}"
         f"\n   Gmail scopes: ✓"
     )
 
@@ -690,7 +693,7 @@ async def trigger_gmail_sync_if_needed(
         # Create the background sync task
         task_id, task = await create_task(
             request.app.state.redis,
-            _background_gmail_sync(request, user_id, token),
+            _background_gmail_sync(request, user_id, token, force_full_sync=force_full_sync),
             id=f"gmail_sync_{user_id}",
         )
 
@@ -700,7 +703,9 @@ async def trigger_gmail_sync_if_needed(
         logger.error(f"❌ Failed to create Gmail sync task for user {user_id}: {e}")
 
 
-async def _background_gmail_sync(request, user_id: str, oauth_token: dict):
+async def _background_gmail_sync(
+    request, user_id: str, oauth_token: dict, force_full_sync: bool = False
+):
     """
     Background task that performs the actual Gmail sync.
 
@@ -711,13 +716,17 @@ async def _background_gmail_sync(request, user_id: str, oauth_token: dict):
         request: FastAPI request object
         user_id: User ID to sync
         oauth_token: OAuth token dict with access_token
+        force_full_sync: If True, delete existing vectors and reprocess entire mailbox
     """
 
+    sync_type = "FULL (FORCED)" if force_full_sync else "INCREMENTAL"
+    
     logger.info("\n" + "🔥" * 35)
-    logger.info("📧 BACKGROUND GMAIL SYNC TASK STARTED")
+    logger.info(f"📧 BACKGROUND GMAIL SYNC TASK STARTED - {sync_type}")
     logger.info(f"   User ID: {user_id}")
     logger.info(f"   Task ID: gmail_sync_{user_id}")
     logger.info(f"   Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info(f"   Force full sync: {force_full_sync}")
     logger.info("🔥" * 35 + "\n")
 
     try:
@@ -1063,6 +1072,25 @@ async def _background_gmail_sync(request, user_id: str, oauth_token: dict):
         doc_processor = SimpleDocProcessor()
         pinecone_manager = SimplePineconeManager()
 
+        # If force full sync, delete all existing vectors first
+        if force_full_sync:
+            namespace = f"email-{user_id}"
+            logger.info(f"🗑️  Force full sync: Deleting all existing vectors in namespace '{namespace}'...")
+            try:
+                from open_webui.retrieval.vector.main import VECTOR_DB_CLIENT
+                
+                # Delete all vectors in the user's email namespace
+                # This ensures we start fresh without duplicates
+                VECTOR_DB_CLIENT.delete(
+                    collection_name=namespace,
+                    filter=None,  # Delete all
+                    namespace=namespace,
+                )
+                logger.info(f"✅ Deleted all vectors in namespace '{namespace}'")
+            except Exception as e:
+                logger.warning(f"⚠️  Could not delete existing vectors (may not exist): {e}")
+                # Continue anyway - namespace may not exist yet
+
         # Initialize GmailAutoSync orchestrator (uses per-user namespaces)
         # V2: Single-vector strategy (no chunking needed)
         # Uses admin panel RAG/Document settings
@@ -1077,14 +1105,16 @@ async def _background_gmail_sync(request, user_id: str, oauth_token: dict):
         )
 
         # Execute the sync
-        logger.info(f"🚀 Starting Gmail sync for user {user_id}...")
+        # Use incremental=False when force_full_sync to fetch ALL emails
+        incremental = not force_full_sync
+        logger.info(f"🚀 Starting Gmail sync for user {user_id}... (incremental={incremental})")
 
         result = await gmail_sync.sync_user_gmail(
             user_id=user_id,
             oauth_token=oauth_token,
             max_emails=max_emails,
             skip_spam_trash=skip_spam_trash,
-            incremental=True,  # Enable incremental sync by default
+            incremental=incremental,  # False for force sync, True otherwise
             token_refresh_callback=token_refresh_callback,  # Enable mid-sync token refresh
         )
 
