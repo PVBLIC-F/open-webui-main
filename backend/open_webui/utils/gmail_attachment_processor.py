@@ -8,6 +8,8 @@ Integrates with Gmail sync to make attachments searchable.
 import logging
 import tempfile
 import os
+import asyncio
+import concurrent.futures
 from typing import Optional, List, Dict
 from pathlib import Path
 
@@ -15,6 +17,11 @@ from open_webui.utils.temp_cleanup import ensure_cache_space
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+
+# Thread pool for CPU-bound attachment processing (prevents blocking event loop)
+_ATTACHMENT_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=2, thread_name_prefix="gmail_att"
+)
 
 
 class GmailAttachmentProcessor:
@@ -110,19 +117,27 @@ class GmailAttachmentProcessor:
                 # Process with unstructured.io
                 logger.info(f"Processing attachment '{filename}' ({len(attachment_data)} bytes) with unstructured.io")
                 
-                loader = UnstructuredUnifiedLoader(
-                    file_path=temp_path,
-                    # Use fast strategy for attachments (performance over quality)
-                    strategy="fast",
-                    # Use basic chunking for attachments
-                    chunking_strategy="basic",
-                    max_characters=1000,  # Smaller chunks for attachments
-                    chunk_overlap=100,
-                    cleaning_level="standard",  # Standard cleaning
-                )
+                # Run synchronous document loading in thread executor to prevent blocking event loop
+                # This is critical for keeping the server responsive during large attachment processing
+                def _load_document_sync():
+                    loader = UnstructuredUnifiedLoader(
+                        file_path=temp_path,
+                        # Use fast strategy for attachments (performance over quality)
+                        strategy="fast",
+                        # Use basic chunking for attachments
+                        chunking_strategy="basic",
+                        max_characters=1000,  # Smaller chunks for attachments
+                        chunk_overlap=100,
+                        cleaning_level="standard",  # Standard cleaning
+                    )
+                    return loader.load()
                 
-                # Extract documents
-                documents = loader.load()
+                # Extract documents in thread pool (non-blocking)
+                loop = asyncio.get_running_loop()
+                documents = await loop.run_in_executor(_ATTACHMENT_EXECUTOR, _load_document_sync)
+                
+                # Yield to event loop after heavy processing
+                await asyncio.sleep(0)
                 
                 if not documents:
                     logger.warning(f"No content extracted from '{filename}'")
