@@ -479,6 +479,8 @@
 				}
 
 				history.messages[event.message_id] = message;
+				// Trigger Svelte reactivity for nested object updates (required for statusHistory display)
+				history = history;
 			}
 		}
 	};
@@ -2017,6 +2019,8 @@
 
 			history.messages[responseMessageId] = responseMessage;
 			history.currentId = responseMessageId;
+			// Trigger Svelte reactivity for error state updates
+			history = history;
 
 			return null;
 		});
@@ -2077,6 +2081,8 @@
 		}
 
 		history.messages[responseMessage.id] = responseMessage;
+		// Trigger Svelte reactivity for error state updates
+		history = history;
 	};
 
 	const stopResponse = async () => {
@@ -2097,6 +2103,8 @@
 			}
 
 			history.messages[history.currentId] = responseMessage;
+			// Trigger Svelte reactivity for stop state updates
+			history = history;
 
 			if (autoScroll) {
 				scrollToBottom();
@@ -2210,6 +2218,8 @@
 		};
 		message.merged = mergedResponse;
 		history.messages[messageId] = message;
+		// Trigger Svelte reactivity for merge initialization
+		history = history;
 
 		try {
 			generating = true;
@@ -2236,6 +2246,8 @@
 					} else {
 						mergedResponse.content += value;
 						history.messages[messageId] = message;
+						// Trigger Svelte reactivity for streaming content updates
+						history = history;
 					}
 
 					if (autoScroll) {
