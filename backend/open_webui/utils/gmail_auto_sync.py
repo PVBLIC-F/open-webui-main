@@ -170,8 +170,8 @@ class GmailAutoSync:
 
             logger.info(f"✅ OAuth token validated with Gmail scopes")
 
-            # Step 1: Fetch emails from Gmail API
-            logger.info(f"📥 Step 1: Fetching emails from Gmail API...")
+            # Step 1: Get inbox count first (fast - single API call)
+            logger.info(f"📥 Step 1: Getting inbox count...")
 
             fetcher = GmailFetcher(
                 oauth_token=access_token,
@@ -217,16 +217,6 @@ class GmailAutoSync:
                     logger.info(
                         f"   Incremental sync: fetching emails from last 30 days (catch-up)"
                     )
-
-                # Adaptive batch size based on time window
-                if days_since_sync < 1:
-                    max_emails = min(max_emails, 500)  # Small batch for recent syncs
-                elif days_since_sync < 7:
-                    max_emails = min(max_emails, 1000)  # Medium batch for weekly syncs
-                else:
-                    max_emails = min(max_emails, 2000)  # Larger batch for catch-up
-
-                logger.info(f"   Adaptive batch size: {max_emails} emails")
             else:
                 # Full sync - get all emails
                 query = None
@@ -234,12 +224,87 @@ class GmailAutoSync:
                     f"   Full sync: fetching all emails (first time or disabled incremental)"
                 )
 
-            emails, fetch_stats = await fetcher.fetch_all_emails(
-                max_emails=max_emails,
+            # Get inbox count first (fast - ~1 API call)
+            inbox_count = await fetcher.get_inbox_count(
                 skip_spam_trash=skip_spam_trash,
                 query=query,
-                batch_size=100,
             )
+            
+            logger.info(f"📊 Inbox contains ~{inbox_count} emails")
+            
+            # Apply max_emails limit
+            effective_max = min(max_emails, inbox_count) if max_emails > 0 else inbox_count
+            
+            # Calculate batch parameters based on count
+            batch_params = GmailFetcher.calculate_batch_params(
+                total_count=effective_max,
+                target_batch_size=500,  # Optimal for memory/performance
+                min_batch_size=50,
+                max_batch_size=1000,
+            )
+            
+            logger.info(
+                f"📦 Batch plan: {batch_params['num_batches']} batches of {batch_params['batch_size']} emails "
+                f"(~{batch_params['estimated_time_minutes']:.0f} min estimated)"
+            )
+
+            # Step 2: Fetch all message IDs
+            logger.info(f"📥 Step 2: Fetching message IDs...")
+            message_ids = await fetcher.fetch_all_message_ids(
+                max_results=effective_max,
+                skip_spam_trash=skip_spam_trash,
+                query=query,
+            )
+            
+            # Update batch params with actual count
+            actual_count = len(message_ids)
+            if actual_count != effective_max:
+                batch_params = GmailFetcher.calculate_batch_params(
+                    total_count=actual_count,
+                    target_batch_size=batch_params['batch_size'],
+                )
+                logger.info(
+                    f"📊 Actual count: {actual_count} emails "
+                    f"(estimate was ~{inbox_count})"
+                )
+
+            # Step 3: Fetch emails in batches
+            logger.info(f"📥 Step 3: Fetching {actual_count} emails in {batch_params['num_batches']} batches...")
+            
+            # Create batches from message IDs
+            message_batches = fetcher.create_batches(
+                message_ids=message_ids,
+                batch_size=batch_params['batch_size'],
+            )
+            
+            # Fetch all emails batch by batch
+            emails = []
+            fetch_stats = fetcher.get_stats()
+            
+            for batch_idx, batch_ids in enumerate(message_batches):
+                batch_start = time.time()
+                logger.info(
+                    f"   Fetching batch {batch_idx + 1}/{len(message_batches)} "
+                    f"({len(batch_ids)} emails)..."
+                )
+                
+                batch_emails = await fetcher.fetch_emails_batch(
+                    message_ids=batch_ids,
+                    batch_size=20,  # Concurrent fetches within batch
+                )
+                emails.extend(batch_emails)
+                
+                batch_time = time.time() - batch_start
+                logger.info(
+                    f"   ✅ Batch {batch_idx + 1} complete: {len(batch_emails)} emails "
+                    f"in {batch_time:.1f}s ({len(batch_emails)/batch_time:.1f} emails/s)"
+                )
+                
+                # Yield to event loop between batches
+                await asyncio.sleep(0)
+            
+            # Update fetch stats
+            fetch_stats = fetcher.get_stats()
 
             self.active_syncs[user_id]["total_emails"] = len(emails)
 
@@ -270,10 +335,10 @@ class GmailAutoSync:
                 self.active_syncs[user_id]["status"] = "completed"
                 return self._build_sync_result(user_id)
 
-            # Step 2: Process and index emails to Pinecone
+            # Step 4: Process and index emails to Pinecone
             logger.info("")
             logger.info("=" * 70)
-            logger.info(f"⚙️ PROCESSING & INDEXING - {len(emails)} emails")
+            logger.info(f"⚙️ Step 4: PROCESSING & INDEXING - {len(emails)} emails")
             logger.info("=" * 70)
 
             # Get configurable batch size

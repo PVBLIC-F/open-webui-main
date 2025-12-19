@@ -147,9 +147,6 @@ class GmailFetcher:
                 logger.error(f"❌ Token refresh failed: {e}")
                 return False
 
-        # Reusable session (created lazily)
-        self._session: Optional[aiohttp.ClientSession] = None
-
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create a reusable aiohttp session with optimized settings."""
         if self._session is None or self._session.closed:
@@ -254,6 +251,68 @@ class GmailFetcher:
 
             # Record this request
             self.request_times.append(time.time())
+
+    async def get_inbox_count(
+        self,
+        skip_spam_trash: bool = True,
+        query: Optional[str] = None,
+    ) -> int:
+        """
+        Get the estimated inbox count WITHOUT fetching all IDs.
+        
+        Gmail API returns resultSizeEstimate on messages.list.
+        This is fast (~1 API call) but approximate (±10%).
+        
+        Args:
+            skip_spam_trash: Skip SPAM and TRASH folders (default: True)
+            query: Optional Gmail query filter (e.g., "newer_than:7d")
+        
+        Returns:
+            Estimated number of emails matching the query
+        
+        Example:
+            >>> fetcher = GmailFetcher(oauth_token)
+            >>> count = await fetcher.get_inbox_count()
+            >>> print(f"Inbox has approximately {count} emails")
+        """
+        session = await self._get_session()
+        url = f"{self.GMAIL_API_BASE}/users/me/messages"
+        headers = {
+            "Authorization": f"Bearer {self.oauth_token}",
+            "Accept": "application/json",
+        }
+        
+        # Build query
+        query_parts = []
+        if skip_spam_trash:
+            query_parts.append("-in:spam -in:trash")
+        if query:
+            query_parts.append(query)
+        
+        params = {"maxResults": 1}  # Just need the estimate, not actual messages
+        if query_parts:
+            params["q"] = " ".join(query_parts)
+        
+        await self._rate_limit()
+        
+        async with session.get(url, params=params, headers=headers) as response:
+            self.stats["api_calls"] += 1
+            
+            if response.status == 401:
+                raise TokenExpiredError("OAuth token expired or invalid")
+            
+            if response.status != 200:
+                error_text = await response.text()
+                raise Exception(f"Gmail API error: {response.status} - {error_text}")
+            
+            data = await response.json()
+            
+            # resultSizeEstimate is the approximate total count
+            estimated_count = data.get("resultSizeEstimate", 0)
+            
+            logger.info(f"📊 Gmail inbox estimate: ~{estimated_count} emails")
+            
+            return estimated_count
 
     async def fetch_all_message_ids(
         self,
@@ -580,6 +639,94 @@ class GmailFetcher:
         """Get fetcher statistics"""
         return self.stats.copy()
 
+    @staticmethod
+    def calculate_batch_params(
+        total_count: int,
+        target_batch_size: int = 500,
+        min_batch_size: int = 50,
+        max_batch_size: int = 1000,
+    ) -> Dict:
+        """
+        Calculate optimal batch parameters based on inbox count.
+        
+        Args:
+            total_count: Total number of emails to process
+            target_batch_size: Preferred batch size (default: 500)
+            min_batch_size: Minimum batch size (default: 50)
+            max_batch_size: Maximum batch size (default: 1000)
+        
+        Returns:
+            Dict with batch_size, num_batches, and distribution info
+        
+        Example:
+            >>> params = GmailFetcher.calculate_batch_params(15000)
+            >>> print(f"Will process in {params['num_batches']} batches of {params['batch_size']}")
+        """
+        if total_count == 0:
+            return {
+                "batch_size": 0,
+                "num_batches": 0,
+                "total_count": 0,
+                "emails_in_last_batch": 0,
+            }
+        
+        # Clamp batch size to valid range
+        batch_size = max(min_batch_size, min(max_batch_size, target_batch_size))
+        
+        # Calculate number of batches
+        num_batches = (total_count + batch_size - 1) // batch_size  # Ceiling division
+        
+        # Calculate emails in last batch
+        emails_in_last_batch = total_count % batch_size
+        if emails_in_last_batch == 0:
+            emails_in_last_batch = batch_size
+        
+        result = {
+            "batch_size": batch_size,
+            "num_batches": num_batches,
+            "total_count": total_count,
+            "emails_in_last_batch": emails_in_last_batch,
+            "estimated_time_minutes": (total_count * 1.5) / 60,  # ~1.5s per email
+        }
+        
+        logger.info(
+            f"📦 Batch plan: {total_count} emails → "
+            f"{num_batches} batches of {batch_size} "
+            f"(last batch: {emails_in_last_batch})"
+        )
+        
+        return result
+
+    def create_batches(
+        self,
+        message_ids: List[str],
+        batch_size: int = 500,
+    ) -> List[List[str]]:
+        """
+        Split message IDs into batches of specified size.
+        
+        Args:
+            message_ids: List of Gmail message IDs
+            batch_size: Number of messages per batch
+        
+        Returns:
+            List of batches, each batch is a list of message IDs
+        """
+        if not message_ids:
+            return []
+        
+        batches = [
+            message_ids[i:i + batch_size]
+            for i in range(0, len(message_ids), batch_size)
+        ]
+        
+        logger.info(
+            f"📦 Created {len(batches)} batches from {len(message_ids)} message IDs "
+            f"(batch_size={batch_size})"
+        )
+        
+        return batches
+
     async def fetch_attachment(
         self, message_id: str, attachment_id: str, filename: str,
         _retry_after_refresh: bool = False,
@@ -658,8 +805,6 @@ class GmailFetcher:
                 logger.error(f"Cannot fetch attachment '{filename}' - token refresh failed or already retried")
                 self.stats["errors"] += 1
                 return None
-
-        return result
 
 
 # ============================================================================
