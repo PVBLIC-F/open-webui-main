@@ -290,8 +290,11 @@ class GmailFetcher:
             query_parts.append(query)
         
         params = {"maxResults": 1}  # Just need the estimate, not actual messages
-        if query_parts:
-            params["q"] = " ".join(query_parts)
+        full_query = " ".join(query_parts) if query_parts else None
+        if full_query:
+            params["q"] = full_query
+        
+        logger.info(f"📊 Getting inbox count with query: '{full_query or 'ALL'}'")
         
         await self._rate_limit()
         
@@ -310,7 +313,7 @@ class GmailFetcher:
             # resultSizeEstimate is the approximate total count
             estimated_count = data.get("resultSizeEstimate", 0)
             
-            logger.info(f"📊 Gmail inbox estimate: ~{estimated_count} emails")
+            logger.info(f"📊 Gmail inbox estimate: ~{estimated_count} emails (query: '{full_query or 'ALL'}')")
             
             return estimated_count
 

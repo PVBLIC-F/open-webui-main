@@ -225,28 +225,41 @@ class GmailAutoSync:
                 )
 
             # Get inbox count first (fast - ~1 API call)
+            # Note: Gmail's resultSizeEstimate can be very inaccurate
             inbox_count = await fetcher.get_inbox_count(
                 skip_spam_trash=skip_spam_trash,
                 query=query,
             )
             
-            logger.info(f"📊 Inbox contains ~{inbox_count} emails")
+            logger.info(f"📊 Gmail estimate: ~{inbox_count} emails (note: estimate can be inaccurate)")
             
-            # Apply max_emails limit
-            effective_max = min(max_emails, inbox_count) if max_emails > 0 else inbox_count
+            # For full sync (incremental=False), don't trust the estimate - fetch up to max_emails
+            # For incremental sync, use the estimate as a guide
+            if not incremental:
+                # Full sync - fetch up to max_emails regardless of estimate
+                effective_max = max_emails if max_emails > 0 else 0  # 0 means unlimited
+                logger.info(f"📥 Full sync: will fetch up to {effective_max if effective_max > 0 else 'ALL'} emails (ignoring estimate)")
+            else:
+                # Incremental sync - use estimate as guide
+                effective_max = min(max_emails, inbox_count) if max_emails > 0 else inbox_count
             
-            # Calculate batch parameters based on count
+            # Calculate batch parameters based on count (use estimate for planning)
+            # For full sync with unknown count, use max_emails or estimate as guide
+            planning_count = effective_max if effective_max > 0 else max(inbox_count, max_emails)
             batch_params = GmailFetcher.calculate_batch_params(
-                total_count=effective_max,
+                total_count=planning_count,
                 target_batch_size=500,  # Optimal for memory/performance
                 min_batch_size=50,
                 max_batch_size=1000,
             )
             
-            logger.info(
-                f"📦 Batch plan: {batch_params['num_batches']} batches of {batch_params['batch_size']} emails "
-                f"(~{batch_params['estimated_time_minutes']:.0f} min estimated)"
-            )
+            if effective_max == 0:
+                logger.info(f"📦 Batch plan: fetching ALL emails, batch_size={batch_params['batch_size']}")
+            else:
+                logger.info(
+                    f"📦 Batch plan: {batch_params['num_batches']} batches of {batch_params['batch_size']} emails "
+                    f"(~{batch_params['estimated_time_minutes']:.0f} min estimated)"
+                )
 
             # Step 2: Fetch all message IDs
             logger.info(f"📥 Step 2: Fetching message IDs...")
@@ -258,15 +271,16 @@ class GmailAutoSync:
             
             # Update batch params with actual count
             actual_count = len(message_ids)
-            if actual_count != effective_max:
-                batch_params = GmailFetcher.calculate_batch_params(
-                    total_count=actual_count,
-                    target_batch_size=batch_params['batch_size'],
-                )
-                logger.info(
-                    f"📊 Actual count: {actual_count} emails "
-                    f"(estimate was ~{inbox_count})"
-                )
+            logger.info(f"📊 Actual email count: {actual_count} (Gmail estimate was ~{inbox_count})")
+            
+            if actual_count != inbox_count:
+                logger.info(f"   ⚠️  Gmail estimate was off by {abs(actual_count - inbox_count)} emails")
+            
+            # Recalculate batch params with actual count
+            batch_params = GmailFetcher.calculate_batch_params(
+                total_count=actual_count,
+                target_batch_size=batch_params['batch_size'],
+            )
 
             # Step 3: Fetch emails in batches
             logger.info(f"📥 Step 3: Fetching {actual_count} emails in {batch_params['num_batches']} batches...")
@@ -1075,21 +1089,21 @@ async def _background_gmail_sync(
         # If force full sync, delete all existing vectors first
         if force_full_sync:
             namespace = f"email-{user_id}"
-            logger.info(f"🗑️  Force full sync: Deleting all existing vectors in namespace '{namespace}'...")
+            logger.info(f"🗑️  Force full sync: Deleting ALL existing vectors in namespace '{namespace}'...")
             try:
                 from open_webui.retrieval.vector.main import VECTOR_DB_CLIENT
                 
-                # Delete all vectors in the user's email namespace
-                # This ensures we start fresh without duplicates
+                # Delete ALL vectors in the user's email namespace
+                # Pass namespace only (no ids/filter) to trigger delete_all for the namespace
                 VECTOR_DB_CLIENT.delete(
                     collection_name=namespace,
-                    filter=None,  # Delete all
                     namespace=namespace,
+                    # No ids or filter = delete all in namespace
                 )
-                logger.info(f"✅ Deleted all vectors in namespace '{namespace}'")
+                logger.info(f"✅ Deleted ALL vectors in namespace '{namespace}' - starting fresh")
             except Exception as e:
-                logger.warning(f"⚠️  Could not delete existing vectors (may not exist): {e}")
-                # Continue anyway - namespace may not exist yet
+                logger.warning(f"⚠️  Could not delete existing vectors (namespace may not exist yet): {e}")
+                # Continue anyway - namespace may not exist for new users
 
         # Initialize GmailAutoSync orchestrator (uses per-user namespaces)
         # V2: Single-vector strategy (no chunking needed)

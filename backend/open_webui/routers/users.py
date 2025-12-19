@@ -806,17 +806,19 @@ async def force_gmail_sync(user_id: str, request: Request, user=Depends(get_admi
             detail="Unable to obtain valid OAuth token (may need to re-authenticate)"
         )
     
-    # Reset sync status to force full sync
+    # Reset sync status to force full sync - reset ALL tracking fields
     sync_status = gmail_sync_status.get_sync_status(user_id)
     if sync_status:
         gmail_sync_status.update_sync_status(
             user_id=user_id,
             last_sync_timestamp=None,  # Reset to trigger full sync
-            last_sync_history_id=None,
+            last_sync_history_id=None,  # Reset Gmail history ID
+            last_sync_email_id=None,    # Reset last email ID
             sync_status="pending",
             last_sync_count=0,
+            total_emails_synced=0,      # Reset total count for fresh start
         )
-        log.info(f"Reset Gmail sync status for user {user_id} - will do full sync")
+        log.info(f"Reset Gmail sync status for user {user_id} - ALL fields reset for full sync")
     
     # Trigger sync immediately in background with force_full_sync=True
     # This will delete existing vectors and reprocess entire mailbox

@@ -776,8 +776,19 @@ class PineconeClient(VectorDBBase):
                     + (f" in namespace '{namespace}'" if namespace else "")
                 )
 
+            elif namespace:
+                # Delete ALL vectors in the namespace (for force sync/reset)
+                log.info(f"Deleting ALL vectors in namespace '{namespace}'...")
+                delete_kwargs = {"delete_all": True, "namespace": namespace}
+                
+                self._retry_pinecone_operation(
+                    lambda: self.index.delete(**delete_kwargs)
+                )
+
+                log.info(f"Successfully deleted ALL vectors in namespace '{namespace}'")
+
             else:
-                log.warning("No ids or filter provided for delete operation")
+                log.warning("No ids, filter, or namespace provided for delete operation")
 
         except Exception as e:
             log.error(f"Error deleting from collection '{collection_name}': {e}")
