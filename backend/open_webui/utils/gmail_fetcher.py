@@ -115,6 +115,9 @@ class GmailFetcher:
             "token_refreshes": 0,
         }
 
+        # Reusable session (created lazily)
+        self._session: Optional[aiohttp.ClientSession] = None
+
     async def _refresh_token_if_needed(self) -> bool:
         """
         Attempt to refresh the OAuth token using the callback.
