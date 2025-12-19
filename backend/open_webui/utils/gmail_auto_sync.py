@@ -269,11 +269,19 @@ class GmailAutoSync:
             logger.info(f"⚙️ PROCESSING & INDEXING - {len(emails)} emails")
             logger.info("=" * 70)
 
+            # Get configurable batch size
+            from open_webui.config import GMAIL_PROCESSING_BATCH_SIZE
+            processing_batch_size = (
+                GMAIL_PROCESSING_BATCH_SIZE.value
+                if hasattr(GMAIL_PROCESSING_BATCH_SIZE, "value")
+                else 50
+            )
+
             indexed_count = await self._process_and_index_batch(
                 emails=emails,
                 user_id=user_id,
                 fetcher=fetcher,  # Pass fetcher for attachment downloads
-                batch_size=50,  # Reduced from 100 to prevent memory buildup
+                batch_size=processing_batch_size,  # Configurable via GMAIL_PROCESSING_BATCH_SIZE
             )
 
             self.active_syncs[user_id]["indexed"] = indexed_count
@@ -666,13 +674,38 @@ async def _background_gmail_sync(request, user_id: str, oauth_token: dict):
         # We'll use Open WebUI's existing embedding and Pinecone infrastructure
 
         class SimpleEmbeddingService:
-            """Wrapper for Open WebUI's embedding function"""
+            """Wrapper for Open WebUI's embedding function with configurable batching"""
 
             def __init__(self, app_state):
                 self.app_state = app_state
+                # Load performance config
+                from open_webui.config import (
+                    GMAIL_EMBEDDING_BATCH_SIZE,
+                    GMAIL_YIELD_INTERVAL,
+                    GMAIL_YIELD_DELAY_MS,
+                )
+                self.embedding_batch_size = (
+                    GMAIL_EMBEDDING_BATCH_SIZE.value
+                    if hasattr(GMAIL_EMBEDDING_BATCH_SIZE, "value")
+                    else 5
+                )
+                self.yield_interval = (
+                    GMAIL_YIELD_INTERVAL.value
+                    if hasattr(GMAIL_YIELD_INTERVAL, "value")
+                    else 5
+                )
+                self.yield_delay_ms = (
+                    GMAIL_YIELD_DELAY_MS.value
+                    if hasattr(GMAIL_YIELD_DELAY_MS, "value")
+                    else 10
+                )
+                logger.info(
+                    f"EmbeddingService config: batch_size={self.embedding_batch_size}, "
+                    f"yield_interval={self.yield_interval}, yield_delay={self.yield_delay_ms}ms"
+                )
 
             async def embed_batch(self, texts: List[str]) -> List[List[float]]:
-                """Generate embeddings using Open WebUI's embedding function (non-blocking)"""
+                """Generate embeddings with configurable batching for performance tuning"""
 
                 async def embed_single(text: str) -> List[float]:
                     """Embed single text using async embedding function"""
@@ -706,21 +739,39 @@ async def _background_gmail_sync(request, user_id: str, oauth_token: dict):
                             dim = 1536
                         return [0.0] * dim
 
-                # Process embeddings SEQUENTIALLY with yields to keep server responsive
-                # Concurrent embedding was causing CPU starvation
+                # Process embeddings in configurable batches
+                # Batch processing is faster but uses more memory
                 embeddings = []
+                batch_size = max(1, min(50, self.embedding_batch_size))  # Clamp 1-50
+                yield_interval = max(1, self.yield_interval)
+                yield_delay = self.yield_delay_ms / 1000.0  # Convert to seconds
 
-                for i, text in enumerate(texts):
-                    # Generate embedding for single text
-                    embedding = await embed_single(text)
-                    embeddings.append(embedding)
+                for i in range(0, len(texts), batch_size):
+                    batch_texts = texts[i : i + batch_size]
+                    
+                    # Process batch concurrently for speed
+                    batch_tasks = [embed_single(text) for text in batch_texts]
+                    batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
+                    
+                    # Handle results (convert exceptions to zero vectors)
+                    for result in batch_results:
+                        if isinstance(result, Exception):
+                            logger.error(f"Batch embedding error: {result}")
+                            try:
+                                dim = int(self.app_state.config.PINECONE_DIMENSION)
+                            except:
+                                dim = 1536
+                            embeddings.append([0.0] * dim)
+                        else:
+                            embeddings.append(result)
 
-                    # CRITICAL: Yield after EVERY embedding to prevent blocking
+                    # Yield to event loop after each batch
                     await asyncio.sleep(0)
 
-                    # Add small delay every 2 embeddings for breathing room
-                    if (i + 1) % 2 == 0:
-                        await asyncio.sleep(0.02)  # 20ms delay
+                    # Configurable delay for server responsiveness
+                    batch_num = (i // batch_size) + 1
+                    if batch_num % yield_interval == 0 and yield_delay > 0:
+                        await asyncio.sleep(yield_delay)
 
                 return embeddings
 

@@ -286,7 +286,23 @@ class GmailIndexerV2:
     ) -> Dict:
         """
         Process multiple emails in batch with deduplication.
+        Uses configurable yield intervals for performance tuning.
         """
+        # Load performance config
+        from open_webui.config import GMAIL_YIELD_INTERVAL, GMAIL_YIELD_DELAY_MS
+        
+        yield_interval = (
+            GMAIL_YIELD_INTERVAL.value
+            if hasattr(GMAIL_YIELD_INTERVAL, "value")
+            else 5
+        )
+        yield_delay_ms = (
+            GMAIL_YIELD_DELAY_MS.value
+            if hasattr(GMAIL_YIELD_DELAY_MS, "value")
+            else 10
+        )
+        yield_delay = yield_delay_ms / 1000.0  # Convert to seconds
+        
         batch_start = time.time()
         all_upsert_data = []
         processed_count = 0
@@ -298,7 +314,8 @@ class GmailIndexerV2:
         seen_content = {}
 
         logger.info(
-            f"📦 Processing batch of {len(emails)} emails (V3 - Semantic + Rerank)"
+            f"📦 Processing batch of {len(emails)} emails "
+            f"(yield_interval={yield_interval}, yield_delay={yield_delay_ms}ms)"
         )
 
         for idx, email_data in enumerate(emails):
@@ -340,16 +357,19 @@ class GmailIndexerV2:
                 email_data.clear()
 
                 # CRITICAL: Yield to event loop frequently to keep server responsive
-                # Yield every email to prevent blocking
+                # Always yield after each email (minimal overhead)
                 await asyncio.sleep(0)
 
-                # Add small delay every 5 emails to prevent CPU starvation
-                if processed_count % 5 == 0:
-                    await asyncio.sleep(0.01)  # 10ms delay
+                # Configurable delay for server responsiveness
+                # Higher yield_interval = faster but less responsive
+                if yield_interval > 0 and processed_count % yield_interval == 0:
+                    if yield_delay > 0:
+                        await asyncio.sleep(yield_delay)
 
-                # Longer delay every 20 emails for server breathing room
-                if processed_count % 20 == 0:
-                    await asyncio.sleep(0.05)  # 50ms delay
+                # Longer delay every 4x yield_interval for breathing room
+                breathing_interval = yield_interval * 4
+                if breathing_interval > 0 and processed_count % breathing_interval == 0:
+                    await asyncio.sleep(yield_delay * 5)  # 5x the normal delay
 
             except Exception as e:
                 email_id = email_data.get("id", "unknown")

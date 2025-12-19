@@ -480,6 +480,49 @@ GMAIL_ATTACHMENT_TYPES = PersistentConfig(
     ),
 )
 
+# Gmail Sync Performance Tuning
+# Adjust these to optimize speed vs. server responsiveness
+
+# Number of texts to embed in a single batch (higher = faster, more memory)
+# Range: 1-50, Default: 5 (conservative), Aggressive: 20
+GMAIL_EMBEDDING_BATCH_SIZE = PersistentConfig(
+    "GMAIL_EMBEDDING_BATCH_SIZE",
+    "gmail.performance.embedding_batch_size",
+    int(os.environ.get("GMAIL_EMBEDDING_BATCH_SIZE", "5")),
+)
+
+# Number of emails to process per batch (higher = faster, less responsive)
+# Range: 10-200, Default: 50 (balanced), Aggressive: 100
+GMAIL_PROCESSING_BATCH_SIZE = PersistentConfig(
+    "GMAIL_PROCESSING_BATCH_SIZE",
+    "gmail.performance.processing_batch_size",
+    int(os.environ.get("GMAIL_PROCESSING_BATCH_SIZE", "50")),
+)
+
+# Concurrent Gmail API requests (higher = faster fetching)
+# Range: 10-50, Default: 20 (conservative), Aggressive: 40
+GMAIL_API_CONCURRENCY = PersistentConfig(
+    "GMAIL_API_CONCURRENCY",
+    "gmail.performance.api_concurrency",
+    int(os.environ.get("GMAIL_API_CONCURRENCY", "20")),
+)
+
+# Yield to event loop every N emails (lower = more responsive, slower)
+# Range: 1-50, Default: 5 (responsive), Aggressive: 20
+GMAIL_YIELD_INTERVAL = PersistentConfig(
+    "GMAIL_YIELD_INTERVAL",
+    "gmail.performance.yield_interval",
+    int(os.environ.get("GMAIL_YIELD_INTERVAL", "5")),
+)
+
+# Delay in ms between yield intervals (lower = faster, less responsive)
+# Range: 0-100, Default: 10 (balanced), Aggressive: 0
+GMAIL_YIELD_DELAY_MS = PersistentConfig(
+    "GMAIL_YIELD_DELAY_MS",
+    "gmail.performance.yield_delay_ms",
+    int(os.environ.get("GMAIL_YIELD_DELAY_MS", "10")),
+)
+
 ####################################
 # Temp File Cleanup (critical for Render's 2GB /tmp limit)
 ####################################

@@ -45,20 +45,35 @@ class GmailFetcher:
     Fetches emails from Gmail API with proper rate limiting and pagination.
 
     Uses OAuth token from user's login session.
+    Supports configurable concurrency via GMAIL_API_CONCURRENCY env var.
     """
 
     # Gmail API base URL
     GMAIL_API_BASE = "https://gmail.googleapis.com/gmail/v1"
 
-    # Rate limiting configuration
+    # Rate limiting configuration (can be overridden by config)
     DEFAULT_MAX_REQUESTS_PER_SECOND = 40  # Conservative limit
-    DEFAULT_BATCH_SIZE = 20  # Concurrent requests (Gmail limit: ~25 concurrent)
+    DEFAULT_BATCH_SIZE = 20  # Concurrent requests (Gmail limit: ~50 concurrent)
+
+    @staticmethod
+    def _get_config_concurrency() -> int:
+        """Get API concurrency from config, with fallback to default."""
+        try:
+            from open_webui.config import GMAIL_API_CONCURRENCY
+            return (
+                GMAIL_API_CONCURRENCY.value
+                if hasattr(GMAIL_API_CONCURRENCY, "value")
+                else GmailFetcher.DEFAULT_BATCH_SIZE
+            )
+        except ImportError:
+            return GmailFetcher.DEFAULT_BATCH_SIZE
 
     def __init__(
         self,
         oauth_token: str,
         max_requests_per_second: int = DEFAULT_MAX_REQUESTS_PER_SECOND,
         timeout: int = 30,
+        batch_size: int = None,
     ):
         """
         Initialize Gmail fetcher.
@@ -67,9 +82,13 @@ class GmailFetcher:
             oauth_token: OAuth access token with Gmail scopes
             max_requests_per_second: Rate limit (default: 40 req/s)
             timeout: Request timeout in seconds (default: 30)
+            batch_size: Concurrent requests (default: from config or 20)
         """
         self.oauth_token = oauth_token
         self.max_requests_per_second = max_requests_per_second
+        # Use provided batch_size, or load from config
+        self.default_batch_size = batch_size or self._get_config_concurrency()
+        logger.info(f"GmailFetcher initialized: concurrency={self.default_batch_size}")
         self.timeout = timeout
 
         # Rate limiting tracking
@@ -386,18 +405,20 @@ class GmailFetcher:
     async def fetch_emails_batch(
         self,
         message_ids: List[str],
-        batch_size: int = DEFAULT_BATCH_SIZE,
+        batch_size: int = None,
     ) -> List[Dict]:
         """
         Fetch multiple emails in batches with rate limiting.
 
         Args:
             message_ids: List of Gmail message IDs to fetch
-            batch_size: Number of concurrent requests (default: 20, Gmail limit ~25)
+            batch_size: Number of concurrent requests (default: from config, Gmail limit ~50)
 
         Returns:
             List of Gmail API message responses
         """
+        # Use provided batch_size or instance default (from config)
+        batch_size = batch_size or self.default_batch_size
 
         logger.info(f"Fetching {len(message_ids)} emails in batches of {batch_size}...")
 
