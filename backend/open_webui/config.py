@@ -384,11 +384,21 @@ ENABLE_GMAIL_AUTO_SYNC = PersistentConfig(
     os.environ.get("ENABLE_GMAIL_AUTO_SYNC", "True").lower() == "true",
 )
 
-# Maximum number of emails to sync on first-time user signup
+# Maximum number of emails to sync per sync run
+# For large mailboxes (15000+ emails), set this higher
 GMAIL_AUTO_SYNC_MAX_EMAILS = PersistentConfig(
     "GMAIL_AUTO_SYNC_MAX_EMAILS",
     "gmail.auto_sync.max_emails",
-    int(os.environ.get("GMAIL_AUTO_SYNC_MAX_EMAILS", "5000")),
+    int(os.environ.get("GMAIL_AUTO_SYNC_MAX_EMAILS", "15000")),
+)
+
+# Maximum sync timeout in seconds (default: 2 hours)
+# For very large mailboxes, increase this value
+# Set to 0 for no timeout (not recommended)
+GMAIL_SYNC_TIMEOUT_SECONDS = PersistentConfig(
+    "GMAIL_SYNC_TIMEOUT_SECONDS",
+    "gmail.sync.timeout_seconds",
+    int(os.environ.get("GMAIL_SYNC_TIMEOUT_SECONDS", "7200")),
 )
 
 # Only auto-sync on first signup (True) or every login (False)

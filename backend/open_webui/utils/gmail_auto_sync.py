@@ -1390,21 +1390,43 @@ async def _sync_user_periodic(user_id: str) -> bool:
         sync_status = gmail_sync_status.get_sync_status(user_id)
         is_first_sync = sync_status is None or sync_status.last_sync_timestamp is None
 
-        # Determine timeout and email limits based on sync type
+        # Use config values for limits - no artificial restrictions
+        # Large mailboxes (15000+ emails) need adequate time and batch sizes
+        from open_webui.config import GMAIL_AUTO_SYNC_MAX_EMAILS, GMAIL_SYNC_TIMEOUT_SECONDS
+        
+        max_sync_emails = (
+            GMAIL_AUTO_SYNC_MAX_EMAILS.value
+            if hasattr(GMAIL_AUTO_SYNC_MAX_EMAILS, "value")
+            else 15000
+        )
+        
+        # Use configured timeout, or calculate based on email count
+        configured_timeout = (
+            GMAIL_SYNC_TIMEOUT_SECONDS.value
+            if hasattr(GMAIL_SYNC_TIMEOUT_SECONDS, "value")
+            else 7200  # 2 hours default
+        )
+        
+        if configured_timeout > 0:
+            sync_timeout = configured_timeout
+        else:
+            # No timeout configured - calculate based on email count
+            # Estimate: ~2 seconds per email for fetch + embed + upsert
+            estimated_time = max_sync_emails * 2 * 1.5
+            sync_timeout = max(3600, int(estimated_time))  # Minimum 1 hour
+        
         if is_first_sync:
-            # First sync: limit emails more aggressively, allow more time
-            max_sync_emails = 200  # Conservative for first background sync
-            sync_timeout = 600  # 10 minutes for first sync
             logger.info(
-                f"🆕 First sync for user {user_id} - limiting to {max_sync_emails} emails"
+                f"🆕 First sync for user {user_id} - "
+                f"max_emails={max_sync_emails}, timeout={sync_timeout}s ({sync_timeout//60}min)"
             )
         else:
-            # Ongoing sync: normal limits
-            max_sync_emails = 500
-            sync_timeout = 900  # 15 minutes
+            logger.info(
+                f"🔄 Ongoing sync for user {user_id} - "
+                f"max_emails={max_sync_emails}, timeout={sync_timeout}s ({sync_timeout//60}min)"
+            )
 
-        # Perform incremental sync with timeout protection
-        # Reuse the background sync infrastructure
+        # Perform sync with timeout protection
         try:
             # Get app state for services
             from open_webui.main import app
@@ -1417,6 +1439,7 @@ async def _sync_user_periodic(user_id: str) -> bool:
             request_wrapper = AppStateWrapper(app.state)
 
             # Use asyncio.wait_for to enforce timeout
+            # Timeout is dynamically calculated based on email count
             result = await asyncio.wait_for(
                 _background_gmail_sync(request_wrapper, user_id, oauth_token),
                 timeout=sync_timeout,
@@ -1425,12 +1448,12 @@ async def _sync_user_periodic(user_id: str) -> bool:
             duration = time.time() - sync_start
             logger.error(
                 f"⏱️  Periodic sync timeout for user {user_id} "
-                f"after {duration:.1f}s (max: {sync_timeout}s)"
+                f"after {duration:.1f}s (max: {sync_timeout}s). "
+                f"Consider increasing GMAIL_AUTO_SYNC_MAX_EMAILS or performance settings."
             )
             # Mark sync as error so user can be picked up on next cycle
-            # (otherwise user would be stuck in "active" status)
             gmail_sync_status.mark_sync_error(
-                user_id, f"Sync timeout after {duration:.1f}s"
+                user_id, f"Sync timeout after {duration:.1f}s - may need to increase limits"
             )
             return False
 
