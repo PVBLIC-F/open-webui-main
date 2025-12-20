@@ -1320,6 +1320,11 @@ async def periodic_gmail_sync_scheduler():
             # Query database for users needing sync (indexed query)
             # Convert minutes to hours for database query
             sync_interval_hours = sync_interval_minutes / 60.0
+            
+            logger.debug(
+                f"🔍 Checking for users needing sync (interval: {sync_interval_minutes}min / {sync_interval_hours:.2f}h)"
+            )
+            
             users_needing_sync = gmail_sync_status.get_users_needing_sync(
                 max_hours_since_sync=sync_interval_hours
             )
@@ -1391,7 +1396,7 @@ async def periodic_gmail_sync_scheduler():
                     consecutive_errors += 1
                 # If all skipped (no success, no failure), don't increment error counter
             else:
-                logger.debug(
+                logger.info(
                     f"📧 No users need sync at this time (interval: {sync_interval_minutes}min)"
                 )
                 consecutive_errors = 0  # Reset on successful query
@@ -1400,7 +1405,7 @@ async def periodic_gmail_sync_scheduler():
             check_interval_seconds = check_interval_minutes * 60
             jitter = time.time() % 30  # 0-30 second jitter
             actual_wait = check_interval_seconds + jitter
-            logger.debug(f"⏰ Next sync check in {actual_wait/60:.1f} minutes")
+            logger.info(f"⏰ Next sync check in {actual_wait/60:.1f} minutes")
             await asyncio.sleep(actual_wait)
 
         except asyncio.CancelledError:

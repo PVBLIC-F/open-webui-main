@@ -300,6 +300,18 @@ class GmailSyncStatusTable:
             with get_db() as db:
                 cutoff_time = int(time.time() - (max_hours_since_sync * 3600))
 
+                # First, log total users with sync records for debugging
+                total_sync_records = db.query(GmailSyncStatus).count()
+                enabled_users = db.query(GmailSyncStatus).filter(
+                    GmailSyncStatus.sync_enabled == True,
+                    GmailSyncStatus.auto_sync_enabled == True,
+                ).count()
+                
+                log.debug(
+                    f"Gmail sync status: {total_sync_records} total records, "
+                    f"{enabled_users} with sync+auto enabled"
+                )
+
                 # Optimized query - leverages database indexes
                 # Index usage: gmail_sync_enabled_idx (sync_enabled, auto_sync_enabled)
                 #              gmail_sync_last_sync_idx (last_sync_timestamp)
@@ -318,7 +330,28 @@ class GmailSyncStatusTable:
                     .all()
                 )
 
-                return [user.user_id for user in users]
+                result = [user.user_id for user in users]
+                
+                if not result and enabled_users > 0:
+                    # Debug: Check why enabled users aren't being picked up
+                    active_users = db.query(GmailSyncStatus).filter(
+                        GmailSyncStatus.sync_enabled == True,
+                        GmailSyncStatus.auto_sync_enabled == True,
+                        GmailSyncStatus.sync_status == "active",
+                    ).count()
+                    
+                    recent_users = db.query(GmailSyncStatus).filter(
+                        GmailSyncStatus.sync_enabled == True,
+                        GmailSyncStatus.auto_sync_enabled == True,
+                        GmailSyncStatus.last_sync_timestamp >= cutoff_time,
+                    ).count()
+                    
+                    log.info(
+                        f"📊 No users need sync: {active_users} currently syncing, "
+                        f"{recent_users} synced recently (within {max_hours_since_sync:.2f}h)"
+                    )
+                
+                return result
 
         except Exception as e:
             log.error(f"Error getting users needing sync: {e}")
