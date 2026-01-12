@@ -31,7 +31,6 @@ from open_webui.config import (
     PINECONE_METRIC,
     PINECONE_CLOUD,
 )
-from open_webui.env import SRC_LOG_LEVELS
 from open_webui.retrieval.vector.utils import process_metadata
 
 
@@ -41,7 +40,6 @@ BATCH_SIZE = 1000
 MAX_BATCH_SIZE_BYTES = 1_048_576  # 1 MB payload limit per Pinecone request
 
 log = logging.getLogger(__name__)
-log.setLevel(SRC_LOG_LEVELS["RAG"])
 
 
 class PineconeClient(VectorDBBase):
@@ -568,7 +566,8 @@ class PineconeClient(VectorDBBase):
         self,
         collection_name: str,
         vectors: List[List[Union[float, int]]],
-        limit: int,
+        filter: Optional[dict] = None,
+        limit: int = 10,
         namespace: str = None,
     ) -> Optional[SearchResult]:
         """Search for similar vectors in a collection with optional namespace support."""

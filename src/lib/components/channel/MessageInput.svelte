@@ -22,6 +22,7 @@
 	} from '$lib/utils';
 
 	import { getSessionUser } from '$lib/apis/auths';
+
 	import { uploadFile } from '$lib/apis/files';
 	import { WEBUI_API_BASE_URL } from '$lib/constants';
 
@@ -39,12 +40,12 @@
 	import MentionList from './MessageInput/MentionList.svelte';
 	import Skeleton from '../chat/Messages/Skeleton.svelte';
 	import XMark from '../icons/XMark.svelte';
-	import Database from '../icons/Database.svelte';
 
 	export let placeholder = $i18n.t('Type here...');
+	export let chatInputElement;
 
 	export let id = null;
-	export let chatInputElement;
+	export let channel = null;
 
 	export let typingUsers = [];
 	export let inputLoading = false;
@@ -111,28 +112,21 @@
 
 			const clipboardItems = await navigator.clipboard.read();
 
-			let imageUrl = null;
 			for (const item of clipboardItems) {
 				// Check for known image types
 				for (const type of item.types) {
 					if (type.startsWith('image/')) {
 						const blob = await item.getType(type);
-						imageUrl = URL.createObjectURL(blob);
+						const file = new File([blob], `clipboard-image.${type.split('/')[1]}`, {
+							type: type
+						});
+
+						inputFilesHandler([file]);
 					}
 				}
 			}
 
-			if (imageUrl) {
-				files = [
-					...files,
-					{
-						type: 'image',
-						url: imageUrl
-					}
-				];
-			}
-
-			text = text.replaceAll('{{CLIPBOARD}}', clipboardText);
+			text = text.replaceAll('{{CLIPBOARD}}', clipboardText.replaceAll('\r\n', '\n'));
 		}
 
 		if (text.includes('{{USER_LOCATION}}')) {
@@ -339,21 +333,15 @@
 
 			// Convert the canvas to a Base64 image URL
 			const imageUrl = canvas.toDataURL('image/png');
-			// Add the captured image to the files array to render it
-			files = [...files, { type: 'image', url: imageUrl }];
+			const blob = await (await fetch(imageUrl)).blob();
+			const file = new File([blob], `screen-capture-${Date.now()}.png`, { type: 'image/png' });
+			inputFilesHandler([file]);
 			// Clean memory: Clear video srcObject
 			video.srcObject = null;
 		} catch (error) {
 			// Handle any errors (e.g., user cancels screen sharing)
 			console.error('Error capturing screen:', error);
 		}
-	};
-
-	const knowledgeHandler = (item) => {
-		// Prevent duplicates
-		if (files.find((f) => f.id === item.id)) return;
-
-		files = [...files, { ...item, status: 'processed' }];
 	};
 
 	const inputFilesHandler = async (inputFiles) => {
@@ -428,13 +416,10 @@
 						imageUrl = await compressImageHandler(imageUrl, $settings, $config);
 					}
 
-					files = [
-						...files,
-						{
-							type: 'image',
-							url: `${imageUrl}`
-						}
-					];
+					const blob = await (await fetch(imageUrl)).blob();
+					const compressedFile = new File([blob], file.name, { type: file.type });
+
+					uploadFileHandler(compressedFile, false);
 				};
 
 				reader.readAsDataURL(file['type'] === 'image/heic' ? await convertHeicToJpeg(file) : file);
@@ -444,7 +429,7 @@
 		});
 	};
 
-	const uploadFileHandler = async (file) => {
+	const uploadFileHandler = async (file, process = true) => {
 		const tempItemId = uuidv4();
 		const fileItem = {
 			type: 'file',
@@ -468,19 +453,19 @@
 
 		try {
 			// During the file upload, file content is automatically extracted.
-
 			// If the file is an audio file, provide the language for STT.
-			let metadata = null;
-			if (
-				(file.type.startsWith('audio/') || file.type.startsWith('video/')) &&
+			let metadata = {
+				channel_id: channel.id,
+				// If the file is an audio file, provide the language for STT.
+				...((file.type.startsWith('audio/') || file.type.startsWith('video/')) &&
 				$settings?.audio?.stt?.language
-			) {
-				metadata = {
-					language: $settings?.audio?.stt?.language
-				};
-			}
+					? {
+							language: $settings?.audio?.stt?.language
+						}
+					: {})
+			};
 
-			const uploadedFile = await uploadFile(localStorage.token, file, metadata);
+			const uploadedFile = await uploadFile(localStorage.token, file, metadata, process);
 
 			if (uploadedFile) {
 				console.info('File upload completed:', {
@@ -499,7 +484,8 @@
 				fileItem.id = uploadedFile.id;
 				fileItem.collection_name =
 					uploadedFile?.meta?.collection_name || uploadedFile?.collection_name;
-				fileItem.url = `${WEBUI_API_BASE_URL}/files/${uploadedFile.id}`;
+				fileItem.content_type = uploadedFile.meta?.content_type || uploadedFile.content_type;
+				fileItem.url = `${uploadedFile.id}`;
 
 				files = files;
 			} else {
@@ -616,7 +602,6 @@
 						const { type, data } = e;
 
 						if (type === 'file') {
-							// Check for duplicates
 							if (files.find((f) => f.id === data.id)) {
 								return;
 							}
@@ -624,18 +609,6 @@
 								...files,
 								{
 									...data,
-									status: 'processed'
-								}
-							];
-						} else if (type === 'youtube' || type === 'web') {
-							// Handle web/youtube URLs from knowledge selection
-							files = [
-								...files,
-								{
-									type: 'doc',
-									name: data,
-									url: data,
-									collection_name: data,
 									status: 'processed'
 								}
 							];
@@ -825,40 +798,35 @@
 							{/if}
 
 							{#if files.length > 0}
-								{@const { knowledgeFiles, otherFiles } = files.reduce(
-									(acc, file) => {
-										if (file.type === 'collection' || file.knowledge) {
-											acc.knowledgeFiles.push(file);
-										} else {
-											acc.otherFiles.push(file);
-										}
-										return acc;
-									},
-									{ knowledgeFiles: [], otherFiles: [] }
-								)}
-
-								<div class="mx-2 mt-2.5 -mb-1 flex flex-col gap-2">
-									<!-- Knowledge Bases Section -->
-									{#if knowledgeFiles.length > 0}
-										<div class="flex flex-wrap gap-1.5">
-											{#each knowledgeFiles as file, fileIdx}
-												<div
-													class="flex items-center gap-1.5 px-2.5 py-1 bg-gray-100 dark:bg-gray-800 rounded-full text-xs group"
-												>
-													<Database className="size-3.5" />
-													<span class="line-clamp-1">{file.name}</span>
+								<div class="mx-2 mt-2.5 -mb-1 flex flex-wrap gap-2">
+									{#each files as file, fileIdx}
+										{#if file.type === 'image' || (file?.content_type ?? '').startsWith('image/')}
+											{@const fileUrl =
+												file.url.startsWith('data') || file.url.startsWith('http')
+													? file.url
+													: `${WEBUI_API_BASE_URL}/files/${file.url}${file?.content_type ? '/content' : ''}`}
+											<div class=" relative group">
+												<div class="relative">
+													<Image
+														src={fileUrl}
+														alt=""
+														imageClassName=" size-10 rounded-xl object-cover"
+													/>
+												</div>
+												<div class=" absolute -top-1 -right-1">
 													<button
+														class=" bg-white text-black border border-white rounded-full group-hover:visible invisible transition"
 														type="button"
-														class="hover:bg-gray-200 dark:hover:bg-gray-700 rounded-full p-0.5 transition"
 														on:click={() => {
-															files = files.filter((f) => f.id !== file.id);
+															files.splice(fileIdx, 1);
+															files = files;
 														}}
 													>
 														<svg
 															xmlns="http://www.w3.org/2000/svg"
 															viewBox="0 0 20 20"
 															fill="currentColor"
-															class="w-3 h-3"
+															class="w-4 h-4"
 														>
 															<path
 																d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z"
@@ -866,65 +834,27 @@
 														</svg>
 													</button>
 												</div>
-											{/each}
-										</div>
-									{/if}
-
-									<!-- Files Section -->
-									{#if otherFiles.length > 0}
-										<div class="flex flex-wrap gap-2">
-											{#each otherFiles as file, fileIdx}
-												{#if file.type === 'image'}
-													<div class=" relative group">
-														<div class="relative">
-															<Image
-																src={file.url}
-																alt=""
-																imageClassName=" size-10 rounded-xl object-cover"
-															/>
-														</div>
-														<div class=" absolute -top-1 -right-1">
-															<button
-																class=" bg-white text-black border border-white rounded-full group-hover:visible invisible transition"
-																type="button"
-																on:click={() => {
-																	files = files.filter((f) => f !== file);
-																}}
-															>
-																<svg
-																	xmlns="http://www.w3.org/2000/svg"
-																	viewBox="0 0 20 20"
-																	fill="currentColor"
-																	class="w-4 h-4"
-																>
-																	<path
-																		d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z"
-																	/>
-																</svg>
-															</button>
-														</div>
-													</div>
-												{:else}
-													<FileItem
-														item={file}
-														name={file.name}
-														type={file.type}
-														size={file?.size}
-														small={true}
-														loading={file.status === 'uploading'}
-														dismissible={true}
-														edit={true}
-														on:dismiss={() => {
-															files = files.filter((f) => f !== file);
-														}}
-														on:click={() => {
-															console.log(file);
-														}}
-													/>
-												{/if}
-											{/each}
-										</div>
-									{/if}
+											</div>
+										{:else}
+											<FileItem
+												item={file}
+												name={file.name}
+												type={file.type}
+												size={file?.size}
+												small={true}
+												loading={file.status === 'uploading'}
+												dismissible={true}
+												edit={true}
+												on:dismiss={() => {
+													files.splice(fileIdx, 1);
+													files = files;
+												}}
+												on:click={() => {
+													console.log(file);
+												}}
+											/>
+										{/if}
+									{/each}
 								</div>
 							{/if}
 
@@ -999,28 +929,10 @@
 
 												if (clipboardData && clipboardData.items) {
 													for (const item of clipboardData.items) {
-														if (item.type.indexOf('image') !== -1) {
-															const blob = item.getAsFile();
-															const reader = new FileReader();
-
-															reader.onload = function (e) {
-																files = [
-																	...files,
-																	{
-																		type: 'image',
-																		url: `${e.target.result}`
-																	}
-																];
-															};
-
-															reader.readAsDataURL(blob);
-														} else if (item?.kind === 'file') {
-															const file = item.getAsFile();
-															if (file) {
-																const _files = [file];
-																await inputFilesHandler(_files);
-																e.preventDefault();
-															}
+														const file = item.getAsFile();
+														if (file) {
+															await inputFilesHandler([file]);
+															e.preventDefault();
 														}
 													}
 												}
@@ -1039,7 +951,6 @@
 												uploadFilesHandler={() => {
 													filesInputElement.click();
 												}}
-												{knowledgeHandler}
 											>
 												<button
 													id="input-menu-button"
