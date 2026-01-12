@@ -22,6 +22,8 @@ from langchain_community.document_loaders import (
     YoutubeLoader,
 )
 from langchain_core.documents import Document
+import csv
+import io
 
 from open_webui.retrieval.loaders.external_document import ExternalDocumentLoader
 from open_webui.retrieval.loaders.unstructured_loader import UnstructuredUnifiedLoader
@@ -88,6 +90,138 @@ known_source_ext = [
     "lhs",
     "json",
 ]
+
+
+class RobustCSVLoader:
+    """
+    A robust CSV loader that handles malformed CSVs gracefully.
+    
+    Handles common issues:
+    - Inconsistent column counts across rows
+    - Various delimiters (comma, tab, semicolon, pipe)
+    - Files with metadata rows before actual data
+    - Encoding issues
+    """
+    
+    def __init__(self, file_path: str):
+        self.file_path = file_path
+    
+    def _detect_delimiter(self, sample: str) -> str:
+        """Detect the most likely delimiter from a sample of the file."""
+        delimiters = [',', '\t', ';', '|']
+        counts = {}
+        
+        for delim in delimiters:
+            # Count occurrences in each line and check consistency
+            lines = sample.split('\n')[:10]  # Check first 10 lines
+            line_counts = [line.count(delim) for line in lines if line.strip()]
+            if line_counts:
+                # Prefer delimiter with consistent counts across lines
+                avg_count = sum(line_counts) / len(line_counts)
+                consistency = 1 - (max(line_counts) - min(line_counts)) / max(max(line_counts), 1)
+                counts[delim] = avg_count * consistency
+        
+        if counts:
+            return max(counts, key=counts.get)
+        return ','  # Default to comma
+    
+    def load(self) -> list[Document]:
+        """Load CSV file with robust error handling."""
+        try:
+            # Try different encodings
+            content = None
+            for encoding in ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252']:
+                try:
+                    with open(self.file_path, 'r', encoding=encoding) as f:
+                        content = f.read()
+                    break
+                except UnicodeDecodeError:
+                    continue
+            
+            if content is None:
+                # Fallback: read as binary and decode with errors='replace'
+                with open(self.file_path, 'rb') as f:
+                    content = f.read().decode('utf-8', errors='replace')
+            
+            # Detect delimiter
+            delimiter = self._detect_delimiter(content)
+            log.info(f"CSV detected delimiter: '{delimiter}'")
+            
+            # Parse CSV with flexible settings
+            rows = []
+            max_columns = 0
+            
+            reader = csv.reader(io.StringIO(content), delimiter=delimiter)
+            for i, row in enumerate(reader):
+                if row:  # Skip empty rows
+                    rows.append(row)
+                    max_columns = max(max_columns, len(row))
+            
+            if not rows:
+                return [Document(page_content="Empty CSV file", metadata={"source": self.file_path})]
+            
+            # Normalize rows to have consistent column count
+            normalized_rows = []
+            for row in rows:
+                if len(row) < max_columns:
+                    row = row + [''] * (max_columns - len(row))
+                normalized_rows.append(row)
+            
+            # Convert to text representation
+            # Use first row as header if it looks like one
+            header = normalized_rows[0] if normalized_rows else []
+            data_rows = normalized_rows[1:] if len(normalized_rows) > 1 else normalized_rows
+            
+            # Create document content
+            content_parts = []
+            
+            # Add header info
+            if header:
+                content_parts.append(f"Columns ({len(header)}): {', '.join(str(h) for h in header)}")
+                content_parts.append("")
+            
+            # Add data rows
+            for i, row in enumerate(data_rows):
+                if any(cell.strip() for cell in row):  # Skip completely empty rows
+                    if header:
+                        # Format as key-value pairs for better RAG
+                        row_parts = []
+                        for j, (h, v) in enumerate(zip(header, row)):
+                            if v.strip():
+                                row_parts.append(f"{h}: {v}")
+                        if row_parts:
+                            content_parts.append(f"Row {i+1}: {'; '.join(row_parts)}")
+                    else:
+                        content_parts.append(f"Row {i+1}: {', '.join(row)}")
+            
+            text = '\n'.join(content_parts)
+            
+            return [Document(
+                page_content=text,
+                metadata={
+                    "source": self.file_path,
+                    "row_count": len(data_rows),
+                    "column_count": max_columns,
+                    "delimiter": delimiter,
+                }
+            )]
+            
+        except Exception as e:
+            log.error(f"Error loading CSV file {self.file_path}: {e}")
+            # Last resort: just read as plain text
+            try:
+                with open(self.file_path, 'r', errors='replace') as f:
+                    content = f.read()
+                return [Document(
+                    page_content=content,
+                    metadata={"source": self.file_path, "parse_error": str(e)}
+                )]
+            except Exception as e2:
+                log.error(f"Failed to read CSV as text: {e2}")
+                return [Document(
+                    page_content=f"Failed to parse CSV file: {e}",
+                    metadata={"source": self.file_path, "error": str(e)}
+                )]
 
 
 class TikaLoader:
@@ -375,6 +509,11 @@ class Loader:
                 api_key=self.kwargs.get("MISTRAL_OCR_API_KEY"),
                 file_path=file_path,
             )
+        elif file_ext == "csv":
+            # Use robust CSV loader to handle malformed CSVs gracefully
+            # This avoids pandas "Error tokenizing data" issues with inconsistent columns
+            log.info(f"Using RobustCSVLoader for CSV file: {filename}")
+            loader = RobustCSVLoader(file_path=file_path)
         elif self.engine in ["", "unstructured"]:
             # Use Unstructured.io as the default unified loader
             loader = self._create_unstructured_loader(file_path)
