@@ -228,13 +228,30 @@ export const createFolderPicker = () => {
 			}
 			console.log('Auth token obtained successfully');
 
+			// View for "My Drive" folders
+			const myDriveView = new google.picker.DocsView()
+				.setIncludeFolders(true)
+				.setSelectFolderEnabled(true)
+				.setMimeTypes('application/vnd.google-apps.folder');
+
+			// View for "Shared with me" folders
+			const sharedWithMeView = new google.picker.DocsView()
+				.setIncludeFolders(true)
+				.setSelectFolderEnabled(true)
+				.setMimeTypes('application/vnd.google-apps.folder')
+				.setOwnedByMe(false);
+
+			// View for Shared Drives (Team Drives)
+			const sharedDrivesView = new google.picker.DocsView(google.picker.ViewId.FOLDERS)
+				.setIncludeFolders(true)
+				.setSelectFolderEnabled(true)
+				.setEnableDrives(true);
+
 			const picker = new google.picker.PickerBuilder()
-				.addView(
-					new google.picker.DocsView()
-						.setIncludeFolders(true)
-						.setSelectFolderEnabled(true)
-						.setMimeTypes('application/vnd.google-apps.folder')
-				)
+				.addView(myDriveView)
+				.addView(sharedWithMeView)
+				.addView(sharedDrivesView)
+				.enableFeature(google.picker.Feature.SUPPORT_DRIVES)
 				.setOAuthToken(token)
 				.setDeveloperKey(API_KEY)
 				.setTitle('Select a folder to sync')
