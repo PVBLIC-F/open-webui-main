@@ -97,7 +97,7 @@ class DriveFolder:
     id: str
     name: str
     parents: Optional[List[str]] = None
-    drive_id: Optional[str] = None  # Shared Drive ID if folder is in a Shared Drive
+    drive_id: Optional[str] = None  # Shared Drive ID (only present for Shared Drive items)
 
     @classmethod
     def from_api_response(cls, data: dict) -> "DriveFolder":
@@ -106,7 +106,7 @@ class DriveFolder:
             id=data.get("id", ""),
             name=data.get("name", ""),
             parents=data.get("parents"),
-            drive_id=data.get("driveId"),  # Only present for Shared Drive items
+            drive_id=data.get("driveId"),
         )
 
 
@@ -266,7 +266,7 @@ class GoogleDriveClient:
             folder_id: Google Drive folder ID
             
         Returns:
-            DriveFolder with folder details
+            DriveFolder with folder details (includes driveId for Shared Drives)
         """
         url = f"{DRIVE_API_BASE}/files/{folder_id}"
         params = {
@@ -296,7 +296,7 @@ class GoogleDriveClient:
             include_trashed: Include trashed files
             page_size: Number of files per page
             page_token: Token for pagination
-            drive_id: Shared Drive ID (required for Shared Drive folders)
+            drive_id: Shared Drive ID (required for folders in Shared Drives)
             
         Returns:
             Tuple of (list of DriveFile, next_page_token or None)
@@ -316,24 +316,19 @@ class GoogleDriveClient:
             "includeItemsFromAllDrives": "true",  # Include items from Shared Drives
         }
         
-        # For Shared Drives, use corpora=drive with driveId for reliable results
-        # For regular shared folders, use default corpora=user
+        # For Shared Drives, MUST use corpora=drive with driveId
+        # Without this, the API returns empty results for Shared Drive folders
         if drive_id:
             params["corpora"] = "drive"
             params["driveId"] = drive_id
-            log.debug(f"Using corpora=drive with driveId={drive_id} for Shared Drive")
         else:
-            # Default: corpora=user + includeItemsFromAllDrives=true
-            # Queries "files that the user has accessed, including shared drive files"
-            params["orderBy"] = "modifiedTime desc"  # Only works without corpora=drive
+            # For regular folders, can use orderBy (not supported with corpora=drive)
+            params["orderBy"] = "modifiedTime desc"
         
         if page_token:
             params["pageToken"] = page_token
 
-        log.debug(f"Drive API list params: {params}")
         data = await self._request("GET", url, params=params)
-        
-        log.debug(f"Drive API response: {len(data.get('files', []))} files")
 
         files = [
             DriveFile.from_api_response(f)
@@ -358,7 +353,7 @@ class GoogleDriveClient:
             folder_id: Google Drive folder ID
             include_trashed: Include trashed files
             max_files: Maximum files to return
-            drive_id: Shared Drive ID (required for Shared Drive folders)
+            drive_id: Shared Drive ID (required for folders in Shared Drives)
             
         Returns:
             List of DriveFile objects
