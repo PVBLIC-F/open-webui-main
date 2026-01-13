@@ -267,7 +267,10 @@ class GoogleDriveClient:
             DriveFolder with folder details
         """
         url = f"{DRIVE_API_BASE}/files/{folder_id}"
-        params = {"fields": "id,name,parents"}
+        params = {
+            "fields": "id,name,parents",
+            "supportsAllDrives": "true",  # Required for Shared Drives and shared folders
+        }
 
         data = await self._request("GET", url, params=params)
         return DriveFolder.from_api_response(data)
@@ -303,6 +306,8 @@ class GoogleDriveClient:
             "fields": "nextPageToken,files(id,name,mimeType,size,md5Checksum,modifiedTime,parents,trashed)",
             "pageSize": page_size,
             "orderBy": "modifiedTime desc",
+            "supportsAllDrives": "true",  # Required for Shared Drives
+            "includeItemsFromAllDrives": "true",  # Include items from Shared Drives
         }
         if page_token:
             params["pageToken"] = page_token
@@ -393,7 +398,10 @@ class GoogleDriveClient:
         else:
             # Download regular file
             url = f"{DRIVE_API_BASE}/files/{file.id}"
-            params = {"alt": "media"}
+            params = {
+                "alt": "media",
+                "supportsAllDrives": "true",  # Required for Shared Drives
+            }
 
         return await self._download_request(url, params=params)
 
@@ -407,7 +415,10 @@ class GoogleDriveClient:
             Start page token string
         """
         url = f"{DRIVE_API_BASE}/changes/startPageToken"
-        data = await self._request("GET", url)
+        params = {
+            "supportsAllDrives": "true",  # Required for Shared Drives
+        }
+        data = await self._request("GET", url, params=params)
         return data.get("startPageToken", "")
 
     async def list_changes(
@@ -436,6 +447,8 @@ class GoogleDriveClient:
             "fields": "nextPageToken,newStartPageToken,changes(fileId,removed,file(id,name,mimeType,size,md5Checksum,modifiedTime,parents,trashed))",
             "includeRemoved": "true",
             "spaces": "drive",
+            "supportsAllDrives": "true",  # Required for Shared Drives
+            "includeItemsFromAllDrives": "true",  # Include changes from Shared Drives
         }
 
         data = await self._request("GET", url, params=params)
