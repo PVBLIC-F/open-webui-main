@@ -564,14 +564,20 @@ class KnowledgeDriveFileTable:
             return None
 
     def update_drive_file(
-        self, file_id: str, **updates
+        self, record_id: str, **updates
     ) -> Optional[KnowledgeDriveFileModel]:
-        """Update a tracked Drive file"""
+        """
+        Update a tracked Drive file.
+        
+        Args:
+            record_id: The KnowledgeDriveFile record ID (our tracking table ID)
+            **updates: Fields to update (file_id, sync_status, etc.)
+        """
         try:
             with get_db() as db:
                 file = (
                     db.query(KnowledgeDriveFile)
-                    .filter_by(id=file_id)
+                    .filter_by(id=record_id)
                     .first()
                 )
                 if not file:
@@ -597,7 +603,7 @@ class KnowledgeDriveFileTable:
                 db.refresh(file)
                 return KnowledgeDriveFileModel.model_validate(file)
         except Exception as e:
-            log.error(f"Error updating Drive file {file_id}: {e}")
+            log.error(f"Error updating Drive file {record_id}: {e}")
             return None
 
     def mark_file_synced(
