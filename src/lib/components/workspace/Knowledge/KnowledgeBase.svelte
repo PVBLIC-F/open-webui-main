@@ -43,8 +43,9 @@
 
 	import AddContentMenu from './KnowledgeBase/AddContentMenu.svelte';
 	import AddTextContentModal from './KnowledgeBase/AddTextContentModal.svelte';
-	import ConnectDriveModal from './KnowledgeBase/ConnectDriveModal.svelte';
 	import DriveSourcesList from './KnowledgeBase/DriveSourcesList.svelte';
+	import { createFolderPicker } from '$lib/utils/google-drive-picker';
+	import { connectDriveFolder } from '$lib/apis/knowledge';
 
 	import SyncConfirmDialog from '../../common/ConfirmDialog.svelte';
 	import Drawer from '$lib/components/common/Drawer.svelte';
@@ -64,7 +65,6 @@
 
 	let showAddWebpageModal = false;
 	let showAddTextContentModal = false;
-	let showConnectDriveModal = false;
 
 	let showSyncConfirmModal = false;
 	let showAccessControlModal = false;
@@ -249,6 +249,33 @@
 				fileItems = fileItems.filter((item) => item.itemId !== fileItem.itemId);
 				toast.error(`${e}`);
 			}
+		}
+	};
+
+	const handleConnectDrive = async () => {
+		try {
+			const folder = await createFolderPicker();
+			if (folder) {
+				const result = await connectDriveFolder(localStorage.token, id, {
+					drive_folder_id: folder.id,
+					drive_folder_name: folder.name,
+					auto_sync_interval_hours: 1 // Default to hourly sync
+				});
+
+				if (result) {
+					toast.success($i18n.t('Google Drive folder connected successfully'));
+					// Reload the Drive sources list
+					if (driveSourcesListRef) {
+						driveSourcesListRef.reload();
+					}
+					// Refresh files list as initial sync may add files
+					init();
+				}
+			}
+		} catch (error) {
+			console.error('Connect Drive error:', error);
+			const errorMessage = error instanceof Error ? error.message : String(error);
+			toast.error($i18n.t('Failed to connect folder: {{error}}', { error: errorMessage }));
 		}
 	};
 
@@ -793,21 +820,6 @@
 	}}
 />
 
-{#if knowledge}
-	<ConnectDriveModal
-		bind:show={showConnectDriveModal}
-		knowledgeId={knowledge.id}
-		on:connected={() => {
-			// Reload the Drive sources list
-			if (driveSourcesListRef) {
-				driveSourcesListRef.reload();
-			}
-			// Optionally refresh files list as initial sync may have added files
-			init();
-		}}
-	/>
-{/if}
-
 <input
 	id="files-input"
 	bind:files={inputFiles}
@@ -959,9 +971,7 @@
 							onSync={() => {
 								showSyncConfirmModal = true;
 							}}
-							onConnectDrive={() => {
-								showConnectDriveModal = true;
-							}}
+							onConnectDrive={handleConnectDrive}
 						/>
 						</div>
 					{/if}
