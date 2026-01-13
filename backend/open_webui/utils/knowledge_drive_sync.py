@@ -114,6 +114,21 @@ class KnowledgeDriveSyncService:
             if not knowledge:
                 raise ValueError(f"Knowledge base {knowledge_id} not found")
 
+            # Detect Shared Drive ID if not already stored (for backward compatibility)
+            if not source.shared_drive_id:
+                try:
+                    folder_info = await drive_client.get_folder_info(source.drive_folder_id)
+                    if folder_info.drive_id:
+                        log.info(f"🔍 Detected Shared Drive ID: {folder_info.drive_id}")
+                        # Update source with the drive ID
+                        KnowledgeDriveSources.update_drive_source(
+                            source_id, shared_drive_id=folder_info.drive_id
+                        )
+                        # Update local source object
+                        source = KnowledgeDriveSources.get_drive_source_by_id(source_id)
+                except Exception as e:
+                    log.warning(f"Could not detect Shared Drive ID: {e}")
+
             # Determine sync type
             is_incremental = (
                 not force_full_sync
@@ -195,9 +210,12 @@ class KnowledgeDriveSyncService:
 
         # List all files in folder
         log.info(f"📂 Listing files in folder {source.drive_folder_id}...")
+        if source.shared_drive_id:
+            log.info(f"   Using Shared Drive ID: {source.shared_drive_id}")
         drive_files = await drive_client.list_all_folder_files(
             source.drive_folder_id,
             max_files=max_files,
+            drive_id=source.shared_drive_id,  # Pass Shared Drive ID if available
         )
 
         # Filter to supported file types

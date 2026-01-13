@@ -1227,6 +1227,10 @@ async def connect_drive_folder(
         # Update form with folder name if not provided
         if not form_data.drive_folder_name:
             form_data.drive_folder_name = folder_info.name
+        # Store Shared Drive ID if present (needed for API calls)
+        if folder_info.drive_id:
+            form_data.shared_drive_id = folder_info.drive_id
+            log.info(f"Folder is in Shared Drive: {folder_info.drive_id}")
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
