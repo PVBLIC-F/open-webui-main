@@ -186,11 +186,18 @@ class KnowledgeDriveSyncService:
         """
         Perform a full sync of all files in the Drive folder.
         """
+        # Get max files from config, default to 1000
+        max_files = 1000
+        if self.app_state and hasattr(self.app_state, "config"):
+            max_files = getattr(
+                self.app_state.config, "KNOWLEDGE_DRIVE_MAX_FILES", 1000
+            )
+
         # List all files in folder
         log.info(f"📂 Listing files in folder {source.drive_folder_id}...")
         drive_files = await drive_client.list_all_folder_files(
             source.drive_folder_id,
-            max_files=1000,
+            max_files=max_files,
         )
 
         # Filter to supported file types
@@ -249,8 +256,8 @@ class KnowledgeDriveSyncService:
                 )
 
                 if file_id:
-                    # Track the file
-                    KnowledgeDriveFiles.create_or_update_drive_file(
+                    # Track the file - create_or_update handles both cases
+                    tracked_file = KnowledgeDriveFiles.create_or_update_drive_file(
                         drive_source_id=source.id,
                         knowledge_id=source.knowledge_id,
                         drive_file_id=drive_file.id,
@@ -261,11 +268,12 @@ class KnowledgeDriveSyncService:
                         drive_file_modified_time=drive_file.modified_time,
                         file_id=file_id,
                     )
-                    KnowledgeDriveFiles.update_drive_file(
-                        existing.id if existing else None,
-                        sync_status="synced",
-                        last_sync_timestamp=int(time.time()),
-                    ) if existing else None
+
+                    # Mark as synced with timestamp
+                    if tracked_file:
+                        KnowledgeDriveFiles.mark_file_synced(
+                            tracked_file.id, file_id
+                        )
 
                     if was_update:
                         files_updated += 1

@@ -1228,7 +1228,6 @@ async def connect_drive_folder(
         if not form_data.drive_folder_name:
             form_data.drive_folder_name = folder_info.name
     except Exception as e:
-        await drive_client.close()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Cannot access Drive folder: {str(e)}",

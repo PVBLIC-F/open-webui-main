@@ -601,19 +601,32 @@ class KnowledgeDriveFileTable:
             return None
 
     def mark_file_synced(
-        self, file_id: str, open_webui_file_id: str
+        self, drive_file_record_id: str, open_webui_file_id: str
     ) -> Optional[KnowledgeDriveFileModel]:
-        """Mark a Drive file as synced with its Open WebUI file ID"""
+        """
+        Mark a Drive file as synced with its Open WebUI file ID.
+        
+        Args:
+            drive_file_record_id: The KnowledgeDriveFile record ID (our tracking record)
+            open_webui_file_id: The Open WebUI file ID from the Files table
+        """
         return self.update_drive_file(
-            file_id,
+            drive_file_record_id,
             file_id=open_webui_file_id,
             sync_status="synced",
             last_sync_timestamp=int(time.time()),
         )
 
-    def mark_file_deleted(self, file_id: str) -> Optional[KnowledgeDriveFileModel]:
-        """Mark a Drive file as deleted (no longer in Drive)"""
-        return self.update_drive_file(file_id, sync_status="deleted")
+    def mark_file_deleted(
+        self, drive_file_record_id: str
+    ) -> Optional[KnowledgeDriveFileModel]:
+        """
+        Mark a Drive file as deleted (no longer in Drive).
+        
+        Args:
+            drive_file_record_id: The KnowledgeDriveFile record ID (our tracking record)
+        """
+        return self.update_drive_file(drive_file_record_id, sync_status="deleted")
 
     def delete_drive_file(self, file_id: str) -> bool:
         """Delete a tracked Drive file"""

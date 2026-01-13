@@ -108,15 +108,6 @@ class DriveFolder:
         )
 
 
-@dataclass
-class DriveChanges:
-    """Represents changes from Google Drive"""
-
-    changes: List[Dict[str, Any]]
-    new_start_page_token: str
-    has_more: bool = False
-
-
 class GoogleDriveClient:
     """
     Google Drive API client for Knowledge base sync.
@@ -423,7 +414,7 @@ class GoogleDriveClient:
         self,
         page_token: str,
         page_size: int = 100,
-    ) -> DriveChanges:
+    ) -> tuple[List[Dict[str, Any]], Optional[str], Optional[str]]:
         """
         List changes since the given page token.
         
@@ -434,7 +425,9 @@ class GoogleDriveClient:
             page_size: Number of changes per page
             
         Returns:
-            DriveChanges with list of changes and new token
+            Tuple of (changes list, next_page_token or None, new_start_page_token or None)
+            - next_page_token: Used for pagination (None when on last page)
+            - new_start_page_token: Token for next sync (only on last page)
         """
         url = f"{DRIVE_API_BASE}/changes"
         params = {
@@ -447,10 +440,10 @@ class GoogleDriveClient:
 
         data = await self._request("GET", url, params=params)
 
-        return DriveChanges(
-            changes=data.get("changes", []),
-            new_start_page_token=data.get("newStartPageToken", page_token),
-            has_more="nextPageToken" in data,
+        return (
+            data.get("changes", []),
+            data.get("nextPageToken"),  # For pagination
+            data.get("newStartPageToken"),  # For next sync (only on last page)
         )
 
     async def get_all_changes(
@@ -470,32 +463,36 @@ class GoogleDriveClient:
         """
         all_changes = []
         current_token = page_token
-        new_token = page_token
+        new_start_token = page_token
 
         while True:
-            result = await self.list_changes(current_token)
+            changes, next_page_token, new_start_page_token = await self.list_changes(
+                current_token
+            )
             
             # Filter changes to only include files in the specified folder
             if folder_id:
                 filtered_changes = []
-                for change in result.changes:
+                for change in changes:
                     file_data = change.get("file", {})
                     parents = file_data.get("parents", [])
                     if folder_id in parents or change.get("removed"):
                         filtered_changes.append(change)
                 all_changes.extend(filtered_changes)
             else:
-                all_changes.extend(result.changes)
+                all_changes.extend(changes)
 
-            new_token = result.new_start_page_token
+            # Store the new start token when we reach the last page
+            if new_start_page_token:
+                new_start_token = new_start_page_token
 
-            if not result.has_more:
+            # Continue pagination if there's a next page
+            if not next_page_token:
                 break
 
-            # Get next page token from changes response
-            current_token = result.new_start_page_token
+            current_token = next_page_token
 
-        return all_changes, new_token
+        return all_changes, new_start_token
 
     async def check_folder_access(self, folder_id: str) -> bool:
         """
