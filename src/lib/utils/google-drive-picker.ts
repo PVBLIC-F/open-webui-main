@@ -210,3 +210,62 @@ export const createPicker = () => {
 		}
 	});
 };
+
+/**
+ * Create a Google Drive folder picker for Knowledge base sync.
+ * Returns folder ID and name for connecting to a Knowledge base.
+ */
+export const createFolderPicker = () => {
+	return new Promise(async (resolve, reject) => {
+		try {
+			console.log('Initializing Google Drive Folder Picker...');
+			await initialize();
+			console.log('Getting auth token...');
+			const token = await getAuthToken();
+			if (!token) {
+				console.error('Failed to get OAuth token');
+				throw new Error('Unable to get OAuth token');
+			}
+			console.log('Auth token obtained successfully');
+
+			const picker = new google.picker.PickerBuilder()
+				.addView(
+					new google.picker.DocsView()
+						.setIncludeFolders(true)
+						.setSelectFolderEnabled(true)
+						.setMimeTypes('application/vnd.google-apps.folder')
+				)
+				.setOAuthToken(token)
+				.setDeveloperKey(API_KEY)
+				.setTitle('Select a folder to sync')
+				.setCallback(async (data: any) => {
+					if (data[google.picker.Response.ACTION] === google.picker.Action.PICKED) {
+						try {
+							const doc = data[google.picker.Response.DOCUMENTS][0];
+							const folderId = doc[google.picker.Document.ID];
+							const folderName = doc[google.picker.Document.NAME];
+
+							if (!folderId || !folderName) {
+								throw new Error('Required folder details missing');
+							}
+
+							const result = {
+								id: folderId,
+								name: folderName
+							};
+							resolve(result);
+						} catch (error) {
+							reject(error);
+						}
+					} else if (data[google.picker.Response.ACTION] === google.picker.Action.CANCEL) {
+						resolve(null);
+					}
+				})
+				.build();
+			picker.setVisible(true);
+		} catch (error) {
+			console.error('Google Drive Folder Picker error:', error);
+			reject(error);
+		}
+	});
+};

@@ -43,6 +43,8 @@
 
 	import AddContentMenu from './KnowledgeBase/AddContentMenu.svelte';
 	import AddTextContentModal from './KnowledgeBase/AddTextContentModal.svelte';
+	import ConnectDriveModal from './KnowledgeBase/ConnectDriveModal.svelte';
+	import DriveSourcesList from './KnowledgeBase/DriveSourcesList.svelte';
 
 	import SyncConfirmDialog from '../../common/ConfirmDialog.svelte';
 	import Drawer from '$lib/components/common/Drawer.svelte';
@@ -62,9 +64,12 @@
 
 	let showAddWebpageModal = false;
 	let showAddTextContentModal = false;
+	let showConnectDriveModal = false;
 
 	let showSyncConfirmModal = false;
 	let showAccessControlModal = false;
+
+	let driveSourcesListRef: DriveSourcesList;
 
 	let minSize = 0;
 	type Knowledge = {
@@ -788,6 +793,21 @@
 	}}
 />
 
+{#if knowledge}
+	<ConnectDriveModal
+		bind:show={showConnectDriveModal}
+		knowledgeId={knowledge.id}
+		on:connected={() => {
+			// Reload the Drive sources list
+			if (driveSourcesListRef) {
+				driveSourcesListRef.reload();
+			}
+			// Optionally refresh files list as initial sync may have added files
+			init();
+		}}
+	/>
+{/if}
+
 <input
 	id="files-input"
 	bind:files={inputFiles}
@@ -891,6 +911,20 @@
 			</div>
 		</div>
 
+		<!-- Drive Sources Section (if any connected) -->
+		{#if knowledge}
+			<div class="mb-2">
+				<DriveSourcesList
+					bind:this={driveSourcesListRef}
+					knowledgeId={knowledge.id}
+					writeAccess={knowledge?.write_access}
+					on:disconnected={() => {
+						// Optionally refresh files if needed
+					}}
+				/>
+			</div>
+		{/if}
+
 		<div
 			class="mt-2 mb-2.5 py-2 -mx-0 bg-white dark:bg-gray-900 rounded-3xl border border-gray-100/30 dark:border-gray-850/30 flex-1"
 		>
@@ -910,22 +944,25 @@
 
 					{#if knowledge?.write_access}
 						<div>
-							<AddContentMenu
-								onUpload={(data) => {
-									if (data.type === 'directory') {
-										uploadDirectoryHandler();
-									} else if (data.type === 'web') {
-										showAddWebpageModal = true;
-									} else if (data.type === 'text') {
-										showAddTextContentModal = true;
-									} else {
-										document.getElementById('files-input').click();
-									}
-								}}
-								onSync={() => {
-									showSyncConfirmModal = true;
-								}}
-							/>
+						<AddContentMenu
+							onUpload={(data) => {
+								if (data.type === 'directory') {
+									uploadDirectoryHandler();
+								} else if (data.type === 'web') {
+									showAddWebpageModal = true;
+								} else if (data.type === 'text') {
+									showAddTextContentModal = true;
+								} else {
+									document.getElementById('files-input').click();
+								}
+							}}
+							onSync={() => {
+								showSyncConfirmModal = true;
+							}}
+							onConnectDrive={() => {
+								showConnectDriveModal = true;
+							}}
+						/>
 						</div>
 					{/if}
 				</div>

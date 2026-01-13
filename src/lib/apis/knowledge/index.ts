@@ -511,3 +511,244 @@ export const exportKnowledgeById = async (token: string, id: string) => {
 
 	return res;
 };
+
+// =============================================================================
+// Google Drive Integration
+// =============================================================================
+
+export type DriveSource = {
+	id: string;
+	knowledge_id: string;
+	drive_folder_id: string;
+	drive_folder_name: string | null;
+	drive_folder_path: string | null;
+	sync_status: string;
+	sync_enabled: boolean;
+	last_sync_timestamp: number | null;
+	last_sync_file_count: number;
+	error_count: number;
+	last_error: string | null;
+	created_at: number;
+};
+
+export const getDriveSources = async (token: string, knowledgeId: string) => {
+	let error = null;
+
+	const res = await fetch(`${WEBUI_API_BASE_URL}/knowledge/${knowledgeId}/drive/sources`, {
+		method: 'GET',
+		headers: {
+			Accept: 'application/json',
+			'Content-Type': 'application/json',
+			authorization: `Bearer ${token}`
+		}
+	})
+		.then(async (res) => {
+			if (!res.ok) throw await res.json();
+			return res.json();
+		})
+		.catch((err) => {
+			error = err.detail;
+			console.error(err);
+			return null;
+		});
+
+	if (error) {
+		throw error;
+	}
+
+	return res;
+};
+
+export type ConnectDriveFolderForm = {
+	drive_folder_id: string;
+	drive_folder_name?: string;
+	drive_folder_path?: string;
+	auto_sync_interval_hours?: number;
+};
+
+export const connectDriveFolder = async (
+	token: string,
+	knowledgeId: string,
+	form: ConnectDriveFolderForm
+) => {
+	let error = null;
+
+	const res = await fetch(`${WEBUI_API_BASE_URL}/knowledge/${knowledgeId}/drive/connect`, {
+		method: 'POST',
+		headers: {
+			Accept: 'application/json',
+			'Content-Type': 'application/json',
+			authorization: `Bearer ${token}`
+		},
+		body: JSON.stringify(form)
+	})
+		.then(async (res) => {
+			if (!res.ok) throw await res.json();
+			return res.json();
+		})
+		.catch((err) => {
+			error = err.detail;
+			console.error(err);
+			return null;
+		});
+
+	if (error) {
+		throw error;
+	}
+
+	return res;
+};
+
+export const disconnectDriveFolder = async (
+	token: string,
+	knowledgeId: string,
+	sourceId: string
+) => {
+	let error = null;
+
+	const res = await fetch(
+		`${WEBUI_API_BASE_URL}/knowledge/${knowledgeId}/drive/sources/${sourceId}`,
+		{
+			method: 'DELETE',
+			headers: {
+				Accept: 'application/json',
+				'Content-Type': 'application/json',
+				authorization: `Bearer ${token}`
+			}
+		}
+	)
+		.then(async (res) => {
+			if (!res.ok) throw await res.json();
+			return res.json();
+		})
+		.catch((err) => {
+			error = err.detail;
+			console.error(err);
+			return null;
+		});
+
+	if (error) {
+		throw error;
+	}
+
+	return res;
+};
+
+export const syncDriveSource = async (
+	token: string,
+	knowledgeId: string,
+	sourceId: string,
+	forceFull: boolean = false
+) => {
+	let error = null;
+
+	const searchParams = new URLSearchParams();
+	if (forceFull) searchParams.append('force_full', 'true');
+
+	const res = await fetch(
+		`${WEBUI_API_BASE_URL}/knowledge/${knowledgeId}/drive/sources/${sourceId}/sync?${searchParams.toString()}`,
+		{
+			method: 'POST',
+			headers: {
+				Accept: 'application/json',
+				'Content-Type': 'application/json',
+				authorization: `Bearer ${token}`
+			}
+		}
+	)
+		.then(async (res) => {
+			if (!res.ok) throw await res.json();
+			return res.json();
+		})
+		.catch((err) => {
+			error = err.detail;
+			console.error(err);
+			return null;
+		});
+
+	if (error) {
+		throw error;
+	}
+
+	return res;
+};
+
+export const syncAllDriveSources = async (
+	token: string,
+	knowledgeId: string,
+	forceFull: boolean = false
+) => {
+	let error = null;
+
+	const searchParams = new URLSearchParams();
+	if (forceFull) searchParams.append('force_full', 'true');
+
+	const res = await fetch(
+		`${WEBUI_API_BASE_URL}/knowledge/${knowledgeId}/drive/sync?${searchParams.toString()}`,
+		{
+			method: 'POST',
+			headers: {
+				Accept: 'application/json',
+				'Content-Type': 'application/json',
+				authorization: `Bearer ${token}`
+			}
+		}
+	)
+		.then(async (res) => {
+			if (!res.ok) throw await res.json();
+			return res.json();
+		})
+		.catch((err) => {
+			error = err.detail;
+			console.error(err);
+			return null;
+		});
+
+	if (error) {
+		throw error;
+	}
+
+	return res;
+};
+
+export type UpdateDriveSourceForm = {
+	sync_enabled?: boolean;
+	auto_sync_interval_hours?: number;
+};
+
+export const updateDriveSource = async (
+	token: string,
+	knowledgeId: string,
+	sourceId: string,
+	form: UpdateDriveSourceForm
+) => {
+	let error = null;
+
+	const res = await fetch(
+		`${WEBUI_API_BASE_URL}/knowledge/${knowledgeId}/drive/sources/${sourceId}/update`,
+		{
+			method: 'POST',
+			headers: {
+				Accept: 'application/json',
+				'Content-Type': 'application/json',
+				authorization: `Bearer ${token}`
+			},
+			body: JSON.stringify(form)
+		}
+	)
+		.then(async (res) => {
+			if (!res.ok) throw await res.json();
+			return res.json();
+		})
+		.catch((err) => {
+			error = err.detail;
+			console.error(err);
+			return null;
+		});
+
+	if (error) {
+		throw error;
+	}
+
+	return res;
+};

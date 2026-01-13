@@ -11,6 +11,8 @@
 	import FolderOpen from '$lib/components/icons/FolderOpen.svelte';
 	import ArrowPath from '$lib/components/icons/ArrowPath.svelte';
 	import GlobeAlt from '$lib/components/icons/GlobeAlt.svelte';
+	import GoogleDrive from '$lib/components/icons/GoogleDrive.svelte';
+	import { config } from '$lib/stores';
 
 	const i18n = getContext('i18n');
 
@@ -18,6 +20,7 @@
 
 	export let onSync: Function = () => {};
 	export let onUpload: Function = (data) => {};
+	export let onConnectDrive: Function = () => {};
 
 	let show = false;
 </script>
@@ -116,6 +119,20 @@
 				<BarsArrowUp strokeWidth="2" />
 				<div class="flex items-center">{$i18n.t('Add text content')}</div>
 			</DropdownMenu.Item>
+
+			{#if $config?.features?.enable_google_drive_integration}
+				<DropdownMenu.Separator class="my-1 border-t border-gray-100 dark:border-gray-800" />
+
+				<DropdownMenu.Item
+					class="flex gap-2 items-center px-3 py-1.5 text-sm  cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800  rounded-xl"
+					on:click={() => {
+						onConnectDrive();
+					}}
+				>
+					<GoogleDrive className="w-4 h-4" />
+					<div class="flex items-center">{$i18n.t('Connect Google Drive')}</div>
+				</DropdownMenu.Item>
+			{/if}
 		</DropdownMenu.Content>
 	</div>
 </Dropdown>
