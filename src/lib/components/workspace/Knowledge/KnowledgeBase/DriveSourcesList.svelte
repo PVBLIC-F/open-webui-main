@@ -39,12 +39,12 @@
 		}
 	};
 
-	const handleSync = async (sourceId: string) => {
+	const handleSync = async (sourceId: string, forceFull: boolean = false) => {
 		syncingSourceId = sourceId;
 		try {
-			const result = await syncDriveSource(localStorage.token, knowledgeId, sourceId);
+			const result = await syncDriveSource(localStorage.token, knowledgeId, sourceId, forceFull);
 			if (result) {
-				toast.success($i18n.t('Sync started'));
+				toast.success(forceFull ? $i18n.t('Full resync started') : $i18n.t('Sync started'));
 				// Reload after a delay to show updated status
 				setTimeout(loadSources, 2000);
 			}
@@ -203,12 +203,12 @@
 
 					{#if writeAccess}
 						<div class="flex items-center gap-1 shrink-0">
-							<!-- Sync Button -->
-							<Tooltip content={$i18n.t('Sync now')}>
+							<!-- Sync Button (incremental) -->
+							<Tooltip content={$i18n.t('Sync changes')}>
 								<button
 									class="p-1.5 text-gray-500 hover:text-blue-600 dark:text-gray-400 dark:hover:text-blue-400 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50"
 									disabled={syncingSourceId === source.id || source.sync_status === 'active'}
-									on:click={() => handleSync(source.id)}
+									on:click={() => handleSync(source.id, false)}
 								>
 									{#if syncingSourceId === source.id || source.sync_status === 'active'}
 										<Spinner className="w-4 h-4" />
@@ -228,6 +228,31 @@
 											/>
 										</svg>
 									{/if}
+								</button>
+							</Tooltip>
+
+							<!-- Full Resync Button (reprocess all files) -->
+							<Tooltip content={$i18n.t('Full resync (reprocess all files)')}>
+								<button
+									class="p-1.5 text-gray-400 hover:text-orange-600 dark:text-gray-500 dark:hover:text-orange-400 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50"
+									disabled={syncingSourceId === source.id || source.sync_status === 'active'}
+									on:click={() => handleSync(source.id, true)}
+								>
+									<!-- Database refresh icon -->
+									<svg
+										xmlns="http://www.w3.org/2000/svg"
+										class="w-4 h-4"
+										fill="none"
+										viewBox="0 0 24 24"
+										stroke="currentColor"
+									>
+										<path
+											stroke-linecap="round"
+											stroke-linejoin="round"
+											stroke-width="2"
+											d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4"
+										/>
+									</svg>
 								</button>
 							</Tooltip>
 
