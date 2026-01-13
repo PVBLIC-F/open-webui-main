@@ -470,6 +470,11 @@ from open_webui.config import (
     GMAIL_PROCESS_ATTACHMENTS,
     GMAIL_MAX_ATTACHMENT_SIZE_MB,
     GMAIL_ATTACHMENT_TYPES,
+    # Google Drive Knowledge Sync
+    ENABLE_KNOWLEDGE_DRIVE_SYNC,
+    ENABLE_KNOWLEDGE_DRIVE_PERIODIC_SYNC,
+    KNOWLEDGE_DRIVE_DEFAULT_SYNC_INTERVAL,
+    KNOWLEDGE_DRIVE_MAX_FILES,
     # Pinecone dimension (needed for embeddings)
     PINECONE_DIMENSION,
     AppConfig,
@@ -665,6 +670,16 @@ async def lifespan(app: FastAPI):
 
         asyncio.create_task(periodic_gmail_sync_scheduler())
         log.info("🔄 Gmail periodic sync scheduler started")
+
+    # Start Google Drive periodic sync if enabled
+    if (
+        app.state.config.ENABLE_KNOWLEDGE_DRIVE_SYNC
+        and app.state.config.ENABLE_KNOWLEDGE_DRIVE_PERIODIC_SYNC
+    ):
+        from open_webui.utils.knowledge_drive_sync import periodic_drive_sync_scheduler
+
+        asyncio.create_task(periodic_drive_sync_scheduler(app.state))
+        log.info("📂 Google Drive periodic sync scheduler started")
 
     if app.state.config.ENABLE_BASE_MODELS_CACHE:
         await get_all_models(
@@ -993,6 +1008,12 @@ app.state.config.GMAIL_MAX_ATTACHMENT_SIZE_MB = GMAIL_MAX_ATTACHMENT_SIZE_MB
 app.state.config.GMAIL_ATTACHMENT_TYPES = GMAIL_ATTACHMENT_TYPES
 app.state.config.PINECONE_DIMENSION = PINECONE_DIMENSION
 # Note: Gmail now uses per-user namespaces (email-{user_id}), no shared namespace
+
+# Google Drive Knowledge Sync
+app.state.config.ENABLE_KNOWLEDGE_DRIVE_SYNC = ENABLE_KNOWLEDGE_DRIVE_SYNC
+app.state.config.ENABLE_KNOWLEDGE_DRIVE_PERIODIC_SYNC = ENABLE_KNOWLEDGE_DRIVE_PERIODIC_SYNC
+app.state.config.KNOWLEDGE_DRIVE_DEFAULT_SYNC_INTERVAL = KNOWLEDGE_DRIVE_DEFAULT_SYNC_INTERVAL
+app.state.config.KNOWLEDGE_DRIVE_MAX_FILES = KNOWLEDGE_DRIVE_MAX_FILES
 
 app.state.config.RAG_EMBEDDING_ENGINE = RAG_EMBEDDING_ENGINE
 app.state.config.RAG_EMBEDDING_MODEL = RAG_EMBEDDING_MODEL

@@ -364,7 +364,7 @@ GOOGLE_OAUTH_SCOPE = PersistentConfig(
     "oauth.google.scope",
     os.environ.get(
         "GOOGLE_OAUTH_SCOPE",
-        "openid email profile https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.modify",
+        "openid email profile https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/drive.readonly",
     ),
 )
 
@@ -533,6 +533,39 @@ GMAIL_YIELD_DELAY_MS = PersistentConfig(
     "GMAIL_YIELD_DELAY_MS",
     "gmail.performance.yield_delay_ms",
     int(os.environ.get("GMAIL_YIELD_DELAY_MS", "10")),
+)
+
+####################################
+# Google Drive Knowledge Sync Settings
+####################################
+
+# Enable Google Drive integration for Knowledge bases
+# When enabled, users can connect Drive folders to Knowledge bases for auto-sync
+ENABLE_KNOWLEDGE_DRIVE_SYNC = PersistentConfig(
+    "ENABLE_KNOWLEDGE_DRIVE_SYNC",
+    "knowledge.drive_sync.enable",
+    os.environ.get("ENABLE_KNOWLEDGE_DRIVE_SYNC", "True").lower() == "true",
+)
+
+# Enable periodic background sync for Drive sources
+ENABLE_KNOWLEDGE_DRIVE_PERIODIC_SYNC = PersistentConfig(
+    "ENABLE_KNOWLEDGE_DRIVE_PERIODIC_SYNC",
+    "knowledge.drive_sync.periodic_enabled",
+    os.environ.get("ENABLE_KNOWLEDGE_DRIVE_PERIODIC_SYNC", "True").lower() == "true",
+)
+
+# Default sync interval for new Drive sources (hours)
+KNOWLEDGE_DRIVE_DEFAULT_SYNC_INTERVAL = PersistentConfig(
+    "KNOWLEDGE_DRIVE_DEFAULT_SYNC_INTERVAL",
+    "knowledge.drive_sync.default_interval_hours",
+    int(os.environ.get("KNOWLEDGE_DRIVE_DEFAULT_SYNC_INTERVAL", "1")),
+)
+
+# Maximum files to sync per Drive folder
+KNOWLEDGE_DRIVE_MAX_FILES = PersistentConfig(
+    "KNOWLEDGE_DRIVE_MAX_FILES",
+    "knowledge.drive_sync.max_files",
+    int(os.environ.get("KNOWLEDGE_DRIVE_MAX_FILES", "1000")),
 )
 
 ####################################

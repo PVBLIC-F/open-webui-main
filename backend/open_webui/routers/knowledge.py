@@ -1085,3 +1085,476 @@ async def export_knowledge_by_id(
         media_type="application/zip",
         headers={"Content-Disposition": f"attachment; filename={zip_filename}"},
     )
+
+
+############################
+# Google Drive Integration
+############################
+
+
+from open_webui.models.knowledge_drive import (
+    KnowledgeDriveSources,
+    KnowledgeDriveFiles,
+    KnowledgeDriveSourceForm,
+    KnowledgeDriveSourceResponse,
+    KnowledgeDriveSourceModel,
+)
+
+
+class DriveSourcesResponse(BaseModel):
+    """Response containing list of Drive sources for a Knowledge base"""
+
+    sources: List[KnowledgeDriveSourceResponse]
+
+
+class DriveSyncResponse(BaseModel):
+    """Response for Drive sync operation"""
+
+    status: str
+    message: str
+    source_id: Optional[str] = None
+
+
+############################
+# GetDriveSources
+############################
+
+
+@router.get("/{id}/drive/sources", response_model=DriveSourcesResponse)
+async def get_drive_sources(
+    id: str,
+    user=Depends(get_verified_user),
+    db: Session = Depends(get_session),
+):
+    """
+    Get all Google Drive sources connected to a Knowledge base.
+    """
+    knowledge = Knowledges.get_knowledge_by_id(id=id, db=db)
+    if not knowledge:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=ERROR_MESSAGES.NOT_FOUND,
+        )
+
+    # Check access
+    if (
+        knowledge.user_id != user.id
+        and not has_access(user.id, "read", knowledge.access_control, db=db)
+        and user.role != "admin"
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
+        )
+
+    sources = KnowledgeDriveSources.get_drive_sources_by_knowledge_id(id)
+
+    return DriveSourcesResponse(
+        sources=[
+            KnowledgeDriveSourceResponse(
+                id=s.id,
+                knowledge_id=s.knowledge_id,
+                drive_folder_id=s.drive_folder_id,
+                drive_folder_name=s.drive_folder_name,
+                drive_folder_path=s.drive_folder_path,
+                sync_status=s.sync_status,
+                sync_enabled=s.sync_enabled,
+                last_sync_timestamp=s.last_sync_timestamp,
+                last_sync_file_count=s.last_sync_file_count,
+                error_count=s.error_count,
+                last_error=s.last_error,
+                created_at=s.created_at,
+            )
+            for s in sources
+        ]
+    )
+
+
+############################
+# ConnectDriveFolder
+############################
+
+
+@router.post("/{id}/drive/connect", response_model=KnowledgeDriveSourceResponse)
+async def connect_drive_folder(
+    request: Request,
+    id: str,
+    form_data: KnowledgeDriveSourceForm,
+    user=Depends(get_verified_user),
+    db: Session = Depends(get_session),
+):
+    """
+    Connect a Google Drive folder to a Knowledge base.
+    
+    The folder will be synced automatically based on the configured interval.
+    Requires user to have Google OAuth with Drive scope.
+    """
+    knowledge = Knowledges.get_knowledge_by_id(id=id, db=db)
+    if not knowledge:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=ERROR_MESSAGES.NOT_FOUND,
+        )
+
+    # Check write access
+    if (
+        knowledge.user_id != user.id
+        and not has_access(user.id, "write", knowledge.access_control, db=db)
+        and user.role != "admin"
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
+        )
+
+    # Verify user has Google Drive access
+    from open_webui.utils.google_drive_client import create_drive_client_for_user
+
+    drive_client = await create_drive_client_for_user(
+        request.app.state.oauth_manager,
+        user.id,
+    )
+
+    if not drive_client:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Google Drive access not available. Please connect your Google account with Drive permissions.",
+        )
+
+    # Verify folder access
+    try:
+        folder_info = await drive_client.get_folder_info(form_data.drive_folder_id)
+        # Update form with folder name if not provided
+        if not form_data.drive_folder_name:
+            form_data.drive_folder_name = folder_info.name
+    except Exception as e:
+        await drive_client.close()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot access Drive folder: {str(e)}",
+        )
+    finally:
+        await drive_client.close()
+
+    # Check if folder is already connected
+    existing_sources = KnowledgeDriveSources.get_drive_sources_by_knowledge_id(id)
+    for source in existing_sources:
+        if source.drive_folder_id == form_data.drive_folder_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This folder is already connected to this Knowledge base.",
+            )
+
+    # Create drive source
+    source = KnowledgeDriveSources.create_drive_source(
+        knowledge_id=id,
+        user_id=user.id,
+        form_data=form_data,
+    )
+
+    if not source:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to connect Drive folder.",
+        )
+
+    log.info(
+        f"Connected Drive folder {form_data.drive_folder_id} to knowledge {id} "
+        f"(source: {source.id})"
+    )
+
+    return KnowledgeDriveSourceResponse(
+        id=source.id,
+        knowledge_id=source.knowledge_id,
+        drive_folder_id=source.drive_folder_id,
+        drive_folder_name=source.drive_folder_name,
+        drive_folder_path=source.drive_folder_path,
+        sync_status=source.sync_status,
+        sync_enabled=source.sync_enabled,
+        last_sync_timestamp=source.last_sync_timestamp,
+        last_sync_file_count=source.last_sync_file_count,
+        error_count=source.error_count,
+        last_error=source.last_error,
+        created_at=source.created_at,
+    )
+
+
+############################
+# DisconnectDriveFolder
+############################
+
+
+@router.delete("/{id}/drive/sources/{source_id}", response_model=bool)
+async def disconnect_drive_folder(
+    id: str,
+    source_id: str,
+    user=Depends(get_verified_user),
+    db: Session = Depends(get_session),
+):
+    """
+    Disconnect a Google Drive folder from a Knowledge base.
+    
+    This removes the sync connection but does not delete files already synced.
+    """
+    knowledge = Knowledges.get_knowledge_by_id(id=id, db=db)
+    if not knowledge:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=ERROR_MESSAGES.NOT_FOUND,
+        )
+
+    # Check write access
+    if (
+        knowledge.user_id != user.id
+        and not has_access(user.id, "write", knowledge.access_control, db=db)
+        and user.role != "admin"
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
+        )
+
+    # Verify source exists and belongs to this knowledge
+    source = KnowledgeDriveSources.get_drive_source_by_id(source_id)
+    if not source or source.knowledge_id != id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Drive source not found.",
+        )
+
+    # Delete source (also deletes tracked files)
+    result = KnowledgeDriveSources.delete_drive_source(source_id)
+
+    log.info(f"Disconnected Drive source {source_id} from knowledge {id}")
+
+    return result
+
+
+############################
+# SyncDriveSource
+############################
+
+
+@router.post("/{id}/drive/sources/{source_id}/sync", response_model=DriveSyncResponse)
+async def sync_drive_source(
+    request: Request,
+    id: str,
+    source_id: str,
+    force_full: bool = Query(False, description="Force full sync instead of incremental"),
+    user=Depends(get_verified_user),
+    db: Session = Depends(get_session),
+):
+    """
+    Manually trigger a sync for a Drive source.
+    
+    By default, performs incremental sync (only changed files).
+    Set force_full=true to resync all files.
+    """
+    knowledge = Knowledges.get_knowledge_by_id(id=id, db=db)
+    if not knowledge:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=ERROR_MESSAGES.NOT_FOUND,
+        )
+
+    # Check write access
+    if (
+        knowledge.user_id != user.id
+        and not has_access(user.id, "write", knowledge.access_control, db=db)
+        and user.role != "admin"
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
+        )
+
+    # Verify source exists
+    source = KnowledgeDriveSources.get_drive_source_by_id(source_id)
+    if not source or source.knowledge_id != id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Drive source not found.",
+        )
+
+    # Check if sync is already running
+    if source.sync_status == "active":
+        return DriveSyncResponse(
+            status="already_running",
+            message="Sync is already in progress for this source.",
+            source_id=source_id,
+        )
+
+    # Trigger sync in background
+    from open_webui.utils.knowledge_drive_sync import sync_knowledge_drive_source
+    from open_webui.tasks import create_task
+
+    try:
+        task_id, _ = await create_task(
+            request.app.state.redis,
+            sync_knowledge_drive_source(
+                source_id,
+                request.app.state,
+                force_full_sync=force_full,
+            ),
+            id=f"drive_sync_{source_id}",
+        )
+
+        log.info(f"Started Drive sync task {task_id} for source {source_id}")
+
+        return DriveSyncResponse(
+            status="started",
+            message="Sync started. Check source status for progress.",
+            source_id=source_id,
+        )
+
+    except Exception as e:
+        log.error(f"Failed to start Drive sync: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to start sync: {str(e)}",
+        )
+
+
+############################
+# SyncAllDriveSources
+############################
+
+
+@router.post("/{id}/drive/sync", response_model=DriveSyncResponse)
+async def sync_all_drive_sources(
+    request: Request,
+    id: str,
+    force_full: bool = Query(False, description="Force full sync instead of incremental"),
+    user=Depends(get_verified_user),
+    db: Session = Depends(get_session),
+):
+    """
+    Trigger sync for all Drive sources connected to a Knowledge base.
+    """
+    knowledge = Knowledges.get_knowledge_by_id(id=id, db=db)
+    if not knowledge:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=ERROR_MESSAGES.NOT_FOUND,
+        )
+
+    # Check write access
+    if (
+        knowledge.user_id != user.id
+        and not has_access(user.id, "write", knowledge.access_control, db=db)
+        and user.role != "admin"
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
+        )
+
+    sources = KnowledgeDriveSources.get_drive_sources_by_knowledge_id(id)
+
+    if not sources:
+        return DriveSyncResponse(
+            status="no_sources",
+            message="No Drive sources connected to this Knowledge base.",
+        )
+
+    # Trigger sync for all sources
+    from open_webui.utils.knowledge_drive_sync import trigger_drive_sync_for_knowledge
+    from open_webui.tasks import create_task
+
+    try:
+        task_id, _ = await create_task(
+            request.app.state.redis,
+            trigger_drive_sync_for_knowledge(
+                id,
+                request.app.state,
+                force_full_sync=force_full,
+            ),
+            id=f"drive_sync_knowledge_{id}",
+        )
+
+        log.info(f"Started Drive sync task {task_id} for knowledge {id}")
+
+        return DriveSyncResponse(
+            status="started",
+            message=f"Sync started for {len(sources)} source(s).",
+        )
+
+    except Exception as e:
+        log.error(f"Failed to start Drive sync: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to start sync: {str(e)}",
+        )
+
+
+############################
+# UpdateDriveSource
+############################
+
+
+class DriveSourceUpdateForm(BaseModel):
+    sync_enabled: Optional[bool] = None
+    auto_sync_interval_hours: Optional[int] = None
+
+
+@router.post("/{id}/drive/sources/{source_id}/update", response_model=KnowledgeDriveSourceResponse)
+async def update_drive_source(
+    id: str,
+    source_id: str,
+    form_data: DriveSourceUpdateForm,
+    user=Depends(get_verified_user),
+    db: Session = Depends(get_session),
+):
+    """
+    Update settings for a Drive source.
+    """
+    knowledge = Knowledges.get_knowledge_by_id(id=id, db=db)
+    if not knowledge:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=ERROR_MESSAGES.NOT_FOUND,
+        )
+
+    # Check write access
+    if (
+        knowledge.user_id != user.id
+        and not has_access(user.id, "write", knowledge.access_control, db=db)
+        and user.role != "admin"
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=ERROR_MESSAGES.ACCESS_PROHIBITED,
+        )
+
+    # Verify source exists
+    source = KnowledgeDriveSources.get_drive_source_by_id(source_id)
+    if not source or source.knowledge_id != id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Drive source not found.",
+        )
+
+    # Build updates
+    updates = {}
+    if form_data.sync_enabled is not None:
+        updates["sync_enabled"] = form_data.sync_enabled
+    if form_data.auto_sync_interval_hours is not None:
+        updates["auto_sync_interval_hours"] = form_data.auto_sync_interval_hours
+
+    if updates:
+        source = KnowledgeDriveSources.update_drive_source(source_id, **updates)
+
+    return KnowledgeDriveSourceResponse(
+        id=source.id,
+        knowledge_id=source.knowledge_id,
+        drive_folder_id=source.drive_folder_id,
+        drive_folder_name=source.drive_folder_name,
+        drive_folder_path=source.drive_folder_path,
+        sync_status=source.sync_status,
+        sync_enabled=source.sync_enabled,
+        last_sync_timestamp=source.last_sync_timestamp,
+        last_sync_file_count=source.last_sync_file_count,
+        error_count=source.error_count,
+        last_error=source.last_error,
+        created_at=source.created_at,
+    )
