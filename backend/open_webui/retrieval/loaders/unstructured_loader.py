@@ -56,7 +56,7 @@ class UnstructuredUnifiedLoader:
     def __init__(
         self,
         file_path: str,
-        strategy: str = "hi_res",  # Default to hi_res for better element classification
+        strategy: str = "auto",  # Default to auto for smart strategy selection (fast if text extractable)
         include_metadata: bool = True,
         clean_text: bool = True,
         chunk_by_semantic: bool = True,
@@ -180,87 +180,146 @@ class UnstructuredUnifiedLoader:
                                 break
             
             log.info(f"Valid elements after filtering: {len(valid_elements)}")
+            
+            # Check if we got minimal/empty results and should try hi_res
+            # This handles cases where fast/auto couldn't extract text (scanned PDFs, etc.)
+            file_ext = Path(self.file_path).suffix.lower()
+            if (
+                file_ext == ".pdf" 
+                and len(valid_elements) < 3  # Very few elements extracted
+                and strategy in ["auto", "fast"]  # We used a fast strategy
+            ):
+                total_text = sum(len(getattr(e, 'text', '') or '') for e in valid_elements)
+                if total_text < 100:  # Less than 100 chars total
+                    log.warning(
+                        f"Fast strategy returned minimal content ({len(valid_elements)} elements, "
+                        f"{total_text} chars), trying 'hi_res' for better extraction"
+                    )
+                    try:
+                        elements = partition(
+                            filename=self.file_path,
+                            strategy="hi_res",
+                            include_metadata=self.include_metadata,
+                            infer_table_structure=self.infer_table_structure,
+                            extract_images_in_pdf=self.extract_images_in_pdf,
+                            **self.kwargs
+                        )
+                        log.info(f"hi_res fallback successful: {len(elements)} elements extracted")
+                        
+                        # Re-apply filtering
+                        upgraded_elements = []
+                        for element in elements:
+                            has_text = False
+                            if hasattr(element, 'text') and element.text and element.text.strip():
+                                has_text = True
+                            elif hasattr(element, 'content') and element.content and element.content.strip():
+                                has_text = True
+                            if has_text:
+                                element_category = getattr(element, 'category', None)
+                                if element_category not in ['Header', 'Footer', 'PageNumber', 'PageBreak']:
+                                    upgraded_elements.append(element)
+                        
+                        if len(upgraded_elements) > len(valid_elements):
+                            log.info(f"hi_res extracted more content: {len(upgraded_elements)} vs {len(valid_elements)} elements")
+                            return upgraded_elements
+                    except Exception as hi_res_error:
+                        log.warning(f"hi_res fallback failed: {hi_res_error}, using original results")
+            
             return valid_elements
             
         except Exception as e:
             log.error(f"Error partitioning document {self.file_path}: {e}")
             
-            # If the error is related to complex processing, try a simpler strategy
-            if any(keyword in str(e).lower() for keyword in ["list index out of range", "timeout", "empty", "no content", "failed to extract"]):
-                log.warning(f"Complex processing failed, trying 'fast' strategy: {e}")
+            # If the error is related to complex processing, try a different strategy
+            file_ext = Path(self.file_path).suffix.lower()
+            error_str = str(e).lower()
+            
+            if any(keyword in error_str for keyword in ["list index out of range", "timeout", "empty", "no content", "failed to extract"]):
+                # For PDFs, try hi_res if fast/auto failed (might be scanned)
+                if file_ext == ".pdf":
+                    log.warning(f"Fast/auto processing failed, trying 'hi_res' strategy: {e}")
+                    try:
+                        elements = partition(
+                            filename=self.file_path,
+                            strategy="hi_res",
+                            include_metadata=self.include_metadata,
+                            infer_table_structure=False,
+                            extract_images_in_pdf=False,
+                            **self.kwargs
+                        )
+                        log.info(f"hi_res fallback successful: {len(elements)} elements extracted")
+                        
+                        valid_elements = []
+                        for element in elements:
+                            if hasattr(element, 'text') and element.text and element.text.strip():
+                                valid_elements.append(element)
+                            elif hasattr(element, 'content') and element.content and element.content.strip():
+                                valid_elements.append(element)
+                        
+                        log.info(f"Valid elements after hi_res fallback: {len(valid_elements)}")
+                        return valid_elements
+                        
+                    except Exception as hi_res_error:
+                        log.error(f"hi_res fallback also failed: {hi_res_error}")
+                
+                # Last resort: try with minimal options
                 try:
+                    log.warning("Trying minimal 'fast' processing as last resort")
                     elements = partition(
                         filename=self.file_path,
                         strategy="fast",
-                        include_metadata=self.include_metadata,
+                        include_metadata=False,
                         infer_table_structure=False,
                         extract_images_in_pdf=False,
-                        **self.kwargs
                     )
-                    log.info(f"Fallback strategy successful: {len(elements)} elements extracted")
-                    
-                    # Apply the same filtering as the main strategy
-                    valid_elements = []
-                    for element in elements:
-                        if hasattr(element, 'text') and element.text and element.text.strip():
-                            valid_elements.append(element)
-                        elif hasattr(element, 'content') and element.content and element.content.strip():
-                            valid_elements.append(element)
-                    
-                    log.info(f"Valid elements after fallback filtering: {len(valid_elements)}")
-                    return valid_elements
-                    
-                except Exception as fallback_error:
-                    log.error(f"Fallback strategy also failed: {fallback_error}")
-                    
-                    # Last resort: try with minimal options
-                    try:
-                        log.warning("Trying minimal processing as last resort")
-                        elements = partition(
-                            filename=self.file_path,
-                            strategy="fast",
-                            include_metadata=False,
-                            infer_table_structure=False,
-                            extract_images_in_pdf=False,
-                        )
-                        log.info(f"Minimal processing successful: {len(elements)} elements extracted")
-                        return elements
-                    except Exception as minimal_error:
-                        log.error(f"Minimal processing also failed: {minimal_error}")
+                    log.info(f"Minimal processing successful: {len(elements)} elements extracted")
+                    return elements
+                except Exception as minimal_error:
+                    log.error(f"Minimal processing also failed: {minimal_error}")
             
             raise
     
     def _get_optimal_strategy(self, file_ext: str) -> str:
         """
-        Select optimal processing strategy based on file type and size.
-        Uses hi_res for PDFs to get better element classification (Headers, Footers, etc.)
+        Select optimal processing strategy based on file type.
+        
+        Strategy selection (from Unstructured docs):
+        - "auto": Smart selection - uses "fast" if text extractable, "ocr_only" otherwise
+        - "fast": Rule-based extraction, ~100x faster than model-based
+        - "hi_res": Model-based (detectron2), best for complex layouts/tables
+        - "ocr_only": For scanned documents/images
+        
+        We prioritize speed while maintaining quality through smart fallbacks.
         """
-        file_size = os.path.getsize(self.file_path)
+        # If user explicitly requested a specific strategy (not the default "auto"),
+        # respect their choice for all file types
+        if self.strategy and self.strategy not in ["auto", ""]:
+            log.debug(f"Using user-configured strategy '{self.strategy}' for {file_ext}")
+            return self.strategy
         
-        # PDFs: Use hi_res strategy for better element classification
-        # hi_res uses detectron2 for layout analysis, identifying Headers/Footers properly
+        # PDFs: Use "auto" strategy for smart selection
+        # "auto" chooses "fast" if text is extractable, "ocr_only" for scanned PDFs
+        # Copy-protected PDFs automatically fall back to "hi_res"
         if file_ext == ".pdf":
-            # Use fast strategy only for very large PDFs (>20MB) for performance
-            if file_size > 20_000_000 and self.strategy != "hi_res":
-                log.info(f"PDF is large ({file_size / 1_000_000:.1f}MB), using 'fast' strategy for performance")
-                return "fast"
-            # Default to hi_res for better quality
-            return "hi_res"
+            # Use "auto" for intelligent strategy selection
+            # This is ~100x faster than always using "hi_res" for simple PDFs
+            log.debug(f"Using 'auto' strategy for PDF (will use 'fast' if text extractable)")
+            return "auto"
         
-        # Office documents work well with fast strategy
+        # Office documents: structured formats, fast extraction works well
         elif file_ext in [".docx", ".pptx", ".xlsx", ".doc", ".ppt", ".xls"]:
             return "fast"
         
-        # Text-based formats don't need OCR
+        # Text-based formats: no OCR needed
         elif file_ext in [".txt", ".md", ".html", ".csv", ".json", ".xml"]:
             return "fast"
         
-        # Images need OCR
+        # Images: must use OCR
         elif file_ext in [".png", ".jpg", ".jpeg", ".tiff", ".bmp", ".gif"]:
             return "ocr_only"
         
-        # Default to fast for unknown types (faster than "auto")
-        return "fast"
+        # Default to "auto" for unknown types (smart selection)
+        return "auto"
     
     def _clean_elements(self, elements):
         """Apply comprehensive text cleaning to elements and filter unwanted content"""
@@ -584,7 +643,7 @@ def create_unstructured_loader(
     """
     return UnstructuredUnifiedLoader(
         file_path=file_path,
-        strategy=config.get("UNSTRUCTURED_STRATEGY", "hi_res"),  # Default to hi_res for better quality
+        strategy=config.get("UNSTRUCTURED_STRATEGY", "auto"),  # Default to auto for smart selection (~100x faster for simple PDFs)
         include_metadata=config.get("UNSTRUCTURED_INCLUDE_METADATA", True),
         clean_text=config.get("UNSTRUCTURED_CLEAN_TEXT", True),
         chunk_by_semantic=config.get("UNSTRUCTURED_SEMANTIC_CHUNKING", True),
