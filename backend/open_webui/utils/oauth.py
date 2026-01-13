@@ -1448,6 +1448,10 @@ class OAuthManager:
         if auth_manager_config.OAUTH_AUDIENCE:
             kwargs["audience"] = auth_manager_config.OAUTH_AUDIENCE
 
+        # Log OAuth scope for debugging
+        if hasattr(client, 'client_kwargs'):
+            log.info(f"OAuth {provider} login - scope: {client.client_kwargs.get('scope', 'NOT SET')}")
+
         return await client.authorize_redirect(request, redirect_uri, **kwargs)
 
     async def handle_callback(self, request, provider, response, db=None):

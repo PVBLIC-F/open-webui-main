@@ -1218,7 +1218,7 @@ async def connect_drive_folder(
     if not drive_client:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Google Drive access not available. Please connect your Google account with Drive permissions.",
+            detail="Google Drive access not available. Please log out and log back in with Google to grant Drive permissions, or check that your admin has enabled Drive scope in OAuth settings.",
         )
 
     # Verify folder access
