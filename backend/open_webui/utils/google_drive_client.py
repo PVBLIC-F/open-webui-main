@@ -308,6 +308,8 @@ class GoogleDriveClient:
             "orderBy": "modifiedTime desc",
             "supportsAllDrives": "true",  # Required for Shared Drives
             "includeItemsFromAllDrives": "true",  # Include items from Shared Drives
+            # Note: Using default corpora=user with includeItemsFromAllDrives=true
+            # This queries "files that the user has accessed, including shared drive files"
         }
         if page_token:
             params["pageToken"] = page_token
