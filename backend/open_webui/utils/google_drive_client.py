@@ -328,7 +328,13 @@ class GoogleDriveClient:
         if page_token:
             params["pageToken"] = page_token
 
+        log.info(f"📡 Drive API request: {params}")
         data = await self._request("GET", url, params=params)
+        log.info(f"📡 Drive API response: {len(data.get('files', []))} items returned")
+        
+        # Log first few items for debugging
+        for i, f in enumerate(data.get("files", [])[:3]):
+            log.info(f"   Item {i+1}: {f.get('name')} ({f.get('mimeType')})")
 
         files = [
             DriveFile.from_api_response(f)
