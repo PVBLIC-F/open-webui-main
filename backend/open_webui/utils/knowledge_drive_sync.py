@@ -554,7 +554,22 @@ class KnowledgeDriveSyncService:
 
                 # Process file using existing infrastructure
                 # Note: process_file is synchronous, run in executor
+                # 
+                # IMPORTANT: First call WITHOUT collection_name to trigger
+                # the Loader to extract content from the file and create
+                # vectors in file-{file_id} collection
                 loop = asyncio.get_running_loop()
+                await loop.run_in_executor(
+                    None,
+                    process_file,
+                    request,
+                    ProcessFileForm(file_id=file_id),  # No collection_name!
+                    user,
+                    None,  # db session
+                )
+                
+                # Now call WITH collection_name to copy vectors to knowledge base
+                # This will find existing vectors in file-{file_id} and reuse them
                 await loop.run_in_executor(
                     None,
                     process_file,
