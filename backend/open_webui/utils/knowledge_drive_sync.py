@@ -193,11 +193,18 @@ class KnowledgeDriveSyncService:
                 self.app_state.config, "KNOWLEDGE_DRIVE_MAX_FILES", 1000
             )
 
+        # Detect if folder is in a Shared Drive (need drive_id for API)
+        folder_info = await drive_client.get_folder_info(source.drive_folder_id)
+        drive_id = folder_info.drive_id
+        
         # List all files in folder
         log.info(f"📂 Listing files in folder {source.drive_folder_id}...")
+        if drive_id:
+            log.info(f"   Folder is in Shared Drive: {drive_id}")
         drive_files = await drive_client.list_all_folder_files(
             source.drive_folder_id,
             max_files=max_files,
+            drive_id=drive_id,  # Required for Shared Drives
         )
 
         # Filter to supported file types

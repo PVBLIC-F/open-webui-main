@@ -97,6 +97,7 @@ class DriveFolder:
     id: str
     name: str
     parents: Optional[List[str]] = None
+    drive_id: Optional[str] = None  # Shared Drive ID (only present for Shared Drive items)
 
     @classmethod
     def from_api_response(cls, data: dict) -> "DriveFolder":
@@ -105,6 +106,7 @@ class DriveFolder:
             id=data.get("id", ""),
             name=data.get("name", ""),
             parents=data.get("parents"),
+            drive_id=data.get("driveId"),
         )
 
 
@@ -264,11 +266,11 @@ class GoogleDriveClient:
             folder_id: Google Drive folder ID
             
         Returns:
-            DriveFolder with folder details
+            DriveFolder with folder details (includes driveId for Shared Drives)
         """
         url = f"{DRIVE_API_BASE}/files/{folder_id}"
         params = {
-            "fields": "id,name,parents",
+            "fields": "id,name,parents,driveId",  # driveId present for Shared Drive items
             "supportsAllDrives": "true",  # Required for Shared Drives and shared folders
         }
 
@@ -281,6 +283,7 @@ class GoogleDriveClient:
         include_trashed: bool = False,
         page_size: int = 100,
         page_token: Optional[str] = None,
+        drive_id: Optional[str] = None,
     ) -> tuple[List[DriveFile], Optional[str]]:
         """
         List all files in a folder (non-recursive).
@@ -290,6 +293,7 @@ class GoogleDriveClient:
             include_trashed: Include trashed files
             page_size: Number of files per page
             page_token: Token for pagination
+            drive_id: Shared Drive ID (required for folders in Shared Drives)
             
         Returns:
             Tuple of (list of DriveFile, next_page_token or None)
@@ -305,12 +309,19 @@ class GoogleDriveClient:
             "q": query,
             "fields": "nextPageToken,files(id,name,mimeType,size,md5Checksum,modifiedTime,parents,trashed)",
             "pageSize": page_size,
-            "orderBy": "modifiedTime desc",
             "supportsAllDrives": "true",  # Required for Shared Drives
             "includeItemsFromAllDrives": "true",  # Include items from Shared Drives
-            # Note: Using default corpora=user with includeItemsFromAllDrives=true
-            # This queries "files that the user has accessed, including shared drive files"
         }
+        
+        # For Shared Drives, MUST use corpora=drive with driveId
+        # Without this, the API returns empty results for Shared Drive folders
+        if drive_id:
+            params["corpora"] = "drive"
+            params["driveId"] = drive_id
+        else:
+            # For regular folders, can use orderBy (not supported with corpora=drive)
+            params["orderBy"] = "modifiedTime desc"
+        
         if page_token:
             params["pageToken"] = page_token
 
@@ -330,6 +341,7 @@ class GoogleDriveClient:
         folder_id: str,
         include_trashed: bool = False,
         max_files: int = 1000,
+        drive_id: Optional[str] = None,
     ) -> List[DriveFile]:
         """
         List all files in a folder (handles pagination).
@@ -338,6 +350,7 @@ class GoogleDriveClient:
             folder_id: Google Drive folder ID
             include_trashed: Include trashed files
             max_files: Maximum files to return
+            drive_id: Shared Drive ID (required for folders in Shared Drives)
             
         Returns:
             List of DriveFile objects
@@ -350,6 +363,7 @@ class GoogleDriveClient:
                 folder_id,
                 include_trashed=include_trashed,
                 page_token=page_token,
+                drive_id=drive_id,
             )
             all_files.extend(files)
 
