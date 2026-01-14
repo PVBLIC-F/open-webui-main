@@ -1,16 +1,16 @@
 """
 title: LLM Council Tool
-author: matheusbuniotto (refactored for Open WebUI)
-funding_url: https://github.com/matheusbuniotto/openwebui-tools
-version: 1.3.0
+author: Chris Headings (refactored for Open WebUI)
+version: 1.5.0
 license: MIT
-description: 3-stage LLM Council with consensus analysis - multiple models deliberate to produce comprehensive answers.
-required_open_webui_version: 0.3.0
+description: 3-stage LLM Council with consensus analysis and optional Exa fact verification - multiple models deliberate to produce comprehensive answers.
+required_open_webui_version: 0.7.2
 requirements: aiohttp
 """
 
 import asyncio
 import aiohttp
+import json
 import logging
 import os
 import re
@@ -47,6 +47,23 @@ class Tools:
         show_individual_responses: bool = Field(default=True)
         show_peer_rankings: bool = Field(default=True)
         show_aggregate_rankings: bool = Field(default=True)
+        # Exa Fact Verification
+        exa_api_key: str = Field(
+            default="",
+            description="Exa API key for fact verification (optional - get one at exa.ai)",
+        )
+        enable_fact_verification: bool = Field(
+            default=False,
+            description="Enable fact verification using Exa web search",
+        )
+        max_claims_to_verify: int = Field(
+            default=5,
+            description="Maximum number of claims to verify per query (to control costs)",
+        )
+        show_fact_verification: bool = Field(
+            default=True,
+            description="Show fact verification results in report",
+        )
 
     def __init__(self):
         self.valves = self.Valves()
@@ -129,6 +146,144 @@ class Tools:
             {"model": m, "avg": round(sum(p)/len(p), 2), "votes": len(p)}
             for m, p in positions.items() if p
         ], key=lambda x: x["avg"])
+
+    # ═══════════════════════════════════════════════════════════════════
+    # Exa Fact Verification
+    # ═══════════════════════════════════════════════════════════════════
+
+    async def _extract_claims(
+        self,
+        topic: str,
+        stage1: list[dict],
+        chair: str,
+        base_url: str,
+        api_key: str,
+    ) -> list[str]:
+        """Extract verifiable factual claims from Stage 1 responses."""
+        responses_text = "\n\n".join([
+            f"**{s['model']}:**\n{s['response']}" for s in stage1
+        ])
+
+        extract_prompt = f"""Analyze these AI responses to: "{topic}"
+
+{responses_text}
+
+Extract ALL FACTUAL CLAIMS that can be verified with a web search.
+
+Rules:
+- Extract SPECIFIC, VERIFIABLE facts (dates, numbers, names, events, statistics, quotes)
+- Skip opinions, recommendations, or general statements
+- Combine similar claims from different models into one
+- Extract as many claims as possible, up to {self.valves.max_claims_to_verify} claims
+- Format each claim as a complete, searchable question
+
+IMPORTANT: Try to extract close to {self.valves.max_claims_to_verify} claims if there are enough verifiable facts.
+
+Return ONLY a JSON array of strings, nothing else:
+["Is it true that X?", "Did Y happen in Z?", ...]
+
+If there are no verifiable factual claims, return: []"""
+
+        result = await self._call_model(chair, [{"role": "user", "content": extract_prompt}], base_url, api_key)
+        
+        if not result:
+            return []
+        
+        # Parse JSON from response
+        try:
+            # Try to find JSON array in response
+            match = re.search(r'\[.*\]', result, re.DOTALL)
+            if match:
+                claims = json.loads(match.group())
+                if isinstance(claims, list):
+                    return claims[:self.valves.max_claims_to_verify]
+        except json.JSONDecodeError as e:
+            log.warning(f"Failed to parse claims JSON: {e}")
+        
+        return []
+
+    async def _verify_claim_with_exa(
+        self, 
+        claim: str, 
+        semaphore: asyncio.Semaphore,
+        max_retries: int = 3
+    ) -> dict:
+        """Verify a single claim using Exa's /answer API with rate limiting and retry."""
+        url = "https://api.exa.ai/answer"
+        headers = {
+            "x-api-key": self.valves.exa_api_key,
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "query": claim,
+            "text": True,
+        }
+
+        async with semaphore:  # Limit concurrent requests
+            for attempt in range(max_retries):
+                try:
+                    timeout = aiohttp.ClientTimeout(total=30)
+                    async with aiohttp.ClientSession(timeout=timeout) as session:
+                        async with session.post(url, json=payload, headers=headers) as resp:
+                            if resp.status == 429:
+                                # Rate limited - wait and retry
+                                retry_after = int(resp.headers.get("Retry-After", 2))
+                                wait_time = retry_after * (attempt + 1)  # Exponential backoff
+                                log.warning(f"Exa rate limit hit, waiting {wait_time}s (attempt {attempt + 1}/{max_retries})")
+                                await asyncio.sleep(wait_time)
+                                continue
+                            
+                            if resp.status != 200:
+                                err = await resp.text()
+                                log.error(f"Exa API error: HTTP {resp.status} - {err[:100]}")
+                                return {"claim": claim, "status": "error", "answer": f"API error: {resp.status}"}
+                            
+                            data = await resp.json()
+                            answer = data.get("answer", "")
+                            citations = data.get("citations", [])
+                            
+                            # Extract source URLs
+                            sources = [c.get("url", "") for c in citations[:3] if c.get("url")]
+                            
+                            # Small delay after successful request to avoid rate limits
+                            await asyncio.sleep(0.5)
+                            
+                            return {
+                                "claim": claim,
+                                "status": "verified",
+                                "answer": answer,
+                                "sources": sources,
+                            }
+                except asyncio.TimeoutError:
+                    log.error(f"Exa API timeout for claim: {claim[:50]}...")
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(2)
+                        continue
+                    return {"claim": claim, "status": "timeout", "answer": "Request timed out"}
+                except Exception as e:
+                    log.error(f"Exa API error: {e}")
+                    return {"claim": claim, "status": "error", "answer": str(e)}
+            
+            # All retries exhausted
+            return {"claim": claim, "status": "error", "answer": "Rate limit exceeded after retries"}
+
+    async def _verify_claims(self, claims: list[str]) -> list[dict]:
+        """Verify multiple claims with rate limiting using Exa."""
+        if not claims:
+            return []
+        
+        log.info(f"🔍 Verifying {len(claims)} claims with Exa (rate-limited)...")
+        
+        # Limit to 2 concurrent requests to avoid rate limiting
+        semaphore = asyncio.Semaphore(2)
+        
+        tasks = [self._verify_claim_with_exa(claim, semaphore) for claim in claims]
+        results = await asyncio.gather(*tasks)
+        
+        success = sum(1 for r in results if r.get("status") == "verified")
+        log.info(f"🔍 Verified {success}/{len(claims)} claims")
+        
+        return results
 
     async def _analyze_consensus(
         self,
@@ -238,7 +393,27 @@ This is needed because the council makes multiple model calls with longer timeou
         log.info(f"📝 Stage 1: {len(stage1)}/{len(models)} responses")
 
         # ═══════════════════════════════════════════════════════════════════
-        # Stage 1.5: Consensus Analysis (optional)
+        # Stage 1.5a: Fact Verification with Exa (optional)
+        # ═══════════════════════════════════════════════════════════════════
+        fact_verification = []
+        if self.valves.enable_fact_verification and self.valves.exa_api_key:
+            log.info("-" * 40)
+            log.info("🔍 FACT VERIFICATION (Exa)")
+            await self._emit_status(__event_emitter__, "Extracting claims...")
+            
+            # Extract factual claims from responses
+            claims = await self._extract_claims(topic, stage1, chair, base_url, api_key)
+            log.info(f"🔍 Extracted {len(claims)} claims to verify")
+            
+            if claims:
+                await self._emit_status(__event_emitter__, f"Verifying {len(claims)} claims with Exa...")
+                fact_verification = await self._verify_claims(claims)
+                log.info(f"🔍 Fact verification complete: {len(fact_verification)} results")
+        elif self.valves.enable_fact_verification and not self.valves.exa_api_key:
+            log.warning("Fact verification enabled but no Exa API key provided")
+
+        # ═══════════════════════════════════════════════════════════════════
+        # Stage 1.5b: Consensus Analysis (optional)
         # ═══════════════════════════════════════════════════════════════════
         consensus_analysis = None
         if self.valves.show_consensus_analysis and len(stage1) > 1:
@@ -289,19 +464,34 @@ Consensus Analysis:
 
 """
 
+        # Include fact verification in synthesis prompt if available
+        verification_context = ""
+        if fact_verification:
+            verified_items = []
+            for v in fact_verification:
+                status_icon = "✅" if v.get("status") == "verified" else "⚠️"
+                verified_items.append(f"- {status_icon} **{v.get('claim', '')}**\n  Answer: {v.get('answer', 'N/A')}")
+            verification_context = f"""
+Fact Verification (from Exa web search):
+{chr(10).join(verified_items)}
+
+IMPORTANT: Use these verified facts to correct any inaccuracies in the model responses.
+"""
+
         synth_prompt = f"""Synthesize council responses to: {topic}
 
 Responses:
 {chr(10).join([f"**{s['model']}**: {s['response']}" for s in stage1])}
 
-{consensus_context}Rankings:
+{consensus_context}{verification_context}Rankings:
 {chr(10).join([f"{s['model']}: {' → '.join(s.get('parsed_ranking', []))}" for s in stage2])}
 
 Provide a comprehensive final answer that:
 1. Emphasizes points of strong agreement
 2. Addresses any disagreements or uncertainties
 3. Incorporates unique valuable insights
-4. Is well-structured and actionable"""
+4. Uses verified facts from web search where available
+5. Is well-structured and actionable"""
 
         synthesis = await self._call_model(chair, [{"role": "user", "content": synth_prompt}], base_url, api_key)
         
@@ -327,6 +517,26 @@ Provide a comprehensive final answer that:
         if self.valves.show_consensus_analysis and consensus_analysis:
             parts.append("\n\n---\n## 🔍 Consensus Analysis\n")
             parts.append(consensus_analysis)
+
+        # Fact Verification section
+        if self.valves.show_fact_verification and fact_verification:
+            parts.append("\n\n---\n## ✅ Fact Verification (Exa)\n")
+            parts.append("*Claims verified against current web sources*\n\n")
+            parts.append("| Claim | Verification | Sources |")
+            parts.append("|-------|--------------|---------|")
+            for v in fact_verification:
+                # Truncate and escape special chars to avoid breaking markdown table
+                raw_claim = v.get("claim", "").replace("\n", " ").strip()
+                raw_answer = v.get("answer", "N/A").replace("\n", " ").strip()
+                claim = (raw_claim[:60] + "..." if len(raw_claim) > 60 else raw_claim).replace("|", "\\|")
+                answer = (raw_answer[:80] + "..." if len(raw_answer) > 80 else raw_answer).replace("|", "\\|")
+                sources = v.get("sources", [])
+                if sources:
+                    source_links = ", ".join([f"[{i+1}]({url})" for i, url in enumerate(sources[:2])])
+                else:
+                    source_links = "—"
+                status_icon = "✅" if v.get("status") == "verified" else "⚠️" if v.get("status") == "timeout" else "❌"
+                parts.append(f"| {status_icon} {claim} | {answer} | {source_links} |")
 
         # Aggregate Rankings
         if self.valves.show_aggregate_rankings and rankings:
