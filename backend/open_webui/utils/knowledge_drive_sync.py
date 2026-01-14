@@ -558,43 +558,76 @@ class KnowledgeDriveSyncService:
 
             if self.app_state:
                 request = MockRequest(self.app_state)
-
-                # Process file using existing infrastructure
-                # Note: process_file is synchronous, run in executor
-                # 
-                # IMPORTANT: First call WITHOUT collection_name to trigger
-                # the Loader to extract content from the file and create
-                # vectors in file-{file_id} collection
                 loop = asyncio.get_running_loop()
-                await loop.run_in_executor(
+
+                # STEP 1: Process file to extract content and create vectors in file-{file_id}
+                log.info(f"   📄 Step 1: Extracting content for {file_id[:8]}...")
+                result1 = await loop.run_in_executor(
                     None,
                     process_file,
                     request,
-                    ProcessFileForm(file_id=file_id),  # No collection_name!
+                    ProcessFileForm(file_id=file_id),  # No collection_name - creates file-{file_id} collection
                     user,
                     None,  # db session
                 )
                 
-                # Now call WITH collection_name to copy vectors to knowledge base
-                # This will find existing vectors in file-{file_id} and reuse them
-                await loop.run_in_executor(
+                if not result1 or not result1.get("status"):
+                    log.error(f"   ❌ Step 1 failed for {file_id[:8]}: {result1}")
+                    Files.update_file_data_by_id(file_id, {"status": "error", "error": "Content extraction failed"})
+                    return
+                
+                # Get the extracted content from step 1
+                extracted_content = result1.get("content", "")
+                log.info(f"   ✅ Step 1 complete: {len(extracted_content)} chars extracted")
+                
+                if not extracted_content:
+                    log.error(f"   ❌ No content extracted for {file_id[:8]}")
+                    Files.update_file_data_by_id(file_id, {"status": "error", "error": "No content extracted from file"})
+                    return
+                
+                # Verify content was persisted to database before step 2
+                # This ensures the fallback in process_file will work
+                file_check = Files.get_file_by_id(file_id)
+                if not file_check or not file_check.data or not file_check.data.get("content"):
+                    log.warning(f"   ⚠️ Content not yet in DB, forcing update...")
+                    Files.update_file_data_by_id(file_id, {"content": extracted_content})
+                else:
+                    log.info(f"   ✓ Content verified in database ({len(file_check.data.get('content', ''))} chars)")
+                
+                # Wait for Pinecone eventual consistency
+                # Vectors in file-{file_id} may not be immediately queryable
+                import time
+                log.info(f"   ⏳ Waiting 5s for Pinecone indexing...")
+                time.sleep(5)
+                
+                # STEP 2: Add to knowledge base collection
+                # This will query file-{file_id} for vectors, or fall back to file.data.content
+                log.info(f"   📚 Step 2: Adding to knowledge base {knowledge_id[:8]}...")
+                result2 = await loop.run_in_executor(
                     None,
                     process_file,
                     request,
                     ProcessFileForm(
                         file_id=file_id,
-                        collection_name=knowledge_id,
+                        collection_name=knowledge_id,  # Store in knowledge base namespace
                     ),
                     user,
                     None,  # db session
                 )
+                
+                if not result2 or not result2.get("status"):
+                    log.error(f"   ❌ Step 2 failed for {file_id[:8]}: {result2}")
+                    Files.update_file_data_by_id(file_id, {"status": "error", "error": "Failed to add to knowledge base"})
+                    return
 
-                log.info(f"   ✅ RAG processing complete for {file_id[:8]}...")
+                log.info(f"   ✅ RAG processing complete for {file_id[:8]} → KB {knowledge_id[:8]}")
             else:
                 log.warning("   ⚠️  No app_state available, skipping RAG processing")
 
         except Exception as e:
             log.error(f"   ❌ RAG processing error for {file_id}: {e}")
+            import traceback
+            log.error(f"   Traceback: {traceback.format_exc()}")
             # Don't raise - file was synced, just RAG failed
             # Mark file with error status
             Files.update_file_data_by_id(file_id, {"status": "error", "error": str(e)})
