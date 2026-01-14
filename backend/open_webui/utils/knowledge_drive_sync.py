@@ -195,17 +195,27 @@ class KnowledgeDriveSyncService:
 
         # Detect if folder is in a Shared Drive (need drive_id for API)
         folder_info = await drive_client.get_folder_info(source.drive_folder_id)
-        drive_id = folder_info.drive_id
+        drive_id = folder_info.drive_id or source.shared_drive_id
         
-        # List all files in folder
-        log.info(f"📂 Listing files in folder {source.drive_folder_id}...")
+        # Log scan configuration
+        scan_mode = "recursive" if source.recursive else "single folder"
+        log.info(f"📂 Scanning Drive folder ({scan_mode}, max {max_files} files)...")
         if drive_id:
-            log.info(f"   Folder is in Shared Drive: {drive_id}")
-        drive_files = await drive_client.list_all_folder_files(
-            source.drive_folder_id,
-            max_files=max_files,
-            drive_id=drive_id,  # Required for Shared Drives
-        )
+            log.info(f"   Shared Drive: {drive_id}")
+        
+        # List files based on recursive setting
+        if source.recursive:
+            drive_files = await drive_client.list_folder_files_recursive(
+                source.drive_folder_id,
+                max_files=max_files,
+                drive_id=drive_id,
+            )
+        else:
+            drive_files = await drive_client.list_all_folder_files(
+                source.drive_folder_id,
+                max_files=max_files,
+                drive_id=drive_id,
+            )
 
         # Filter to supported file types
         supported_files = [f for f in drive_files if f.is_supported()]

@@ -43,6 +43,8 @@ class KnowledgeDriveSource(Base):
     drive_folder_id = Column(Text, nullable=False)  # Google Drive folder ID
     drive_folder_name = Column(Text, nullable=True)  # Display name for UI
     drive_folder_path = Column(Text, nullable=True)  # Full path for display
+    shared_drive_id = Column(Text, nullable=True)  # Shared Drive ID (if in a Shared Drive)
+    recursive = Column(Boolean, default=False)  # Whether to sync subfolders recursively
 
     # Sync tracking
     last_sync_timestamp = Column(BigInteger, nullable=True)  # Unix timestamp of last sync
@@ -79,6 +81,8 @@ class KnowledgeDriveSourceModel(BaseModel):
     drive_folder_id: str
     drive_folder_name: Optional[str] = None
     drive_folder_path: Optional[str] = None
+    shared_drive_id: Optional[str] = None
+    recursive: bool = False
 
     last_sync_timestamp: Optional[int] = None
     last_sync_change_token: Optional[str] = None
@@ -174,6 +178,8 @@ class KnowledgeDriveSourceForm(BaseModel):
     drive_folder_id: str
     drive_folder_name: Optional[str] = None
     drive_folder_path: Optional[str] = None
+    shared_drive_id: Optional[str] = None
+    recursive: bool = False  # Whether to sync subfolders recursively
     auto_sync_interval_hours: int = 1
 
 
@@ -185,6 +191,8 @@ class KnowledgeDriveSourceResponse(BaseModel):
     drive_folder_id: str
     drive_folder_name: Optional[str] = None
     drive_folder_path: Optional[str] = None
+    shared_drive_id: Optional[str] = None
+    recursive: bool = False
     sync_status: str
     sync_enabled: bool
     last_sync_timestamp: Optional[int] = None
@@ -219,6 +227,8 @@ class KnowledgeDriveSourceTable:
                     drive_folder_id=form_data.drive_folder_id,
                     drive_folder_name=form_data.drive_folder_name,
                     drive_folder_path=form_data.drive_folder_path,
+                    shared_drive_id=form_data.shared_drive_id,
+                    recursive=form_data.recursive,
                     auto_sync_interval_hours=form_data.auto_sync_interval_hours,
                     created_at=now,
                     updated_at=now,
@@ -227,7 +237,8 @@ class KnowledgeDriveSourceTable:
                 db.commit()
                 db.refresh(source)
                 log.info(
-                    f"Created Drive source {source.id} for knowledge {knowledge_id}"
+                    f"Created Drive source {source.id} for knowledge {knowledge_id} "
+                    f"(recursive={form_data.recursive})"
                 )
                 return KnowledgeDriveSourceModel.model_validate(source)
         except Exception as e:
@@ -338,6 +349,8 @@ class KnowledgeDriveSourceTable:
                 valid_fields = {
                     "drive_folder_name",
                     "drive_folder_path",
+                    "shared_drive_id",
+                    "recursive",
                     "last_sync_timestamp",
                     "last_sync_change_token",
                     "last_sync_file_count",
