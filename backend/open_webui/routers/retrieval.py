@@ -3141,7 +3141,7 @@ def process_file(
                         collection_name=collection_name,
                         metadata=file_metadata,
                         add=(True if form_data.collection_name else False),
-                        overwrite=True,  # Auto-overwrite duplicates for smooth UX (matches file system behavior)
+                        overwrite=(False if form_data.collection_name else True),  # Don't overwrite when adding to knowledge base, only when creating standalone file collection
                         split=should_split,  # Skip splitting for transcripts (already chunked)
                         user=user,
                     )
