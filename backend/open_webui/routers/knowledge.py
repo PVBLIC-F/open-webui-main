@@ -1157,6 +1157,8 @@ async def get_drive_sources(
                 drive_folder_id=s.drive_folder_id,
                 drive_folder_name=s.drive_folder_name,
                 drive_folder_path=s.drive_folder_path,
+                shared_drive_id=s.shared_drive_id,
+                recursive=s.recursive,
                 sync_status=s.sync_status,
                 sync_enabled=s.sync_enabled,
                 last_sync_timestamp=s.last_sync_timestamp,
@@ -1263,7 +1265,7 @@ async def connect_drive_folder(
 
     log.info(
         f"Connected Drive folder {form_data.drive_folder_id} to knowledge {id} "
-        f"(source: {source.id})"
+        f"(source: {source.id}, recursive={source.recursive})"
     )
 
     return KnowledgeDriveSourceResponse(
@@ -1272,6 +1274,8 @@ async def connect_drive_folder(
         drive_folder_id=source.drive_folder_id,
         drive_folder_name=source.drive_folder_name,
         drive_folder_path=source.drive_folder_path,
+        shared_drive_id=source.shared_drive_id,
+        recursive=source.recursive,
         sync_status=source.sync_status,
         sync_enabled=source.sync_enabled,
         last_sync_timestamp=source.last_sync_timestamp,
@@ -1497,6 +1501,7 @@ async def sync_all_drive_sources(
 
 class DriveSourceUpdateForm(BaseModel):
     sync_enabled: Optional[bool] = None
+    recursive: Optional[bool] = None
     auto_sync_interval_hours: Optional[int] = None
 
 
@@ -1541,6 +1546,8 @@ async def update_drive_source(
     updates = {}
     if form_data.sync_enabled is not None:
         updates["sync_enabled"] = form_data.sync_enabled
+    if form_data.recursive is not None:
+        updates["recursive"] = form_data.recursive
     if form_data.auto_sync_interval_hours is not None:
         updates["auto_sync_interval_hours"] = form_data.auto_sync_interval_hours
 
@@ -1553,6 +1560,8 @@ async def update_drive_source(
         drive_folder_id=source.drive_folder_id,
         drive_folder_name=source.drive_folder_name,
         drive_folder_path=source.drive_folder_path,
+        shared_drive_id=source.shared_drive_id,
+        recursive=source.recursive,
         sync_status=source.sync_status,
         sync_enabled=source.sync_enabled,
         last_sync_timestamp=source.last_sync_timestamp,

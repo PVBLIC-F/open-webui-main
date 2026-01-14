@@ -522,6 +522,8 @@ export type DriveSource = {
 	drive_folder_id: string;
 	drive_folder_name: string | null;
 	drive_folder_path: string | null;
+	shared_drive_id: string | null;
+	recursive: boolean;
 	sync_status: string;
 	sync_enabled: boolean;
 	last_sync_timestamp: number | null;
@@ -563,6 +565,7 @@ export type ConnectDriveFolderForm = {
 	drive_folder_id: string;
 	drive_folder_name?: string;
 	drive_folder_path?: string;
+	recursive?: boolean;
 	auto_sync_interval_hours?: number;
 };
 
@@ -713,6 +716,7 @@ export const syncAllDriveSources = async (
 
 export type UpdateDriveSourceForm = {
 	sync_enabled?: boolean;
+	recursive?: boolean;
 	auto_sync_interval_hours?: number;
 };
 

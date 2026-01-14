@@ -381,6 +381,108 @@ class GoogleDriveClient:
 
         return all_files[:max_files]
 
+    async def list_folder_files_recursive(
+        self,
+        folder_id: str,
+        include_trashed: bool = False,
+        max_files: int = 1000,
+        drive_id: Optional[str] = None,
+        max_depth: int = 50,
+    ) -> List[DriveFile]:
+        """
+        List all files in a folder and all subfolders recursively.
+        
+        Google Drive API does not support recursive listing natively,
+        so this method traverses the folder tree using breadth-first search.
+        
+        Args:
+            folder_id: Google Drive folder ID (root of traversal)
+            include_trashed: Include trashed files
+            max_files: Maximum total files to return (across all folders)
+            drive_id: Shared Drive ID (required for folders in Shared Drives)
+            max_depth: Maximum folder depth to traverse (safety limit, API max is 100)
+            
+        Returns:
+            List of DriveFile objects from all folders in the tree
+        """
+        all_files: List[DriveFile] = []
+        
+        # BFS queue: (folder_id, depth)
+        folders_to_process = [(folder_id, 0)]
+        processed_folders = set()
+        
+        while folders_to_process and len(all_files) < max_files:
+            current_folder_id, current_depth = folders_to_process.pop(0)
+            
+            # Skip if already processed (handles potential cycles from shortcuts)
+            if current_folder_id in processed_folders:
+                continue
+            processed_folders.add(current_folder_id)
+            
+            # Check depth limit
+            if current_depth >= max_depth:
+                log.warning(f"Max folder depth ({max_depth}) reached at {current_folder_id[:12]}...")
+                continue
+            
+            # List contents of current folder
+            page_token = None
+            folder_files = 0
+            folder_subfolders = 0
+            
+            while len(all_files) < max_files:
+                url = f"{DRIVE_API_BASE}/files"
+                query = f"'{current_folder_id}' in parents"
+                if not include_trashed:
+                    query += " and trashed = false"
+
+                params = {
+                    "q": query,
+                    "fields": "nextPageToken,files(id,name,mimeType,size,md5Checksum,modifiedTime,parents,trashed)",
+                    "pageSize": 100,
+                    "supportsAllDrives": "true",
+                    "includeItemsFromAllDrives": "true",
+                }
+
+                if drive_id:
+                    params["corpora"] = "drive"
+                    params["driveId"] = drive_id
+
+                if page_token:
+                    params["pageToken"] = page_token
+
+                data = await self._request("GET", url, params=params)
+
+                for item in data.get("files", []):
+                    if item.get("mimeType") == "application/vnd.google-apps.folder":
+                        # Queue subfolder for processing
+                        folders_to_process.append((item["id"], current_depth + 1))
+                        folder_subfolders += 1
+                    else:
+                        # Collect file
+                        all_files.append(DriveFile.from_api_response(item))
+                        folder_files += 1
+                        if len(all_files) >= max_files:
+                            break
+
+                page_token = data.get("nextPageToken")
+                if not page_token:
+                    break
+            
+            # Log progress (only at root or when files found)
+            if current_depth == 0 or folder_files > 0:
+                log.info(
+                    f"📂 [depth={current_depth}] {folder_files} files, "
+                    f"{folder_subfolders} subfolders (total: {len(all_files)}/{max_files})"
+                )
+        
+        # Log summary
+        log.info(
+            f"📊 Recursive scan complete: {len(all_files)} files from "
+            f"{len(processed_folders)} folders"
+        )
+        
+        return all_files
+
     async def get_file_metadata(self, file_id: str) -> DriveFile:
         """
         Get metadata for a specific file.

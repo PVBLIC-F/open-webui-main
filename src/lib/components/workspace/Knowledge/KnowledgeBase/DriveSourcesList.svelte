@@ -105,6 +105,28 @@
 		}
 	};
 
+	const handleToggleRecursive = async (source: DriveSource) => {
+		try {
+			const result = await updateDriveSource(localStorage.token, knowledgeId, source.id, {
+				recursive: !source.recursive
+			});
+			if (result) {
+				sources = sources.map((s) =>
+					s.id === source.id ? { ...s, recursive: !s.recursive } : s
+				);
+				toast.success(
+					source.recursive
+						? $i18n.t('Recursive sync disabled')
+						: $i18n.t('Recursive sync enabled - will include subfolders on next sync')
+				);
+			}
+		} catch (error) {
+			console.error('Toggle recursive error:', error);
+			const errorMessage = error instanceof Error ? error.message : String(error);
+			toast.error($i18n.t('Failed to update settings: {{error}}', { error: errorMessage }));
+		}
+	};
+
 	const formatTimestamp = (timestamp: number | null) => {
 		if (!timestamp) return $i18n.t('Never');
 		const date = new Date(timestamp * 1000);
@@ -171,10 +193,22 @@
 							<GoogleDrive className="w-4 h-4 text-blue-600 dark:text-blue-400" />
 						</div>
 						<div class="min-w-0 flex-1">
-							<div class="flex items-center gap-2">
+							<div class="flex items-center gap-2 flex-wrap">
 								<span class="font-medium text-sm dark:text-white truncate">
 									{source.drive_folder_name || source.drive_folder_id}
 								</span>
+								{#if source.last_sync_file_count > 0}
+									<span class="px-1.5 py-0.5 rounded text-xs font-medium text-gray-600 bg-gray-200 dark:text-gray-300 dark:bg-gray-700">
+										{source.last_sync_file_count} {source.last_sync_file_count === 1 ? 'file' : 'files'}
+									</span>
+								{/if}
+								{#if source.recursive}
+									<Tooltip content={$i18n.t('Syncs all subfolders')}>
+										<span class="px-1.5 py-0.5 rounded text-xs font-medium text-purple-600 bg-purple-100 dark:text-purple-400 dark:bg-purple-900/30">
+											recursive
+										</span>
+									</Tooltip>
+								{/if}
 								<span
 									class="px-2 py-0.5 rounded-full text-xs font-medium {getStatusColor(
 										source.sync_status
@@ -187,11 +221,6 @@
 								<span>
 									{$i18n.t('Last sync')}: {formatTimestamp(source.last_sync_timestamp)}
 								</span>
-								{#if source.last_sync_file_count > 0}
-									<span>
-										{$i18n.t('{{COUNT}} files', { COUNT: source.last_sync_file_count })}
-									</span>
-								{/if}
 							</div>
 							{#if source.last_error}
 								<div class="mt-1 text-xs text-red-600 dark:text-red-400 truncate">
@@ -251,6 +280,36 @@
 											stroke-linejoin="round"
 											stroke-width="2"
 											d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4"
+										/>
+									</svg>
+								</button>
+							</Tooltip>
+
+							<!-- Toggle Recursive -->
+							<Tooltip
+								content={source.recursive
+									? $i18n.t('Disable recursive sync (subfolders)')
+									: $i18n.t('Enable recursive sync (include subfolders)')}
+							>
+								<button
+									class="p-1.5 rounded-lg transition-colors {source.recursive
+										? 'text-purple-600 hover:text-purple-700 dark:text-purple-400 hover:bg-gray-200 dark:hover:bg-gray-700'
+										: 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700'}"
+									on:click={() => handleToggleRecursive(source)}
+								>
+									<!-- Folder tree icon -->
+									<svg
+										xmlns="http://www.w3.org/2000/svg"
+										class="w-4 h-4"
+										fill="none"
+										viewBox="0 0 24 24"
+										stroke="currentColor"
+									>
+										<path
+											stroke-linecap="round"
+											stroke-linejoin="round"
+											stroke-width="2"
+											d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"
 										/>
 									</svg>
 								</button>
