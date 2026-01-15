@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { getContext, onMount, tick } from 'svelte';
+	import { getContext } from 'svelte';
 	import Modal from '$lib/components/common/Modal.svelte';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import { WEBUI_API_BASE_URL, WEBUI_BASE_URL } from '$lib/constants';
@@ -7,8 +7,34 @@
 
 	import XMark from '$lib/components/icons/XMark.svelte';
 	import Textarea from '$lib/components/common/Textarea.svelte';
+	import Markdown from '$lib/components/chat/Messages/Markdown.svelte';
 
 	const i18n = getContext('i18n');
+	
+	// Shared class for markdown prose styling
+	const PROSE_CLASS = 'prose dark:prose-invert prose-sm max-w-full';
+	
+	/**
+	 * Detect if content contains markdown formatting.
+	 * Checks for common markdown patterns like headers, bold, lists, etc.
+	 */
+	function isMarkdownContent(text: string): boolean {
+		if (!text) return false;
+		const markdownPatterns = [
+			/^#{1,6}\s/m,           // Headers
+			/\*\*[^*]+\*\*/,        // Bold
+			/\*[^*]+\*/,            // Italic
+			/^\s*[-*+]\s/m,         // Unordered lists
+			/^\s*\d+\.\s/m,         // Ordered lists
+			/^>\s/m,                // Blockquotes
+			/```[\s\S]*?```/,       // Code blocks
+			/`[^`]+`/,              // Inline code
+			/\[.+\]\(.+\)/,         // Links
+			/^---+$/m,              // Horizontal rules
+			/^\|.+\|$/m,            // Tables
+		];
+		return markdownPatterns.some(pattern => pattern.test(text));
+	}
 	
 	// Audio blob URLs for authenticated requests
 	let audioBlobUrls = {};
@@ -362,9 +388,13 @@
 									{/if}
 								</div>
 								<!-- Text content below media -->
-								<pre class="text-sm dark:text-gray-400 whitespace-pre-line mt-2">
-                {document.document}
-              </pre>
+								{#if isMarkdownContent(document.document)}
+									<div class="{PROSE_CLASS} mt-2">
+										<Markdown content={document.document} id={`citation-media-${documentIdx}`} />
+									</div>
+								{:else}
+									<pre class="text-sm dark:text-gray-400 whitespace-pre-line mt-2">{document.document}</pre>
+								{/if}
 							{:else if document.metadata?.html}
 								<iframe
 									class="w-full border-0 h-auto rounded-none"
@@ -375,6 +405,10 @@
 									srcdoc={document.document}
 									title={$i18n.t('Content')}
 								></iframe>
+							{:else if isMarkdownContent(document.document)}
+								<div class={PROSE_CLASS}>
+									<Markdown content={document.document} id={`citation-${documentIdx}`} />
+								</div>
 							{:else}
 								<pre class="text-sm dark:text-gray-400 whitespace-pre-line">{document.document
 										.trim()
