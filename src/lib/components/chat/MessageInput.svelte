@@ -69,6 +69,7 @@
 	import Tooltip from '../common/Tooltip.svelte';
 	import FileItem from '../common/FileItem.svelte';
 	import Image from '../common/Image.svelte';
+	import Spinner from '../common/Spinner.svelte';
 
 	import XMark from '../icons/XMark.svelte';
 	import GlobeAlt from '../icons/GlobeAlt.svelte';
@@ -1758,18 +1759,22 @@
 
 										{#if prompt !== '' && (!history?.currentId || history.messages[history.currentId]?.done == true)}
 											<!-- Improve Prompt -->
-											<Tooltip content={$i18n.t('Improve prompt')}>
+											<Tooltip content={improvingPrompt ? $i18n.t('Improving prompt...') : $i18n.t('Improve prompt')}>
 												<button
 													id="improve-prompt-button"
-													class=" text-gray-600 dark:text-gray-300 hover:text-gray-700 dark:hover:text-gray-200 transition rounded-full p-1.5 self-center mr-0.5"
+													class=" text-gray-600 dark:text-gray-300 hover:text-gray-700 dark:hover:text-gray-200 transition rounded-full p-1.5 self-center mr-0.5 {improvingPrompt ? 'animate-pulse' : ''}"
 													type="button"
 													disabled={improvingPrompt}
 													on:click={async () => {
 														await improvePrompt();
 													}}
-													aria-label="Improve Prompt"
+													aria-label={improvingPrompt ? 'Improving Prompt...' : 'Improve Prompt'}
 												>
-													<Sparkles className="size-5" strokeWidth="2" />
+													{#if improvingPrompt}
+														<Spinner className="size-5" />
+													{:else}
+														<Sparkles className="size-5" strokeWidth="2" />
+													{/if}
 												</button>
 											</Tooltip>
 										{/if}
