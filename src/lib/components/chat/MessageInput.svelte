@@ -788,9 +788,10 @@
 			);
 
 			if (improvedText && typeof improvedText === 'string' && improvedText.trim()) {
-				prompt = improvedText.trim();
+				// Use setText to properly update the RichTextInput component
+				chatInputElement?.setText(improvedText.trim());
 				await tick();
-				document.getElementById('chat-input')?.focus();
+				chatInputElement?.focus();
 			}
 		} catch (error) {
 			console.error('Error improving prompt:', error);
