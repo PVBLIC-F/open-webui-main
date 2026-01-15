@@ -11,6 +11,73 @@
 
 	const i18n = getContext('i18n');
 	
+	// UI State
+	let copySuccess = false;
+	let emailSending = false;
+	let emailSuccess = false;
+	let emailError = '';
+	
+	// Shared utilities for report generation
+	function getReportContent(): string {
+		return mergedDocuments.map(d => d.document).join('\n\n---\n\n');
+	}
+	
+	function getReportSubject(): string {
+		return `Report: ${citation?.source?.name || 'Citation'}`;
+	}
+	
+	/**
+	 * Copy full citation content to clipboard
+	 */
+	async function copyToClipboard() {
+		try {
+			await navigator.clipboard.writeText(getReportContent());
+			copySuccess = true;
+			setTimeout(() => copySuccess = false, 2000);
+		} catch (err) {
+			console.error('Failed to copy:', err);
+		}
+	}
+	
+	/**
+	 * Send report via Gmail API (full content, no truncation)
+	 */
+	async function sendViaGmail() {
+		emailSending = true;
+		emailError = '';
+		emailSuccess = false;
+		
+		try {
+			const token = localStorage.getItem('token');
+			const res = await fetch(`${WEBUI_API_BASE_URL}/gmail/send`, {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+					'Authorization': `Bearer ${token}`
+				},
+				body: JSON.stringify({
+					subject: getReportSubject(),
+					body: getReportContent(),
+					html: false
+				})
+			});
+			
+			if (!res.ok) {
+				const err = await res.json();
+				throw new Error(err.detail || 'Failed to send email');
+			}
+			
+			emailSuccess = true;
+			setTimeout(() => emailSuccess = false, 3000);
+		} catch (err: any) {
+			console.error('Email send failed:', err);
+			emailError = err.message || 'Failed to send email';
+			setTimeout(() => emailError = '', 5000);
+		} finally {
+			emailSending = false;
+		}
+	}
+	
 	// Shared class for markdown prose styling with tighter spacing
 	const PROSE_CLASS = 'prose dark:prose-invert prose-sm max-w-full prose-headings:mt-4 prose-headings:mb-2 prose-p:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-0.5 prose-hr:my-3';
 	
@@ -202,14 +269,65 @@
 					{$i18n.t('Citation')}
 				{/if}
 			</div>
-			<button
-				class="self-center"
-				on:click={() => {
-					show = false;
-				}}
-			>
-				<XMark className={'size-5'} />
-			</button>
+			
+			<!-- Action buttons -->
+			<div class="flex items-center gap-2">
+				<!-- Copy Button -->
+				<Tooltip content={copySuccess ? $i18n.t('Copied!') : $i18n.t('Copy to clipboard')}>
+					<button
+						class="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+						on:click={copyToClipboard}
+					>
+						{#if copySuccess}
+							<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-5 text-green-500">
+								<path stroke-linecap="round" stroke-linejoin="round" d="m4.5 12.75 6 6 9-13.5" />
+							</svg>
+						{:else}
+							<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-5">
+								<path stroke-linecap="round" stroke-linejoin="round" d="M15.666 3.888A2.25 2.25 0 0 0 13.5 2.25h-3c-1.03 0-1.9.693-2.166 1.638m7.332 0c.055.194.084.4.084.612v0a.75.75 0 0 1-.75.75H9.75a.75.75 0 0 1-.75-.75v0c0-.212.03-.418.084-.612m7.332 0c.646.049 1.288.11 1.927.184 1.1.128 1.907 1.077 1.907 2.185V19.5a2.25 2.25 0 0 1-2.25 2.25H6.75A2.25 2.25 0 0 1 4.5 19.5V6.257c0-1.108.806-2.057 1.907-2.185a48.208 48.208 0 0 1 1.927-.184" />
+							</svg>
+						{/if}
+					</button>
+				</Tooltip>
+				
+				<!-- Email Button -->
+				<Tooltip content={emailSuccess ? $i18n.t('Sent!') : emailError || $i18n.t('Email report to yourself')}>
+					<button
+						class="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors disabled:opacity-50"
+						on:click={sendViaGmail}
+						disabled={emailSending}
+					>
+						{#if emailSending}
+							<svg class="animate-spin size-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+								<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+								<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+							</svg>
+						{:else if emailSuccess}
+							<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-5 text-green-500">
+								<path stroke-linecap="round" stroke-linejoin="round" d="m4.5 12.75 6 6 9-13.5" />
+							</svg>
+						{:else if emailError}
+							<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-5 text-red-500">
+								<path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" />
+							</svg>
+						{:else}
+							<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-5">
+								<path stroke-linecap="round" stroke-linejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 0 1-2.25 2.25h-15a2.25 2.25 0 0 1-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0 0 19.5 4.5h-15a2.25 2.25 0 0 0-2.25 2.25m19.5 0v.243a2.25 2.25 0 0 1-1.07 1.916l-7.5 4.615a2.25 2.25 0 0 1-2.36 0L3.32 8.91a2.25 2.25 0 0 1-1.07-1.916V6.75" />
+							</svg>
+						{/if}
+					</button>
+				</Tooltip>
+				
+				<!-- Close Button -->
+				<button
+					class="self-center p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+					on:click={() => {
+						show = false;
+					}}
+				>
+					<XMark className={'size-5'} />
+				</button>
+			</div>
 		</div>
 
 		<div class="flex flex-col md:flex-row w-full px-5 pb-5 md:space-x-4">

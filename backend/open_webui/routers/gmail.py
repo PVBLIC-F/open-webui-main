@@ -2,15 +2,17 @@
 Gmail Sync API Router
 
 Provides admin endpoints for managing user-level Gmail sync settings and operations.
+Also provides user-facing email send functionality.
 """
 
 import logging
 from typing import Optional
+from pydantic import BaseModel, Field
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from open_webui.models.users import Users
 from open_webui.models.oauth_sessions import OAuthSessions
-from open_webui.utils.auth import get_admin_user
+from open_webui.utils.auth import get_admin_user, get_verified_user
 from open_webui.retrieval.vector.factory import VECTOR_DB_CLIENT
 from open_webui.tasks import create_task
 
@@ -320,5 +322,75 @@ async def delete_gmail_data(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to delete Gmail data: {str(e)}"
+        )
+
+
+####################################
+# User Email Send Endpoint
+####################################
+
+class SendEmailForm(BaseModel):
+    """Form data for sending email."""
+    to: Optional[str] = Field(None, description="Recipient email (defaults to user's own email)")
+    subject: str = Field(..., description="Email subject")
+    body: str = Field(..., description="Email body content")
+    html: bool = Field(False, description="If true, body is treated as HTML")
+
+
+@router.post("/api/gmail/send")
+async def send_email(
+    request: Request,
+    form_data: SendEmailForm,
+    user=Depends(get_verified_user),
+):
+    """
+    Send an email via Gmail API using the user's OAuth session.
+    
+    Requires user to have logged in with Google OAuth and granted gmail.send scope.
+    If no recipient specified, sends to user's own email (self-email report).
+    """
+    from open_webui.utils.gmail_sender import create_gmail_sender_for_user
+    
+    # Create Gmail sender for this user
+    sender = await create_gmail_sender_for_user(
+        oauth_manager=request.app.state.oauth_manager,
+        user_id=user.id,
+    )
+    
+    if not sender:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Gmail send not available. Please log in with Google and grant email permissions."
+        )
+    
+    # Default to sending to self if no recipient specified
+    recipient = form_data.to or user.email
+    if not recipient:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No recipient email specified and user email not available."
+        )
+    
+    try:
+        result = await sender.send_email(
+            to=recipient,
+            subject=form_data.subject,
+            body=form_data.body,
+            html=form_data.html,
+        )
+        
+        logger.info(f"✅ Email sent for user {user.id} to {recipient}")
+        
+        return {
+            "status": "sent",
+            "message_id": result.get("id"),
+            "recipient": recipient,
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to send email for user {user.id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
         )
 
