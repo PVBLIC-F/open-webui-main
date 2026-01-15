@@ -11,8 +11,102 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import Optional
 import aiohttp
+import markdown
+import re
 
 logger = logging.getLogger(__name__)
+
+
+# Email HTML template with styling for rich text rendering
+EMAIL_HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <style>
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }}
+        h1 {{ color: #1a1a1a; border-bottom: 2px solid #4f46e5; padding-bottom: 10px; }}
+        h2 {{ color: #374151; margin-top: 24px; }}
+        h3 {{ color: #4b5563; }}
+        p {{ margin: 12px 0; }}
+        ul, ol {{ margin: 12px 0; padding-left: 24px; }}
+        li {{ margin: 6px 0; }}
+        hr {{ border: none; border-top: 1px solid #e5e7eb; margin: 24px 0; }}
+        code {{
+            background: #f3f4f6;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 0.9em;
+        }}
+        pre {{
+            background: #1f2937;
+            color: #f9fafb;
+            padding: 16px;
+            border-radius: 8px;
+            overflow-x: auto;
+        }}
+        pre code {{
+            background: none;
+            padding: 0;
+            color: inherit;
+        }}
+        blockquote {{
+            border-left: 4px solid #4f46e5;
+            margin: 16px 0;
+            padding: 12px 20px;
+            background: #f9fafb;
+        }}
+        strong {{ color: #111827; }}
+        .emoji {{ font-size: 1.2em; }}
+        table {{
+            border-collapse: collapse;
+            width: 100%;
+            margin: 16px 0;
+        }}
+        th, td {{
+            border: 1px solid #e5e7eb;
+            padding: 10px;
+            text-align: left;
+        }}
+        th {{ background: #f9fafb; font-weight: 600; }}
+    </style>
+</head>
+<body>
+{content}
+</body>
+</html>
+"""
+
+
+def markdown_to_html(md_content: str) -> str:
+    """Convert markdown to styled HTML for email."""
+    # Convert markdown to HTML
+    md = markdown.Markdown(extensions=['tables', 'fenced_code', 'nl2br'])
+    html_content = md.convert(md_content)
+    
+    # Wrap in email template
+    return EMAIL_HTML_TEMPLATE.format(content=html_content)
+
+
+def strip_markdown(md_content: str) -> str:
+    """Convert markdown to plain text for email fallback."""
+    # Remove common markdown formatting
+    text = md_content
+    text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)  # Bold
+    text = re.sub(r'\*([^*]+)\*', r'\1', text)  # Italic
+    text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)  # Headers
+    text = re.sub(r'`([^`]+)`', r'\1', text)  # Inline code
+    text = re.sub(r'```[\s\S]*?```', '', text)  # Code blocks
+    text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)  # Links
+    return text
 
 
 class GmailSender:
@@ -56,7 +150,7 @@ class GmailSender:
         subject: str,
         body: str,
         from_email: Optional[str] = None,
-        html: bool = False,
+        is_markdown: bool = False,
     ) -> dict:
         """
         Create a message for the Gmail API.
@@ -64,17 +158,21 @@ class GmailSender:
         Args:
             to: Recipient email address
             subject: Email subject
-            body: Email body (plain text or HTML)
+            body: Email body (plain text or markdown)
             from_email: Sender email (optional, uses authenticated user)
-            html: If True, body is HTML; otherwise plain text
+            is_markdown: If True, convert markdown to HTML
 
         Returns:
             Gmail API message resource
         """
-        if html:
+        if is_markdown:
+            # Convert markdown to HTML and create multipart email
+            html_body = markdown_to_html(body)
+            plain_body = strip_markdown(body)
+            
             msg = MIMEMultipart("alternative")
-            msg.attach(MIMEText(body, "plain"))
-            msg.attach(MIMEText(body, "html"))
+            msg.attach(MIMEText(plain_body, "plain"))
+            msg.attach(MIMEText(html_body, "html"))
         else:
             msg = MIMEText(body, "plain")
 
@@ -92,7 +190,7 @@ class GmailSender:
         to: str,
         subject: str,
         body: str,
-        html: bool = False,
+        is_markdown: bool = True,
     ) -> dict:
         """
         Send an email via Gmail API.
@@ -100,8 +198,8 @@ class GmailSender:
         Args:
             to: Recipient email address
             subject: Email subject
-            body: Email body
-            html: If True, body is treated as HTML
+            body: Email body (markdown by default)
+            is_markdown: If True (default), convert markdown to HTML
 
         Returns:
             Gmail API response with message ID
@@ -115,7 +213,7 @@ class GmailSender:
             "Content-Type": "application/json",
         }
 
-        message = self._create_message(to, subject, body, html=html)
+        message = self._create_message(to, subject, body, is_markdown=is_markdown)
 
         try:
             session = await self._get_session()

@@ -333,8 +333,8 @@ class SendEmailForm(BaseModel):
     """Form data for sending email."""
     to: Optional[str] = Field(None, description="Recipient email (defaults to user's own email)")
     subject: str = Field(..., description="Email subject")
-    body: str = Field(..., description="Email body content")
-    html: bool = Field(False, description="If true, body is treated as HTML")
+    body: str = Field(..., description="Email body content (markdown supported)")
+    is_markdown: bool = Field(True, description="If true (default), convert markdown to rich HTML")
 
 
 @router.post("/api/v1/gmail/send")
@@ -376,7 +376,7 @@ async def send_email(
             to=recipient,
             subject=form_data.subject,
             body=form_data.body,
-            html=form_data.html,
+            is_markdown=form_data.is_markdown,
         )
         
         logger.info(f"✅ Email sent for user {user.id} to {recipient}")

@@ -58,7 +58,7 @@
 				body: JSON.stringify({
 					subject: getReportSubject(),
 					body: getReportContent(),
-					html: false
+					is_markdown: true
 				})
 			});
 			
