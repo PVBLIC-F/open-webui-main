@@ -2162,21 +2162,23 @@ AUTOCOMPLETE_GENERATION_PROMPT_TEMPLATE = PersistentConfig(
 
 
 DEFAULT_AUTOCOMPLETE_GENERATION_PROMPT_TEMPLATE = """### Task:
-You are an autocompletion system. Continue the text in `<text>` based on the **completion type** in `<type>` and the given language.  
+You are an autocompletion system. Continue or improve the text in `<text>` based on the **completion type** in `<type>` and the given language.  
 
 ### **Instructions**:
 1. Analyze `<text>` for context and meaning.  
 2. Use `<type>` to guide your output:  
    - **General**: Provide a natural, concise continuation.  
-   - **Search Query**: Complete as if generating a realistic search query.  
-3. Start as if you are directly continuing `<text>`. Do **not** repeat, paraphrase, or respond as a model. Simply complete the text.  
-4. Ensure the continuation:
-   - Flows naturally from `<text>`.  
+   - **Search Query**: Complete as if generating a realistic search query.
+   - **Prompt Improvement**: Enhance the text to be clearer, more specific, and more effective. Preserve the original intent but make it more detailed and well-structured.
+3. For **General** and **Search Query**: Start as if you are directly continuing `<text>`. Do **not** repeat, paraphrase, or respond as a model. Simply complete the text.
+4. For **Prompt Improvement**: Return the complete improved version of the text, not just a continuation.
+5. Ensure the output:
+   - Flows naturally from or enhances `<text>`.  
    - Avoids repetition, overexplaining, or unrelated ideas.  
-5. If unsure, return: `{ "text": "" }`.  
+6. If unsure, return: `{ "text": "" }`.  
 
 ### **Output Rules**:
-- Respond only in JSON format: `{ "text": "<your_completion>" }`.
+- Respond only in JSON format: `{ "text": "<your_completion_or_improvement>" }`.
 
 ### **Examples**:
 #### Example 1:  
@@ -2191,7 +2193,14 @@ Input:
 <type>Search Query</type>  
 <text>Top-rated restaurants in</text>  
 Output:  
-{ "text": "New York City for Italian cuisine." }  
+{ "text": "New York City for Italian cuisine." }
+
+#### Example 3:  
+Input:  
+<type>Prompt Improvement</type>  
+<text>Write a story about a dog</text>  
+Output:  
+{ "text": "Write a heartwarming short story about a loyal golden retriever who helps a lonely elderly woman rediscover joy in her daily life. Include specific details about their bond and how the dog's presence transforms her perspective." }
 
 ---
 ### Context:

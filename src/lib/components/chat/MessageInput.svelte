@@ -383,6 +383,7 @@
 
 	let loaded = false;
 	let recording = false;
+	let improvingPrompt = false;
 
 	let isComposing = false;
 	// Safari has a bug where compositionend is not triggered correctly #16615
@@ -770,6 +771,36 @@
 			// Clear the input content saved in session storage.
 			sessionStorage.removeItem('chat-input');
 			goto(`/notes/${res.id}`);
+		}
+	};
+
+	const improvePrompt = async () => {
+		if (!prompt.trim()) return;
+
+		improvingPrompt = true;
+		try {
+			const modelId = selectedModelIds[0] ?? $config?.default_models?.split(',')?.[0] ?? '';
+			const res = await generateAutoCompletion(
+				localStorage.token,
+				modelId,
+				prompt,
+				history?.messages ? Object.values(history.messages) : [],
+				'prompt improvement'
+			);
+
+			if (res) {
+				const improvedText = res?.text || res;
+				if (improvedText && typeof improvedText === 'string' && improvedText.trim()) {
+					prompt = improvedText.trim();
+					await tick();
+					document.getElementById('chat-input')?.focus();
+				}
+			}
+		} catch (error) {
+			console.error('Error improving prompt:', error);
+			toast.error($i18n.t('Failed to improve prompt'));
+		} finally {
+			improvingPrompt = false;
 		}
 	};
 
@@ -1724,6 +1755,24 @@
 													}}
 												>
 													<PageEdit className="size-4.5 translate-y-[0.5px]" />
+												</button>
+											</Tooltip>
+										{/if}
+
+										{#if prompt !== '' && (!history?.currentId || history.messages[history.currentId]?.done == true)}
+											<!-- Improve Prompt -->
+											<Tooltip content={$i18n.t('Improve prompt')}>
+												<button
+													id="improve-prompt-button"
+													class=" text-gray-600 dark:text-gray-300 hover:text-gray-700 dark:hover:text-gray-200 transition rounded-full p-1.5 self-center mr-0.5"
+													type="button"
+													disabled={improvingPrompt}
+													on:click={async () => {
+														await improvePrompt();
+													}}
+													aria-label="Improve Prompt"
+												>
+													<Sparkles className="size-5" strokeWidth="2" />
 												</button>
 											</Tooltip>
 										{/if}
