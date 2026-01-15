@@ -998,6 +998,62 @@ export const generateAutoCompletion = async (
 	}
 };
 
+export const improvePrompt = async (
+	token: string = '',
+	model: string,
+	prompt: string,
+	messages?: object[]
+) => {
+	let error = null;
+
+	const res = await fetch(`${WEBUI_BASE_URL}/api/v1/tasks/prompt/improve`, {
+		method: 'POST',
+		headers: {
+			Accept: 'application/json',
+			'Content-Type': 'application/json',
+			Authorization: `Bearer ${token}`
+		},
+		body: JSON.stringify({
+			model: model,
+			prompt: prompt,
+			...(messages && { messages: messages }),
+			stream: false
+		})
+	})
+		.then(async (res) => {
+			if (!res.ok) throw await res.json();
+			return res.json();
+		})
+		.catch((err) => {
+			console.error(err);
+			if ('detail' in err) {
+				error = err.detail;
+			}
+			return null;
+		});
+
+	if (error) {
+		throw error;
+	}
+
+	const response = res?.choices[0]?.message?.content ?? '';
+
+	// The response should be the improved prompt directly (no JSON wrapper)
+	// But handle JSON wrapper case for backward compatibility
+	if (response.trim().startsWith('{')) {
+		try {
+			const parsed = JSON.parse(response);
+			if (parsed && parsed.text) {
+				return parsed.text;
+			}
+		} catch (e) {
+			// Not JSON, return as-is
+		}
+	}
+
+	return response.trim();
+};
+
 export const generateMoACompletion = async (
 	token: string = '',
 	model: string,

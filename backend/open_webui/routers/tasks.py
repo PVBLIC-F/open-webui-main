@@ -13,6 +13,7 @@ from open_webui.utils.task import (
     query_generation_template,
     image_prompt_generation_template,
     autocomplete_generation_template,
+    prompt_improvement_template,
     tags_generation_template,
     emoji_generation_template,
     moa_response_generation_template,
@@ -31,6 +32,7 @@ from open_webui.config import (
     DEFAULT_IMAGE_PROMPT_GENERATION_PROMPT_TEMPLATE,
     DEFAULT_QUERY_GENERATION_PROMPT_TEMPLATE,
     DEFAULT_AUTOCOMPLETE_GENERATION_PROMPT_TEMPLATE,
+    DEFAULT_PROMPT_IMPROVEMENT_TEMPLATE,
     DEFAULT_EMOJI_GENERATION_PROMPT_TEMPLATE,
     DEFAULT_MOA_GENERATION_PROMPT_TEMPLATE,
     DEFAULT_VOICE_MODE_PROMPT_TEMPLATE,
@@ -621,6 +623,80 @@ async def generate_autocompletion(
         return await generate_chat_completion(request, form_data=payload, user=user)
     except Exception as e:
         log.error(f"Error generating chat completion: {e}")
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"detail": "An internal error has occurred."},
+        )
+
+
+@router.post("/prompt/improve")
+async def improve_prompt(
+    request: Request, form_data: dict, user=Depends(get_verified_user)
+):
+    """
+    Improve a user's prompt to be clearer, more specific, and more effective.
+    This endpoint is independent of the autocomplete feature.
+    """
+    prompt = form_data.get("prompt")
+    messages = form_data.get("messages", [])
+
+    if not prompt or not prompt.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Prompt is required",
+        )
+
+    if getattr(request.state, "direct", False) and hasattr(request.state, "model"):
+        models = {
+            request.state.model["id"]: request.state.model,
+        }
+    else:
+        models = request.app.state.MODELS
+
+    model_id = form_data.get("model")
+    if not model_id or model_id not in models:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Model not found",
+        )
+
+    # Use the task model if configured
+    task_model_id = get_task_model_id(
+        model_id,
+        request.app.state.config.TASK_MODEL,
+        request.app.state.config.TASK_MODEL_EXTERNAL,
+        models,
+    )
+
+    log.debug(
+        f"improving prompt using model {task_model_id} for user {user.email}"
+    )
+
+    template = DEFAULT_PROMPT_IMPROVEMENT_TEMPLATE
+    content = prompt_improvement_template(template, prompt, messages, user)
+
+    payload = {
+        "model": task_model_id,
+        "messages": [{"role": "user", "content": content}],
+        "stream": False,
+        "metadata": {
+            **(request.state.metadata if hasattr(request.state, "metadata") else {}),
+            "task": "prompt_improvement",
+            "task_body": form_data,
+            "chat_id": form_data.get("chat_id", None),
+        },
+    }
+
+    # Process the payload through the pipeline
+    try:
+        payload = await process_pipeline_inlet_filter(request, payload, user, models)
+    except Exception as e:
+        raise e
+
+    try:
+        return await generate_chat_completion(request, form_data=payload, user=user)
+    except Exception as e:
+        log.error(f"Error improving prompt: {e}")
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={"detail": "An internal error has occurred."},

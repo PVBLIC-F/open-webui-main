@@ -50,7 +50,7 @@
 		getWeekday
 	} from '$lib/utils';
 	import { uploadFile } from '$lib/apis/files';
-	import { generateAutoCompletion } from '$lib/apis';
+	import { generateAutoCompletion, improvePrompt as improvePromptApi } from '$lib/apis';
 	import { deleteFileById } from '$lib/apis/files';
 	import { getSessionUser } from '$lib/apis/auths';
 	import { getTools } from '$lib/apis/tools';
@@ -780,21 +780,17 @@
 		improvingPrompt = true;
 		try {
 			const modelId = selectedModelIds[0] ?? $config?.default_models?.split(',')?.[0] ?? '';
-			const res = await generateAutoCompletion(
+			const improvedText = await improvePromptApi(
 				localStorage.token,
 				modelId,
 				prompt,
-				history?.messages ? Object.values(history.messages) : [],
-				'prompt improvement'
+				history?.messages ? Object.values(history.messages) : []
 			);
 
-			if (res) {
-				const improvedText = res?.text || res;
-				if (improvedText && typeof improvedText === 'string' && improvedText.trim()) {
-					prompt = improvedText.trim();
-					await tick();
-					document.getElementById('chat-input')?.focus();
-				}
+			if (improvedText && typeof improvedText === 'string' && improvedText.trim()) {
+				prompt = improvedText.trim();
+				await tick();
+				document.getElementById('chat-input')?.focus();
 			}
 		} catch (error) {
 			console.error('Error improving prompt:', error);
