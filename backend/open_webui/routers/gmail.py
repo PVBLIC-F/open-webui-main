@@ -337,7 +337,7 @@ class SendEmailForm(BaseModel):
     html: bool = Field(False, description="If true, body is treated as HTML")
 
 
-@router.post("/api/gmail/send")
+@router.post("/api/v1/gmail/send")
 async def send_email(
     request: Request,
     form_data: SendEmailForm,
