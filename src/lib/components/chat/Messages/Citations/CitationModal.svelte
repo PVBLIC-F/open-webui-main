@@ -11,8 +11,8 @@
 
 	const i18n = getContext('i18n');
 	
-	// Shared class for markdown prose styling
-	const PROSE_CLASS = 'prose dark:prose-invert prose-sm max-w-full';
+	// Shared class for markdown prose styling with tighter spacing
+	const PROSE_CLASS = 'prose dark:prose-invert prose-sm max-w-full prose-headings:mt-4 prose-headings:mb-2 prose-p:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-0.5 prose-hr:my-3';
 	
 	/**
 	 * Detect if content contains markdown formatting.
