@@ -1997,6 +1997,20 @@ async def get_app_config(request: Request):
         if data is not None and "id" in data:
             user = Users.get_user_by_id(data["id"])
 
+    # Refresh feature flag configs from database to ensure multi-worker consistency
+    # This is needed when Redis is not configured for cross-worker state sync
+    if user is not None:
+        from open_webui.config import PERSISTENT_CONFIG_REGISTRY
+
+        for config_item in PERSISTENT_CONFIG_REGISTRY:
+            if config_item.config_path in [
+                "notes.enable",
+                "channels.enable",
+                "folders.enable",
+                "memories.enable",
+            ]:
+                config_item.update()
+
     user_count = Users.get_num_users()
     onboarding = False
 

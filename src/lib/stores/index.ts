@@ -278,6 +278,15 @@ type Config = {
 		enable_direct_connections: boolean;
 		enable_version_update_check: boolean;
 		folder_max_file_count?: number;
+		// Beta features
+		enable_notes?: boolean;
+		enable_channels?: boolean;
+		enable_folders?: boolean;
+		enable_code_execution?: boolean;
+		enable_code_interpreter?: boolean;
+		enable_message_rating?: boolean;
+		enable_user_webhooks?: boolean;
+		enable_user_status?: boolean;
 	};
 	oauth: {
 		providers: {
