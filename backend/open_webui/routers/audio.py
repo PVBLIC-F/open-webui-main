@@ -10,6 +10,7 @@ import tempfile
 from functools import lru_cache
 from pydub import AudioSegment
 from pydub.silence import split_on_silence
+import concurrent.futures
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
@@ -1156,25 +1157,29 @@ def transcribe(
             detail=ERROR_MESSAGES.DEFAULT(e),
         )
 
-    results = []
+    results = [None] * len(chunk_paths)  # Pre-allocate to preserve order
     try:
         with ThreadPoolExecutor() as executor:
-            # Submit tasks for each chunk_path
-            futures = [
+            # Submit tasks with index tracking to preserve chunk order
+            future_to_idx = {
                 executor.submit(
                     transcription_handler, request, chunk_path, metadata, user
-                )
-                for chunk_path in chunk_paths
-            ]
-            # Gather results as they complete
-            for future in futures:
+                ): idx
+                for idx, chunk_path in enumerate(chunk_paths)
+            }
+            # Gather results and place them in correct order
+            for future in concurrent.futures.as_completed(future_to_idx):
+                idx = future_to_idx[future]
                 try:
-                    results.append(future.result())
+                    results[idx] = future.result()
                 except Exception as transcribe_exc:
                     raise HTTPException(
                         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                        detail=f"Error transcribing chunk: {transcribe_exc}",
+                        detail=f"Error transcribing chunk {idx}: {transcribe_exc}",
                     )
+        
+        # Filter out any None results (shouldn't happen but be safe)
+        results = [r for r in results if r is not None]
     finally:
         # Clean up only the temporary chunks, never the original file
         for chunk_path in chunk_paths:

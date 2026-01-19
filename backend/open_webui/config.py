@@ -3284,6 +3284,40 @@ SEMANTIC_MAX_CHUNK_SIZE = PersistentConfig(
     int(os.environ.get("SEMANTIC_MAX_CHUNK_SIZE", "2000")),
 )
 
+####################################
+# Video/Audio Transcript Chunking
+####################################
+
+# Chunking strategy for video/audio transcripts
+# Options: "semantic" (uses Whisper segments with natural boundaries), 
+#          "character" (legacy RecursiveCharacterTextSplitter)
+VIDEO_AUDIO_CHUNKING_STRATEGY = PersistentConfig(
+    "VIDEO_AUDIO_CHUNKING_STRATEGY",
+    "rag.video_audio_chunking_strategy",
+    os.environ.get("VIDEO_AUDIO_CHUNKING_STRATEGY", "semantic"),
+)
+
+# Target duration in seconds for semantic chunks (aim for this, may be slightly longer)
+VIDEO_AUDIO_CHUNK_TARGET_DURATION = PersistentConfig(
+    "VIDEO_AUDIO_CHUNK_TARGET_DURATION",
+    "rag.video_audio_chunk_target_duration",
+    int(os.environ.get("VIDEO_AUDIO_CHUNK_TARGET_DURATION", "30")),
+)
+
+# Maximum duration in seconds for semantic chunks (hard limit)
+VIDEO_AUDIO_CHUNK_MAX_DURATION = PersistentConfig(
+    "VIDEO_AUDIO_CHUNK_MAX_DURATION",
+    "rag.video_audio_chunk_max_duration",
+    int(os.environ.get("VIDEO_AUDIO_CHUNK_MAX_DURATION", "60")),
+)
+
+# Overlap duration in seconds between chunks (preserves context at boundaries)
+VIDEO_AUDIO_CHUNK_OVERLAP_DURATION = PersistentConfig(
+    "VIDEO_AUDIO_CHUNK_OVERLAP_DURATION",
+    "rag.video_audio_chunk_overlap_duration",
+    int(os.environ.get("VIDEO_AUDIO_CHUNK_OVERLAP_DURATION", "5")),
+)
+
 DEFAULT_RAG_TEMPLATE = """### Task:
 Provide an accurate, well-sourced response to the user's query using the provided context. Base your response primarily on the context provided, and use inline citations [id] when referencing information from sources that have an explicit id attribute.
 

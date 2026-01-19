@@ -107,6 +107,11 @@ from open_webui.config import (
     RAG_EMBEDDING_CONTENT_PREFIX,
     RAG_EMBEDDING_QUERY_PREFIX,
     VECTOR_DB,
+    # Video/Audio chunking config
+    VIDEO_AUDIO_CHUNKING_STRATEGY,
+    VIDEO_AUDIO_CHUNK_TARGET_DURATION,
+    VIDEO_AUDIO_CHUNK_MAX_DURATION,
+    VIDEO_AUDIO_CHUNK_OVERLAP_DURATION,
 )
 from open_webui.env import (
     DEVICE_TYPE,
@@ -887,6 +892,306 @@ def _generate_potential_questions(text: str) -> list:
     return unique_questions
 
 
+####################################
+# Video/Audio Processing Utilities
+####################################
+
+
+def get_config_value(request, attr_name: str, fallback_config):
+    """
+    Safely get a config value from app state, handling PersistentConfig wrappers.
+    
+    Args:
+        request: FastAPI request object
+        attr_name: Name of the config attribute
+        fallback_config: Fallback PersistentConfig or value if not in app state
+        
+    Returns:
+        The actual config value (unwrapped from PersistentConfig if needed)
+    """
+    value = getattr(
+        request.app.state.config, attr_name,
+        fallback_config.value if hasattr(fallback_config, 'value') else fallback_config
+    )
+    if hasattr(value, 'value'):
+        value = value.value
+    return value
+
+
+def build_media_segment_urls(file_id: str, start: float, end: float, is_video: bool) -> dict:
+    """
+    Build media segment URLs for video/audio playback.
+    
+    Args:
+        file_id: The file ID
+        start: Start timestamp in seconds
+        end: End timestamp in seconds
+        is_video: Whether the source is a video file
+        
+    Returns:
+        Dict with video_url, video_segment_url, and/or audio_segment_url
+    """
+    urls = {}
+    
+    if is_video:
+        urls["video_url"] = f"/api/v1/files/{file_id}/video"
+        urls["video_segment_url"] = (
+            f"/api/v1/audio/video/files/{file_id}/segment"
+            f"?start={start}&end={end}"
+        )
+    
+    # Always provide audio URL (works for both audio and video files)
+    urls["audio_segment_url"] = (
+        f"/api/v1/audio/files/{file_id}/segment"
+        f"?start={start}&end={end}"
+    )
+    
+    return urls
+
+
+def build_enriched_chunk_metadata(
+    base_metadata: dict,
+    enrichment: dict,
+    chunk_index: int,
+    total_chunks: int,
+    timestamp_start: float = None,
+    timestamp_end: float = None,
+    duration: float = None,
+    chunking_strategy: str = "semantic",
+    has_overlap: bool = False,
+    transcript_language: str = None,
+    transcript_duration: float = None,
+    media_urls: dict = None,
+) -> dict:
+    """
+    Build standardized enriched metadata for video/audio chunks.
+    
+    This centralizes the metadata construction to avoid duplication
+    between semantic and character-based chunking paths.
+    
+    Args:
+        base_metadata: Base metadata dict (file info, filtered_meta)
+        enrichment: Output from extract_enhanced_metadata()
+        chunk_index: Index of this chunk
+        total_chunks: Total number of chunks
+        timestamp_start: Start timestamp in seconds
+        timestamp_end: End timestamp in seconds
+        duration: Duration of chunk in seconds
+        chunking_strategy: "semantic" or "character"
+        has_overlap: Whether this chunk has overlap from previous
+        transcript_language: Detected language
+        transcript_duration: Total transcript duration
+        media_urls: Dict with video/audio segment URLs
+        
+    Returns:
+        Complete enriched metadata dict
+    """
+    metadata = {
+        **base_metadata,
+        # High-Impact Features
+        "chunk_summary": enrichment.get("chunk_summary", ""),
+        "chunk_title": enrichment.get("chunk_title", ""),
+        "potential_questions": enrichment.get("potential_questions", []),
+        # Enhanced Entity Extraction
+        "topics": enrichment.get("topics", []),
+        "entities_people": enrichment.get("entities_people", []),
+        "entities_organizations": enrichment.get("entities_organizations", []),
+        "entities_locations": enrichment.get("entities_locations", []),
+        "keywords": enrichment.get("keywords", []),
+        # Chunk position metadata
+        "chunk_index": chunk_index,
+        "total_chunks": total_chunks,
+        # Chunking strategy metadata
+        "chunking_strategy": chunking_strategy,
+    }
+    
+    # Add timestamp metadata only if available
+    if timestamp_start is not None:
+        metadata["timestamp_start"] = timestamp_start
+    if timestamp_end is not None:
+        metadata["timestamp_end"] = timestamp_end
+    if duration is not None:
+        metadata["duration"] = duration
+    
+    # Add semantic chunking specific metadata
+    if chunking_strategy == "semantic":
+        metadata["has_overlap"] = has_overlap
+    
+    # Add media URLs
+    if media_urls:
+        metadata.update(media_urls)
+    
+    # Add transcript metadata
+    if transcript_language is not None:
+        metadata["transcript_language"] = transcript_language
+    if transcript_duration is not None:
+        metadata["transcript_duration"] = transcript_duration
+    
+    return metadata
+
+
+def create_semantic_chunks_from_segments(
+    segments: list,
+    target_duration: float = 30.0,
+    max_duration: float = 60.0,
+    overlap_duration: float = 5.0,
+) -> list:
+    """
+    Create semantic chunks from Whisper transcript segments based on natural speech boundaries.
+    
+    This approach is superior to character-based chunking because:
+    1. Preserves complete sentences/thoughts (cuts at sentence boundaries)
+    2. Respects natural pauses in speech
+    3. Maintains accurate timestamp alignment
+    4. Includes overlap for context preservation at boundaries
+    
+    Args:
+        segments: List of Whisper segments with {id, start, end, text, words}
+        target_duration: Target duration in seconds for each chunk (soft limit)
+        max_duration: Maximum duration in seconds (hard limit)
+        overlap_duration: Seconds of overlap to include from previous chunk
+        
+    Returns:
+        List of chunk dictionaries with {text, start, end, duration, segment_ids, words, overlap_text}
+    """
+    if not segments:
+        return []
+    
+    chunks = []
+    current_chunk = {
+        "segments": [],
+        "text": "",
+        "start": None,
+        "end": None,
+        "segment_ids": [],
+        "words": [],
+        "overlap_text": "",  # Text carried over from previous chunk for context
+    }
+    
+    for seg_idx, segment in enumerate(segments):
+        segment_text = segment.get("text", "").strip()
+        segment_start = segment.get("start", 0)
+        segment_end = segment.get("end", 0)
+        segment_id = segment.get("id", seg_idx)
+        segment_words = segment.get("words", [])
+        
+        # Initialize chunk start time
+        if current_chunk["start"] is None:
+            current_chunk["start"] = segment_start
+        
+        # Add segment to current chunk
+        if current_chunk["text"]:
+            current_chunk["text"] += " " + segment_text
+        else:
+            current_chunk["text"] = segment_text
+        
+        current_chunk["segments"].append(segment)
+        current_chunk["end"] = segment_end
+        current_chunk["segment_ids"].append(segment_id)
+        current_chunk["words"].extend(segment_words)
+        
+        # Calculate current duration
+        duration = current_chunk["end"] - current_chunk["start"]
+        
+        # Detect natural break points for chunking
+        text_stripped = segment_text.rstrip()
+        is_sentence_end = text_stripped.endswith(('.', '!', '?', '."', '!"', '?"'))
+        
+        # Check for long pause after this segment (indicates topic change)
+        is_long_pause = False
+        if seg_idx < len(segments) - 1:
+            next_segment_start = segments[seg_idx + 1].get("start", segment_end)
+            pause_duration = next_segment_start - segment_end
+            is_long_pause = pause_duration > 1.5  # 1.5 second pause indicates natural break
+        
+        # Decide whether to finalize this chunk
+        should_finalize = False
+        
+        if duration >= max_duration:
+            # Hard limit reached - must finalize
+            should_finalize = True
+        elif duration >= target_duration:
+            # Target reached - finalize at natural boundary
+            if is_sentence_end or is_long_pause:
+                should_finalize = True
+        
+        if should_finalize and current_chunk["text"].strip():
+            # Calculate chunk metadata
+            chunk_duration = current_chunk["end"] - current_chunk["start"]
+            
+            chunks.append({
+                "text": current_chunk["text"].strip(),
+                "start": round(current_chunk["start"], 2),
+                "end": round(current_chunk["end"], 2),
+                "duration": round(chunk_duration, 2),
+                "segment_ids": current_chunk["segment_ids"].copy(),
+                "words": current_chunk["words"].copy(),
+                "overlap_text": current_chunk["overlap_text"],
+                "chunk_index": len(chunks),
+            })
+            
+            # Create overlap content for next chunk
+            # Find segments that fall within the overlap window
+            overlap_segments = []
+            overlap_text_parts = []
+            overlap_words = []
+            overlap_start = current_chunk["end"] - overlap_duration
+            
+            for seg in current_chunk["segments"]:
+                if seg.get("start", 0) >= overlap_start:
+                    overlap_segments.append(seg)
+                    overlap_text_parts.append(seg.get("text", "").strip())
+                    overlap_words.extend(seg.get("words", []))
+            
+            # Start new chunk with overlap
+            if overlap_segments:
+                current_chunk = {
+                    "segments": overlap_segments,
+                    "text": " ".join(overlap_text_parts),
+                    "start": overlap_segments[0].get("start", 0),
+                    "end": None,
+                    "segment_ids": [s.get("id", i) for i, s in enumerate(overlap_segments)],
+                    "words": overlap_words,
+                    "overlap_text": " ".join(overlap_text_parts),  # Mark as overlap
+                }
+            else:
+                current_chunk = {
+                    "segments": [],
+                    "text": "",
+                    "start": None,
+                    "end": None,
+                    "segment_ids": [],
+                    "words": [],
+                    "overlap_text": "",
+                }
+    
+    # Don't forget the last chunk
+    if current_chunk["text"].strip():
+        chunk_duration = (current_chunk["end"] or 0) - (current_chunk["start"] or 0)
+        chunks.append({
+            "text": current_chunk["text"].strip(),
+            "start": round(current_chunk["start"] or 0, 2),
+            "end": round(current_chunk["end"] or 0, 2),
+            "duration": round(chunk_duration, 2),
+            "segment_ids": current_chunk["segment_ids"].copy(),
+            "words": current_chunk["words"].copy(),
+            "overlap_text": current_chunk["overlap_text"],
+            "chunk_index": len(chunks),
+        })
+    
+    # Add total_chunks to each chunk
+    total_chunks = len(chunks)
+    for chunk in chunks:
+        chunk["total_chunks"] = total_chunks
+    
+    log.info(
+        f"Created {len(chunks)} semantic chunks from {len(segments)} segments "
+        f"(target: {target_duration}s, max: {max_duration}s, overlap: {overlap_duration}s)"
+    )
+    
+    return chunks
+
+
 def align_chunk_with_timestamps(
     chunk_text: str, segments: list, chunk_start_char: int, full_text: str
 ) -> dict:
@@ -1345,6 +1650,11 @@ async def get_rag_config(request: Request, user=Depends(get_admin_user)):
         "CHUNK_SIZE": request.app.state.config.CHUNK_SIZE,
         "CHUNK_MIN_SIZE_TARGET": request.app.state.config.CHUNK_MIN_SIZE_TARGET,
         "CHUNK_OVERLAP": request.app.state.config.CHUNK_OVERLAP,
+        # Video/Audio chunking settings
+        "VIDEO_AUDIO_CHUNKING_STRATEGY": request.app.state.config.VIDEO_AUDIO_CHUNKING_STRATEGY,
+        "VIDEO_AUDIO_CHUNK_TARGET_DURATION": request.app.state.config.VIDEO_AUDIO_CHUNK_TARGET_DURATION,
+        "VIDEO_AUDIO_CHUNK_MAX_DURATION": request.app.state.config.VIDEO_AUDIO_CHUNK_MAX_DURATION,
+        "VIDEO_AUDIO_CHUNK_OVERLAP_DURATION": request.app.state.config.VIDEO_AUDIO_CHUNK_OVERLAP_DURATION,
         # File upload settings
         "FILE_MAX_SIZE": request.app.state.config.FILE_MAX_SIZE,
         "FILE_MAX_COUNT": request.app.state.config.FILE_MAX_COUNT,
@@ -1542,6 +1852,12 @@ class ConfigForm(BaseModel):
     CHUNK_SIZE: Optional[int] = None
     CHUNK_MIN_SIZE_TARGET: Optional[int] = None
     CHUNK_OVERLAP: Optional[int] = None
+
+    # Video/Audio chunking settings
+    VIDEO_AUDIO_CHUNKING_STRATEGY: Optional[str] = None
+    VIDEO_AUDIO_CHUNK_TARGET_DURATION: Optional[int] = None
+    VIDEO_AUDIO_CHUNK_MAX_DURATION: Optional[int] = None
+    VIDEO_AUDIO_CHUNK_OVERLAP_DURATION: Optional[int] = None
 
     # File upload settings
     FILE_MAX_SIZE: Optional[int] = None
@@ -1859,6 +2175,28 @@ async def update_rag_config(
         else request.app.state.config.CHUNK_OVERLAP
     )
 
+    # Video/Audio chunking settings
+    request.app.state.config.VIDEO_AUDIO_CHUNKING_STRATEGY = (
+        form_data.VIDEO_AUDIO_CHUNKING_STRATEGY
+        if form_data.VIDEO_AUDIO_CHUNKING_STRATEGY is not None
+        else request.app.state.config.VIDEO_AUDIO_CHUNKING_STRATEGY
+    )
+    request.app.state.config.VIDEO_AUDIO_CHUNK_TARGET_DURATION = (
+        form_data.VIDEO_AUDIO_CHUNK_TARGET_DURATION
+        if form_data.VIDEO_AUDIO_CHUNK_TARGET_DURATION is not None
+        else request.app.state.config.VIDEO_AUDIO_CHUNK_TARGET_DURATION
+    )
+    request.app.state.config.VIDEO_AUDIO_CHUNK_MAX_DURATION = (
+        form_data.VIDEO_AUDIO_CHUNK_MAX_DURATION
+        if form_data.VIDEO_AUDIO_CHUNK_MAX_DURATION is not None
+        else request.app.state.config.VIDEO_AUDIO_CHUNK_MAX_DURATION
+    )
+    request.app.state.config.VIDEO_AUDIO_CHUNK_OVERLAP_DURATION = (
+        form_data.VIDEO_AUDIO_CHUNK_OVERLAP_DURATION
+        if form_data.VIDEO_AUDIO_CHUNK_OVERLAP_DURATION is not None
+        else request.app.state.config.VIDEO_AUDIO_CHUNK_OVERLAP_DURATION
+    )
+
     # File upload settings
     request.app.state.config.FILE_MAX_SIZE = form_data.FILE_MAX_SIZE
     request.app.state.config.FILE_MAX_COUNT = form_data.FILE_MAX_COUNT
@@ -2056,6 +2394,11 @@ async def update_rag_config(
         "CHUNK_MIN_SIZE_TARGET": request.app.state.config.CHUNK_MIN_SIZE_TARGET,
         "ENABLE_MARKDOWN_HEADER_TEXT_SPLITTER": request.app.state.config.ENABLE_MARKDOWN_HEADER_TEXT_SPLITTER,
         "CHUNK_OVERLAP": request.app.state.config.CHUNK_OVERLAP,
+        # Video/Audio chunking settings
+        "VIDEO_AUDIO_CHUNKING_STRATEGY": request.app.state.config.VIDEO_AUDIO_CHUNKING_STRATEGY,
+        "VIDEO_AUDIO_CHUNK_TARGET_DURATION": request.app.state.config.VIDEO_AUDIO_CHUNK_TARGET_DURATION,
+        "VIDEO_AUDIO_CHUNK_MAX_DURATION": request.app.state.config.VIDEO_AUDIO_CHUNK_MAX_DURATION,
+        "VIDEO_AUDIO_CHUNK_OVERLAP_DURATION": request.app.state.config.VIDEO_AUDIO_CHUNK_OVERLAP_DURATION,
         # File upload settings
         "FILE_MAX_SIZE": request.app.state.config.FILE_MAX_SIZE,
         "FILE_MAX_COUNT": request.app.state.config.FILE_MAX_COUNT,
@@ -2676,169 +3019,190 @@ def process_file(
                 transcript_duration = file.meta.get("transcript_duration")
                 transcript_language = file.meta.get("transcript_language")
 
-                # Manually chunk audio/video transcripts since they bypass the Loader
-                # For unstructured TEXT_SPLITTER, force character splitting since
-                # Unstructured.io requires file paths (not raw text)
-                text_splitter_config = request.app.state.config.TEXT_SPLITTER
-
-                if text_splitter_config in ["", "unstructured", "character"]:
-                    # Use RecursiveCharacterTextSplitter for transcripts
-                    text_splitter = RecursiveCharacterTextSplitter(
-                        chunk_size=request.app.state.config.CHUNK_SIZE,
-                        chunk_overlap=request.app.state.config.CHUNK_OVERLAP,
-                        add_start_index=True,
-                    )
-                    docs = text_splitter.split_documents(docs)
-                    log.info(f"Split audio/video transcript into {len(docs)} chunks")
-                elif text_splitter_config == "token":
-                    # Use token-based splitting
-                    tiktoken.get_encoding(
-                        str(request.app.state.config.TIKTOKEN_ENCODING_NAME)
-                    )
-                    text_splitter = TokenTextSplitter(
-                        encoding_name=str(
-                            request.app.state.config.TIKTOKEN_ENCODING_NAME
-                        ),
-                        chunk_size=request.app.state.config.CHUNK_SIZE,
-                        chunk_overlap=request.app.state.config.CHUNK_OVERLAP,
-                        add_start_index=True,
-                    )
-                    docs = text_splitter.split_documents(docs)
-                    log.info(
-                        f"Split audio/video transcript into {len(docs)} chunks using token splitter"
-                    )
-                elif text_splitter_config == "markdown_header":
-                    # Use markdown header splitting
-                    headers_to_split_on = [
-                        ("#", "Header 1"),
-                        ("##", "Header 2"),
-                        ("###", "Header 3"),
-                    ]
-                    markdown_splitter = MarkdownHeaderTextSplitter(
-                        headers_to_split_on=headers_to_split_on,
-                        strip_headers=False,
-                    )
-                    md_splits = markdown_splitter.split_text(docs[0].page_content)
-                    text_splitter = RecursiveCharacterTextSplitter(
-                        chunk_size=request.app.state.config.CHUNK_SIZE,
-                        chunk_overlap=request.app.state.config.CHUNK_OVERLAP,
-                        add_start_index=True,
-                    )
-                    docs = text_splitter.split_documents(md_splits)
-                    log.info(
-                        f"Split audio/video transcript into {len(docs)} chunks using markdown splitter"
-                    )
-                else:
-                    # Fallback to character splitting for unknown TEXT_SPLITTER values
-                    log.warning(
-                        f"Unknown TEXT_SPLITTER '{text_splitter_config}', using character splitter as fallback"
-                    )
-                    text_splitter = RecursiveCharacterTextSplitter(
-                        chunk_size=request.app.state.config.CHUNK_SIZE,
-                        chunk_overlap=request.app.state.config.CHUNK_OVERLAP,
-                        add_start_index=True,
-                    )
-                    docs = text_splitter.split_documents(docs)
-                    log.info(
-                        f"Split audio/video transcript into {len(docs)} chunks using fallback character splitter"
-                    )
-
-                # Enrich each chunk with timestamps and topics/entities
-                enriched_docs = []
-                for idx, doc in enumerate(docs):
-                    chunk_start_char = doc.metadata.get("start_index", 0)
-
-                    # Extract enhanced metadata (summary, title, entities, questions)
-                    enrichment = extract_enhanced_metadata(doc.page_content)
-
-                    # Align chunk with timestamps from Whisper segments
-                    timestamp_data = {}
-                    if transcript_segments:
-                        timestamp_data = align_chunk_with_timestamps(
-                            doc.page_content,
-                            transcript_segments,
-                            chunk_start_char,
-                            full_transcript,
-                        )
-
-                    # Create enriched document with all metadata
-                    # Build metadata dict, only including non-None values
-                    enriched_metadata = {
-                        **doc.metadata,
-                        # High-Impact Features
-                        "chunk_summary": enrichment.get("chunk_summary", ""),
-                        "chunk_title": enrichment.get("chunk_title", ""),
-                        "potential_questions": enrichment.get(
-                            "potential_questions", []
-                        ),
-                        # Enhanced Entity Extraction
-                        "topics": enrichment.get("topics", []),
-                        "entities_people": enrichment.get("entities_people", []),
-                        "entities_organizations": enrichment.get(
-                            "entities_organizations", []
-                        ),
-                        "entities_locations": enrichment.get("entities_locations", []),
-                        "keywords": enrichment.get("keywords", []),
-                        # Chunk position metadata
-                        "chunk_index": idx,
-                        "total_chunks": len(docs),
-                    }
-
-                    # Add timestamp metadata only if available
-                    if timestamp_data.get("timestamp_start") is not None:
-                        enriched_metadata["timestamp_start"] = timestamp_data[
-                            "timestamp_start"
-                        ]
-                    if timestamp_data.get("timestamp_end") is not None:
-                        enriched_metadata["timestamp_end"] = timestamp_data[
-                            "timestamp_end"
-                        ]
-                    if timestamp_data.get("duration") is not None:
-                        enriched_metadata["duration"] = timestamp_data["duration"]
-
-                    # Add media URLs for playback
-                    if (
-                        timestamp_data.get("timestamp_start") is not None
-                        and timestamp_data.get("timestamp_end") is not None
-                    ):
-                        # Check if source is video or audio
-                        is_video = file.meta.get("content_type", "").startswith(
-                            "video/"
-                        )
-
-                        if is_video:
-                            # For video files, provide both full video URL and audio URL/segment
-                            enriched_metadata["video_url"] = (
-                                f"/api/v1/files/{file.id}/video"
-                            )
-                            enriched_metadata["video_segment_url"] = (
-                                f"/api/v1/audio/video/files/{file.id}/segment"
-                                f"?start={timestamp_data['timestamp_start']}"
-                                f"&end={timestamp_data['timestamp_end']}"
-                            )
-
-                        # Always provide audio URL (works for both audio and video files)
-                        enriched_metadata["audio_segment_url"] = (
-                            f"/api/v1/audio/files/{file.id}/segment"
-                            f"?start={timestamp_data['timestamp_start']}"
-                            f"&end={timestamp_data['timestamp_end']}"
-                        )
-
-                    # Add transcript metadata only if available
-                    if transcript_language is not None:
-                        enriched_metadata["transcript_language"] = transcript_language
-                    if transcript_duration is not None:
-                        enriched_metadata["transcript_duration"] = transcript_duration
-
-                    enriched_doc = Document(
-                        page_content=doc.page_content, metadata=enriched_metadata
-                    )
-                    enriched_docs.append(enriched_doc)
-
-                docs = enriched_docs
-                log.info(
-                    f"Enriched {len(docs)} chunks with timestamps and topics/entities"
+                # Determine chunking strategy for video/audio transcripts
+                video_chunking_strategy = get_config_value(
+                    request, "VIDEO_AUDIO_CHUNKING_STRATEGY", VIDEO_AUDIO_CHUNKING_STRATEGY
                 )
+                
+                # Use semantic chunking if enabled AND segments are available
+                use_semantic_chunking = (
+                    video_chunking_strategy == "semantic" 
+                    and transcript_segments 
+                    and len(transcript_segments) > 0
+                )
+                
+                # Check if source is video or audio (used by both paths)
+                is_video = file.meta.get("content_type", "").startswith("video/")
+                
+                # Base metadata for all chunks
+                base_metadata = {
+                    **filtered_meta,
+                    "name": file.filename,
+                    "created_by": file.user_id,
+                    "file_id": file.id,
+                    "source": file.filename,
+                }
+                
+                if use_semantic_chunking:
+                    # ============================================================
+                    # SEMANTIC CHUNKING: Uses Whisper segments with natural boundaries
+                    # Benefits: Preserves sentences, respects pauses, accurate timestamps
+                    # ============================================================
+                    log.info(f"Using semantic chunking for audio/video transcript with {len(transcript_segments)} segments")
+                    
+                    # Get chunking parameters from config using shared utility
+                    target_duration = float(get_config_value(
+                        request, "VIDEO_AUDIO_CHUNK_TARGET_DURATION", VIDEO_AUDIO_CHUNK_TARGET_DURATION
+                    ))
+                    max_duration = float(get_config_value(
+                        request, "VIDEO_AUDIO_CHUNK_MAX_DURATION", VIDEO_AUDIO_CHUNK_MAX_DURATION
+                    ))
+                    overlap_duration = float(get_config_value(
+                        request, "VIDEO_AUDIO_CHUNK_OVERLAP_DURATION", VIDEO_AUDIO_CHUNK_OVERLAP_DURATION
+                    ))
+                    
+                    # Create semantic chunks from Whisper segments
+                    semantic_chunks = create_semantic_chunks_from_segments(
+                        segments=transcript_segments,
+                        target_duration=target_duration,
+                        max_duration=max_duration,
+                        overlap_duration=overlap_duration,
+                    )
+                    
+                    # Convert semantic chunks to enriched documents
+                    enriched_docs = []
+                    for chunk in semantic_chunks:
+                        enrichment = extract_enhanced_metadata(chunk["text"])
+                        media_urls = build_media_segment_urls(
+                            file.id, chunk["start"], chunk["end"], is_video
+                        )
+                        
+                        enriched_metadata = build_enriched_chunk_metadata(
+                            base_metadata=base_metadata,
+                            enrichment=enrichment,
+                            chunk_index=chunk["chunk_index"],
+                            total_chunks=chunk["total_chunks"],
+                            timestamp_start=chunk["start"],
+                            timestamp_end=chunk["end"],
+                            duration=chunk["duration"],
+                            chunking_strategy="semantic",
+                            has_overlap=bool(chunk.get("overlap_text")),
+                            transcript_language=transcript_language,
+                            transcript_duration=transcript_duration,
+                            media_urls=media_urls,
+                        )
+                        
+                        enriched_docs.append(Document(
+                            page_content=chunk["text"],
+                            metadata=enriched_metadata
+                        ))
+                    
+                    docs = enriched_docs
+                    log.info(
+                        f"Created {len(docs)} semantic chunks with direct timestamps "
+                        f"(target: {target_duration}s, max: {max_duration}s, overlap: {overlap_duration}s)"
+                    )
+                    
+                else:
+                    # ============================================================
+                    # LEGACY CHARACTER-BASED CHUNKING: Fallback when no segments
+                    # Used when: segments not available OR strategy set to "character"
+                    # ============================================================
+                    log.info(
+                        f"Using character-based chunking for audio/video transcript "
+                        f"(strategy: {video_chunking_strategy}, segments available: {len(transcript_segments) if transcript_segments else 0})"
+                    )
+                    
+                    text_splitter_config = request.app.state.config.TEXT_SPLITTER
+
+                    if text_splitter_config in ["", "unstructured", "character"]:
+                        text_splitter = RecursiveCharacterTextSplitter(
+                            chunk_size=request.app.state.config.CHUNK_SIZE,
+                            chunk_overlap=request.app.state.config.CHUNK_OVERLAP,
+                            add_start_index=True,
+                        )
+                        docs = text_splitter.split_documents(docs)
+                        log.info(f"Split audio/video transcript into {len(docs)} chunks (character)")
+                    elif text_splitter_config == "token":
+                        tiktoken.get_encoding(str(request.app.state.config.TIKTOKEN_ENCODING_NAME))
+                        text_splitter = TokenTextSplitter(
+                            encoding_name=str(request.app.state.config.TIKTOKEN_ENCODING_NAME),
+                            chunk_size=request.app.state.config.CHUNK_SIZE,
+                            chunk_overlap=request.app.state.config.CHUNK_OVERLAP,
+                            add_start_index=True,
+                        )
+                        docs = text_splitter.split_documents(docs)
+                        log.info(f"Split audio/video transcript into {len(docs)} chunks (token)")
+                    elif text_splitter_config == "markdown_header":
+                        headers_to_split_on = [("#", "Header 1"), ("##", "Header 2"), ("###", "Header 3")]
+                        markdown_splitter = MarkdownHeaderTextSplitter(
+                            headers_to_split_on=headers_to_split_on,
+                            strip_headers=False,
+                        )
+                        md_splits = markdown_splitter.split_text(docs[0].page_content)
+                        text_splitter = RecursiveCharacterTextSplitter(
+                            chunk_size=request.app.state.config.CHUNK_SIZE,
+                            chunk_overlap=request.app.state.config.CHUNK_OVERLAP,
+                            add_start_index=True,
+                        )
+                        docs = text_splitter.split_documents(md_splits)
+                        log.info(f"Split audio/video transcript into {len(docs)} chunks (markdown)")
+                    else:
+                        log.warning(f"Unknown TEXT_SPLITTER '{text_splitter_config}', using character splitter")
+                        text_splitter = RecursiveCharacterTextSplitter(
+                            chunk_size=request.app.state.config.CHUNK_SIZE,
+                            chunk_overlap=request.app.state.config.CHUNK_OVERLAP,
+                            add_start_index=True,
+                        )
+                        docs = text_splitter.split_documents(docs)
+
+                    # Enrich each chunk with timestamps and topics/entities
+                    enriched_docs = []
+                    total_docs = len(docs)
+                    
+                    for idx, doc in enumerate(docs):
+                        chunk_start_char = doc.metadata.get("start_index", 0)
+                        enrichment = extract_enhanced_metadata(doc.page_content)
+
+                        # Align chunk with timestamps from Whisper segments
+                        timestamp_data = {}
+                        if transcript_segments:
+                            timestamp_data = align_chunk_with_timestamps(
+                                doc.page_content, transcript_segments, chunk_start_char, full_transcript
+                            )
+
+                        # Build media URLs if timestamps available
+                        media_urls = None
+                        if timestamp_data.get("timestamp_start") is not None and timestamp_data.get("timestamp_end") is not None:
+                            media_urls = build_media_segment_urls(
+                                file.id, 
+                                timestamp_data["timestamp_start"], 
+                                timestamp_data["timestamp_end"], 
+                                is_video
+                            )
+
+                        # Use shared utility to build metadata
+                        enriched_metadata = build_enriched_chunk_metadata(
+                            base_metadata={**doc.metadata, **base_metadata},
+                            enrichment=enrichment,
+                            chunk_index=idx,
+                            total_chunks=total_docs,
+                            timestamp_start=timestamp_data.get("timestamp_start"),
+                            timestamp_end=timestamp_data.get("timestamp_end"),
+                            duration=timestamp_data.get("duration"),
+                            chunking_strategy="character",
+                            transcript_language=transcript_language,
+                            transcript_duration=transcript_duration,
+                            media_urls=media_urls,
+                        )
+
+                        enriched_docs.append(Document(
+                            page_content=doc.page_content, 
+                            metadata=enriched_metadata
+                        ))
+
+                    docs = enriched_docs
+                    log.info(f"Enriched {len(docs)} chunks with timestamps and topics/entities (character-based)")
 
                 text_content = form_data.content
             elif form_data.collection_name:
