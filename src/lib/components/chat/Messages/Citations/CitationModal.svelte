@@ -12,6 +12,22 @@
 
 	const i18n = getContext('i18n');
 	
+	/**
+	 * Get video URL for a document, deriving it from file_id if not explicitly set.
+	 * This provides backward compatibility for files indexed before video_url was added.
+	 */
+	function getVideoUrl(doc: any): string | null {
+		// Use explicit video_url if available
+		if (doc.metadata?.video_url) {
+			return doc.metadata.video_url;
+		}
+		// Derive from file_id if we have video_segment_url (indicates it's a video)
+		if (doc.metadata?.video_segment_url && doc.metadata?.file_id) {
+			return `/api/v1/files/${doc.metadata.file_id}/video`;
+		}
+		return null;
+	}
+	
 	// UI State
 	let copySuccess = false;
 	let emailSending = false;
@@ -393,11 +409,11 @@
 								{/if}
 							</div>
 
-							{#if document.metadata?.video_url}
+							{#if getVideoUrl(document)}
 								<!-- Enhanced video player with timeline highlighting (full video with seek) -->
 								<div class="flex flex-col gap-2 p-3 bg-gray-50 dark:bg-gray-850 rounded-lg">
 									<VideoPlayerWithTimeline
-										src={`${WEBUI_BASE_URL}${document.metadata.video_url}`}
+										src={`${WEBUI_BASE_URL}${getVideoUrl(document)}`}
 										startTime={document.metadata?.timestamp_start || 0}
 										endTime={document.metadata?.timestamp_end}
 										totalDuration={document.metadata?.transcript_duration}
@@ -411,8 +427,8 @@
 								{:else}
 									<pre class="text-sm dark:text-gray-400 whitespace-pre-line mt-2">{document.document}</pre>
 								{/if}
-							{:else if document.metadata?.video_segment_url || document.metadata?.audio_segment_url}
-								<!-- Video/Audio segment player for multimedia content (legacy/audio) -->
+							{:else if document.metadata?.audio_segment_url}
+								<!-- Audio-only segment player -->
 								<div class="flex flex-col gap-2 p-3 bg-gray-50 dark:bg-gray-850 rounded-lg">
 									<div class="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-400">
 										<svg
@@ -423,21 +439,12 @@
 											stroke="currentColor"
 											class="size-4"
 										>
-											{#if document.metadata?.video_segment_url}
-												<!-- Video icon -->
-												<path
-													stroke-linecap="round"
-													stroke-linejoin="round"
-													d="m15.75 10.5 4.72-4.72a.75.75 0 0 1 1.28.53v11.38a.75.75 0 0 1-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25h-9A2.25 2.25 0 0 0 2.25 7.5v9a2.25 2.25 0 0 0 2.25 2.25Z"
-												/>
-											{:else}
-												<!-- Audio icon -->
-												<path
-													stroke-linecap="round"
-													stroke-linejoin="round"
-													d="M19.114 5.636a9 9 0 0 1 0 12.728M16.463 8.288a5.25 5.25 0 0 1 0 7.424M6.75 8.25l4.72-4.72a.75.75 0 0 1 1.28.53v15.88a.75.75 0 0 1-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.009 9.009 0 0 1 2.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75Z"
-												/>
-											{/if}
+											<!-- Audio icon -->
+											<path
+												stroke-linecap="round"
+												stroke-linejoin="round"
+												d="M19.114 5.636a9 9 0 0 1 0 12.728M16.463 8.288a5.25 5.25 0 0 1 0 7.424M6.75 8.25l4.72-4.72a.75.75 0 0 1 1.28.53v15.88a.75.75 0 0 1-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.009 9.009 0 0 1 2.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75Z"
+											/>
 										</svg>
 										{#if document.metadata?.timestamp_start !== undefined && document.metadata?.timestamp_end !== undefined}
 											<span>
@@ -453,52 +460,26 @@
 										{/if}
 									</div>
 									
-									{#if document.metadata?.video_segment_url}
-										<!-- Legacy segment fallback -->
-                                {#await loadMediaBlob(document.metadata.video_segment_url)}
-                                    <div class="flex items-center justify-center py-4 text-gray-500">
-                                        <span class="text-sm">Loading video...</span>
-                                    </div>
-                                {:then videoBlobUrl}
-                                    {#if videoBlobUrl}
-                                        <video
-                                            controls
-                                            preload="metadata"
-                                            class="w-full max-h-[32rem] rounded"
-                                            style="max-width: 100%; object-fit: contain;"
-                                            src={videoBlobUrl}
-                                        >
-                                            Your browser does not support video playback.
-                                        </video>
-                                    {:else}
-                                        <div class="text-sm text-red-500">Failed to load video</div>
-                                    {/if}
-                                {:catch}
-                                    <div class="text-sm text-red-500">Failed to load video</div>
-                                {/await}
-									{:else}
-										<!-- Audio-only player -->
-										{#await loadMediaBlob(document.metadata.audio_segment_url)}
-											<div class="flex items-center justify-center py-4 text-gray-500">
-												<span class="text-sm">Loading audio...</span>
-											</div>
-										{:then blobUrl}
-											{#if blobUrl}
-												<audio
-													controls
-													preload="metadata"
-													class="w-full"
-													src={blobUrl}
-												>
-													Your browser does not support audio playback.
-												</audio>
-											{:else}
-												<div class="text-sm text-red-500">Failed to load audio</div>
-											{/if}
-										{:catch error}
-											<div class="text-sm text-red-500">Error: {error.message}</div>
-										{/await}
-									{/if}
+									{#await loadMediaBlob(document.metadata.audio_segment_url)}
+										<div class="flex items-center justify-center py-4 text-gray-500">
+											<span class="text-sm">Loading audio...</span>
+										</div>
+									{:then blobUrl}
+										{#if blobUrl}
+											<audio
+												controls
+												preload="metadata"
+												class="w-full"
+												src={blobUrl}
+											>
+												Your browser does not support audio playback.
+											</audio>
+										{:else}
+											<div class="text-sm text-red-500">Failed to load audio</div>
+										{/if}
+									{:catch error}
+										<div class="text-sm text-red-500">Error: {error.message}</div>
+									{/await}
 								</div>
 								<!-- Text content below media -->
 								{#if isMarkdownContent(document.document)}
