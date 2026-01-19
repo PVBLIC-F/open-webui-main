@@ -8,6 +8,7 @@
 	import XMark from '$lib/components/icons/XMark.svelte';
 	import Textarea from '$lib/components/common/Textarea.svelte';
 	import Markdown from '$lib/components/chat/Messages/Markdown.svelte';
+	import VideoPlayerWithTimeline from './VideoPlayerWithTimeline.svelte';
 
 	const i18n = getContext('i18n');
 	
@@ -192,17 +193,6 @@
 			return null;
 		}
     };
-
-    // Programmatic seek for full video playback
-    function onVideoMeta(e: Event, start?: number) {
-        const el = e.currentTarget as HTMLVideoElement;
-        if (!el || start == null) return;
-        try {
-            el.currentTime = start;
-            // Attempt autoplay (will be ignored if not allowed)
-            el.play().catch(() => {});
-        } catch (_) {}
-    }
 
 	const getTextFragmentUrl = (doc: any): string | null => {
 		const { metadata, source, document: content } = doc ?? {};
@@ -403,8 +393,26 @@
 								{/if}
 							</div>
 
-							{#if document.metadata?.video_segment_url || document.metadata?.audio_segment_url}
-								<!-- Video/Audio segment player for multimedia content -->
+							{#if document.metadata?.video_url}
+								<!-- Enhanced video player with timeline highlighting (full video with seek) -->
+								<div class="flex flex-col gap-2 p-3 bg-gray-50 dark:bg-gray-850 rounded-lg">
+									<VideoPlayerWithTimeline
+										src={`${WEBUI_BASE_URL}${document.metadata.video_url}`}
+										startTime={document.metadata?.timestamp_start || 0}
+										endTime={document.metadata?.timestamp_end}
+										totalDuration={document.metadata?.transcript_duration}
+									/>
+								</div>
+								<!-- Text content below video -->
+								{#if isMarkdownContent(document.document)}
+									<div class="{PROSE_CLASS} mt-2">
+										<Markdown content={document.document} id={`citation-video-${documentIdx}`} />
+									</div>
+								{:else}
+									<pre class="text-sm dark:text-gray-400 whitespace-pre-line mt-2">{document.document}</pre>
+								{/if}
+							{:else if document.metadata?.video_segment_url || document.metadata?.audio_segment_url}
+								<!-- Video/Audio segment player for multimedia content (legacy/audio) -->
 								<div class="flex flex-col gap-2 p-3 bg-gray-50 dark:bg-gray-850 rounded-lg">
 									<div class="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-400">
 										<svg
@@ -445,21 +453,8 @@
 										{/if}
 									</div>
 									
-                            {#if document.metadata?.video_url}
-                                <!-- Stream full video and seek to start timestamp -->
-                                <video
-                                    controls
-                                    preload="metadata"
-                                    class="w-full max-h-[32rem] rounded"
-                                    style="max-width: 100%; object-fit: contain;"
-                                    src={`${WEBUI_BASE_URL}${document.metadata.video_url}`}
-                                    on:loadedmetadata={(e) => onVideoMeta(e, document.metadata?.timestamp_start)}
-                                    playsinline
-                                >
-                                    Your browser does not support video playback.
-                                </video>
-                            {:else if document.metadata?.video_segment_url}
-                                <!-- Legacy segment fallback -->
+									{#if document.metadata?.video_segment_url}
+										<!-- Legacy segment fallback -->
                                 {#await loadMediaBlob(document.metadata.video_segment_url)}
                                     <div class="flex items-center justify-center py-4 text-gray-500">
                                         <span class="text-sm">Loading video...</span>
