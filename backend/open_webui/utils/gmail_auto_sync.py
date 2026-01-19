@@ -25,7 +25,7 @@ import re
 from typing import Dict, List, Optional
 from datetime import datetime
 
-from open_webui.utils.gmail_fetcher import GmailFetcher
+from open_webui.utils.gmail_fetcher import GmailFetcher, HistoryIdExpiredError
 from open_webui.utils.gmail_indexer_v2 import GmailIndexerV2
 from open_webui.utils.temp_cleanup import run_cleanup, get_cache_stats
 from open_webui.models.users import Users
@@ -170,116 +170,126 @@ class GmailAutoSync:
 
             logger.info(f"✅ OAuth token validated with Gmail scopes")
 
-            # Step 1: Get inbox count first (fast - single API call)
-            logger.info(f"📥 Step 1: Getting inbox count...")
-
+            # Initialize fetcher
             fetcher = GmailFetcher(
                 oauth_token=access_token,
                 max_requests_per_second=40,  # Conservative rate limit
                 timeout=30,
                 token_refresh_callback=token_refresh_callback,
             )
-            
+
             if token_refresh_callback:
                 logger.info(f"   Token refresh callback configured for long-running sync")
 
-            # Determine sync query based on incremental mode
-            if incremental and sync_status.last_sync_timestamp:
-                # Incremental sync - get emails since last sync
-                days_since_sync = (time.time() - sync_status.last_sync_timestamp) / (
-                    24 * 3600
-                )
+            # =====================================================================
+            # SYNC STRATEGY SELECTION
+            # Priority: 1) History API (most accurate) -> 2) Time-based (fallback)
+            # =====================================================================
+            message_ids = []
+            deleted_message_ids = []
+            new_history_id = None
+            sync_method = "unknown"
+            query = None
 
-                # Smart time window selection based on sync frequency
-                if days_since_sync < 0.5:  # Less than 12 hours
-                    query = "newer_than:6h"
-                    logger.info(
-                        f"   Incremental sync: fetching emails from last 6 hours"
+            # Try History API first for incremental sync (most accurate method)
+            if incremental and sync_status.last_sync_history_id:
+                logger.info("=" * 70)
+                logger.info("📜 HISTORY API SYNC (Accurate Incremental)")
+                logger.info(f"   Using historyId: {sync_status.last_sync_history_id}")
+                logger.info("=" * 70)
+
+                try:
+                    added_ids, deleted_ids, new_history_id = await fetcher.fetch_history_changes(
+                        start_history_id=sync_status.last_sync_history_id,
+                        skip_spam_trash=skip_spam_trash,
+                        max_results=max_emails,
                     )
-                elif days_since_sync < 1:  # Less than 24 hours
-                    query = "newer_than:1d"
+
+                    message_ids = added_ids
+                    deleted_message_ids = deleted_ids
+                    sync_method = "history_api"
+
                     logger.info(
-                        f"   Incremental sync: fetching emails from last 24 hours"
+                        f"✅ History API: {len(message_ids)} new/modified, "
+                        f"{len(deleted_message_ids)} deleted"
                     )
-                elif days_since_sync < 3:  # Less than 3 days
-                    query = "newer_than:3d"
-                    logger.info(
-                        f"   Incremental sync: fetching emails from last 3 days"
+
+                except HistoryIdExpiredError as e:
+                    # History is too old (>30 days) - fall back to time-based
+                    logger.warning(
+                        f"⚠️  History ID expired: {e}. Falling back to time-based sync."
                     )
-                elif days_since_sync < 7:  # Less than a week
-                    query = "newer_than:7d"
-                    logger.info(
-                        f"   Incremental sync: fetching emails from last 7 days"
-                    )
+                    sync_method = "time_fallback"
+
+                except Exception as e:
+                    logger.error(f"❌ History API error: {e}. Falling back to time-based sync.")
+                    sync_method = "time_fallback"
+
+            # Time-based sync (fallback or first sync)
+            if not message_ids or sync_method == "time_fallback":
+                if sync_method != "time_fallback":
+                    sync_method = "time_based"
+
+                logger.info("=" * 70)
+                if incremental and sync_status.last_sync_timestamp:
+                    logger.info("📅 TIME-BASED INCREMENTAL SYNC")
+                    days_since_sync = (time.time() - sync_status.last_sync_timestamp) / (24 * 3600)
+
+                    # Smart time window selection
+                    if days_since_sync < 0.5:
+                        query = "newer_than:6h"
+                    elif days_since_sync < 1:
+                        query = "newer_than:1d"
+                    elif days_since_sync < 3:
+                        query = "newer_than:3d"
+                    elif days_since_sync < 7:
+                        query = "newer_than:7d"
+                    else:
+                        query = "newer_than:30d"
+
+                    logger.info(f"   Query: {query} (last sync: {days_since_sync:.1f} days ago)")
                 else:
-                    # If last sync was much older, do a broader catch-up
-                    query = "newer_than:30d"
-                    logger.info(
-                        f"   Incremental sync: fetching emails from last 30 days (catch-up)"
-                    )
-            else:
-                # Full sync - get all emails
-                query = None
-                logger.info(
-                    f"   Full sync: fetching all emails (first time or disabled incremental)"
+                    logger.info("📥 FULL SYNC (First time or forced)")
+                    query = None
+                logger.info("=" * 70)
+
+                # Step 1: Get inbox count (fast estimate)
+                logger.info(f"📊 Step 1: Getting inbox estimate...")
+                inbox_count = await fetcher.get_inbox_count(
+                    skip_spam_trash=skip_spam_trash,
+                    query=query,
+                )
+                logger.info(f"   Gmail estimate: ~{inbox_count} emails")
+
+                # Step 2: Fetch message IDs
+                logger.info(f"📥 Step 2: Fetching message IDs...")
+                effective_max = max_emails if not incremental else min(max_emails, inbox_count) if max_emails > 0 else inbox_count
+
+                message_ids = await fetcher.fetch_all_message_ids(
+                    max_results=effective_max,
+                    skip_spam_trash=skip_spam_trash,
+                    query=query,
                 )
 
-            # Get inbox count first (fast - ~1 API call)
-            # Note: Gmail's resultSizeEstimate can be very inaccurate
-            inbox_count = await fetcher.get_inbox_count(
-                skip_spam_trash=skip_spam_trash,
-                query=query,
-            )
-            
-            logger.info(f"📊 Gmail estimate: ~{inbox_count} emails (note: estimate can be inaccurate)")
-            
-            # For full sync (incremental=False), don't trust the estimate - fetch up to max_emails
-            # For incremental sync, use the estimate as a guide
-            if not incremental:
-                # Full sync - fetch up to max_emails regardless of estimate
-                effective_max = max_emails if max_emails > 0 else 0  # 0 means unlimited
-                logger.info(f"📥 Full sync: will fetch up to {effective_max if effective_max > 0 else 'ALL'} emails (ignoring estimate)")
-            else:
-                # Incremental sync - use estimate as guide
-                effective_max = min(max_emails, inbox_count) if max_emails > 0 else inbox_count
-            
-            # Calculate batch parameters based on count (use estimate for planning)
-            # For full sync with unknown count, use max_emails or estimate as guide
-            planning_count = effective_max if effective_max > 0 else max(inbox_count, max_emails)
-            batch_params = GmailFetcher.calculate_batch_params(
-                total_count=planning_count,
-                target_batch_size=500,  # Optimal for memory/performance
-                min_batch_size=50,
-                max_batch_size=1000,
-            )
-            
-            if effective_max == 0:
-                logger.info(f"📦 Batch plan: fetching ALL emails, batch_size={batch_params['batch_size']}")
-            else:
-                logger.info(
-                    f"📦 Batch plan: {batch_params['num_batches']} batches of {batch_params['batch_size']} emails "
-                    f"(~{batch_params['estimated_time_minutes']:.0f} min estimated)"
-                )
+            # Get current history ID for next sync (important for History API)
+            if not new_history_id:
+                profile = await fetcher.get_profile()
+                if profile:
+                    new_history_id = profile.get("historyId")
+                    logger.info(f"📜 Current historyId: {new_history_id} (saved for next sync)")
 
-            # Step 2: Fetch all message IDs
-            logger.info(f"📥 Step 2: Fetching message IDs...")
-            message_ids = await fetcher.fetch_all_message_ids(
-                max_results=effective_max,
-                skip_spam_trash=skip_spam_trash,
-                query=query,
-            )
-            
-            # Update batch params with actual count
+            # Calculate batch parameters
             actual_count = len(message_ids)
-            logger.info(f"📊 Actual email count: {actual_count} (Gmail estimate was ~{inbox_count})")
-            
-            if actual_count != inbox_count:
-                logger.info(f"   ⚠️  Gmail estimate was off by {abs(actual_count - inbox_count)} emails")
-            
-            # Recalculate batch params with actual count
+            logger.info(f"📊 Emails to process: {actual_count}")
+
+            if deleted_message_ids:
+                logger.info(f"🗑️  Emails to delete from index: {len(deleted_message_ids)}")
+
             batch_params = GmailFetcher.calculate_batch_params(
                 total_count=actual_count,
-                target_batch_size=batch_params['batch_size'],
+                target_batch_size=500,
+                min_batch_size=50,
+                max_batch_size=1000,
             )
 
             # Step 3: Fetch emails in batches
@@ -372,15 +382,24 @@ class GmailAutoSync:
 
             self.active_syncs[user_id]["indexed"] = indexed_count
             self.active_syncs[user_id]["status"] = "completed"
+            self.active_syncs[user_id]["sync_method"] = sync_method
 
-            # Mark sync as completed in database
+            # Handle deleted emails (remove from vector store)
+            if deleted_message_ids:
+                await self._delete_emails_from_index(
+                    user_id=user_id,
+                    email_ids=deleted_message_ids,
+                )
+                self.active_syncs[user_id]["deleted"] = len(deleted_message_ids)
+
+            # Mark sync as completed in database with history ID for next sync
             sync_duration = int(time.time() - self.active_syncs[user_id]["start_time"])
             gmail_sync_status.mark_sync_complete(
                 user_id=user_id,
                 emails_synced=indexed_count,
                 duration_seconds=sync_duration,
-                last_history_id=None,  # TODO: Track Gmail history ID for better incremental sync
-                last_email_id=None,  # TODO: Track last email ID
+                last_history_id=new_history_id,  # Track for History API incremental sync
+                last_email_id=message_ids[-1] if message_ids else None,
             )
 
             # Clear emails list to free memory
@@ -398,14 +417,19 @@ class GmailAutoSync:
             logger.info("=" * 70)
             logger.info(f"🎉 GMAIL SYNC COMPLETED - User: {user_id}")
             logger.info(f"   Sync type: {sync_type.upper()}")
+            logger.info(f"   Sync method: {result.get('sync_method', sync_method).upper()}")
             logger.info(f"   Total emails fetched: {result['total_emails']}")
             logger.info(f"   Successfully indexed: {result['indexed']}")
+            if result.get('deleted', 0) > 0:
+                logger.info(f"   Deleted from index: {result['deleted']}")
             logger.info(
                 f"   Duplicates skipped: {self.active_syncs[user_id].get('duplicates_skipped', 0)}"
             )
             logger.info(f"   Errors: {result['errors']}")
             logger.info(f"   Total time: {total_time:.1f}s")
             logger.info(f"   Processing rate: {emails_per_second:.1f} emails/sec")
+            if new_history_id:
+                logger.info(f"   Next sync historyId: {new_history_id}")
 
             # Performance assessment
             if emails_per_second > 10:
@@ -551,6 +575,64 @@ class GmailAutoSync:
 
         return total_indexed
 
+    async def _delete_emails_from_index(
+        self,
+        user_id: str,
+        email_ids: List[str],
+    ) -> int:
+        """
+        Delete emails from vector store (for History API sync).
+
+        When emails are deleted or moved to SPAM/TRASH, we need to remove
+        them from the vector index to keep search results accurate.
+
+        Args:
+            user_id: User ID for namespace
+            email_ids: List of Gmail message IDs to delete
+
+        Returns:
+            Number of emails deleted
+        """
+        if not email_ids:
+            return 0
+
+        logger.info(f"🗑️  Deleting {len(email_ids)} emails from index for user {user_id}")
+
+        try:
+            from open_webui.retrieval.vector.factory import VECTOR_DB_CLIENT
+            import inspect
+
+            collection_name = "gmail"
+            user_namespace = f"email-{user_id}"
+
+            # Convert email IDs to vector IDs (format: "email-{email_id}")
+            vector_ids = [f"email-{email_id}" for email_id in email_ids]
+
+            # Check if vector DB supports namespace
+            delete_signature = inspect.signature(VECTOR_DB_CLIENT.delete)
+
+            if "namespace" in delete_signature.parameters:
+                # Pinecone-style with namespace
+                VECTOR_DB_CLIENT.delete(
+                    collection_name=collection_name,
+                    ids=vector_ids,
+                    namespace=user_namespace,
+                )
+            else:
+                # Chroma-style with collection per user
+                user_collection = f"email-{user_id}"
+                VECTOR_DB_CLIENT.delete(
+                    collection_name=user_collection,
+                    ids=vector_ids,
+                )
+
+            logger.info(f"✅ Deleted {len(vector_ids)} vectors from index")
+            return len(vector_ids)
+
+        except Exception as e:
+            logger.error(f"❌ Error deleting emails from index: {e}")
+            return 0
+
     def _build_sync_result(self, user_id: str) -> Dict:
         """Build sync result with statistics"""
 
@@ -560,9 +642,11 @@ class GmailAutoSync:
         return {
             "user_id": user_id,
             "status": sync_status.get("status", "unknown"),
+            "sync_method": sync_status.get("sync_method", "unknown"),
             "total_emails": sync_status.get("total_emails", 0),
             "processed": sync_status.get("processed", 0),
             "indexed": sync_status.get("indexed", 0),
+            "deleted": sync_status.get("deleted", 0),
             "errors": sync_status.get("errors", 0),
             "total_time": elapsed_time,
             "error": sync_status.get("error"),

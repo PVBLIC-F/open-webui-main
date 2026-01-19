@@ -41,6 +41,7 @@ from functools import partial
 from typing import Dict, List, Optional
 
 from open_webui.utils.gmail_processor import GmailProcessor
+from open_webui.utils.async_utils import gather_with_concurrency
 from open_webui.config import (
     RAG_EMBEDDING_BATCH_SIZE,
     SEMANTIC_MAX_CHUNK_SIZE,
@@ -283,14 +284,41 @@ class GmailIndexerV2:
         process_attachments: bool = True,
         max_attachment_size_mb: int = 10,
         allowed_attachment_types: str = ".pdf,.docx,.doc,.xlsx,.xls,.pptx,.ppt,.txt,.csv,.md,.html,.eml",
+        max_concurrent: int = 0,
     ) -> Dict:
         """
-        Process multiple emails in batch with deduplication.
-        Uses configurable yield intervals for performance tuning.
+        Process multiple emails in batch with deduplication and parallel processing.
+
+        Uses parallel processing for 2-5x speedup on I/O-bound embedding operations.
+        Deduplication is done first (sequential), then unique emails are processed in parallel.
+
+        Args:
+            emails: List of Gmail API email responses
+            user_id: User ID for isolation
+            fetcher: GmailFetcher instance for attachment downloads
+            process_attachments: Enable attachment processing
+            max_attachment_size_mb: Maximum attachment size
+            allowed_attachment_types: Comma-separated allowed extensions
+            max_concurrent: Max parallel email processors (0 = use config default)
+
+        Returns:
+            Dict with processed, duplicates_skipped, errors, total_vectors, upsert_data, etc.
         """
         # Load performance config
-        from open_webui.config import GMAIL_YIELD_INTERVAL, GMAIL_YIELD_DELAY_MS
-        
+        from open_webui.config import (
+            GMAIL_YIELD_INTERVAL,
+            GMAIL_YIELD_DELAY_MS,
+            GMAIL_EMAIL_PROCESSING_CONCURRENCY,
+        )
+
+        # Get concurrency limit from config or parameter
+        if max_concurrent <= 0:
+            max_concurrent = (
+                GMAIL_EMAIL_PROCESSING_CONCURRENCY.value
+                if hasattr(GMAIL_EMAIL_PROCESSING_CONCURRENCY, "value")
+                else 5  # Default: 5 parallel email processors
+            )
+
         yield_interval = (
             GMAIL_YIELD_INTERVAL.value
             if hasattr(GMAIL_YIELD_INTERVAL, "value")
@@ -301,45 +329,67 @@ class GmailIndexerV2:
             if hasattr(GMAIL_YIELD_DELAY_MS, "value")
             else 10
         )
-        yield_delay = yield_delay_ms / 1000.0  # Convert to seconds
-        
-        batch_start = time.time()
-        all_upsert_data = []
-        processed_count = 0
-        error_count = 0
-        duplicate_count = 0
-        total_quality_score = 0
+        yield_delay = yield_delay_ms / 1000.0
 
-        # Track content fingerprints for mass email detection
+        batch_start = time.time()
+
+        # =====================================================================
+        # PHASE 1: Deduplication (sequential - must track fingerprints)
+        # =====================================================================
         seen_content = {}
+        unique_emails = []
+        duplicate_count = 0
+
+        for email_data in emails:
+            email_id = email_data.get("id", "unknown")
+            snippet = email_data.get("snippet", "")
+
+            # Detect mass emails (same content sent to many recipients)
+            headers = email_data.get("payload", {}).get("headers", [])
+            subject = next(
+                (h["value"] for h in headers if h["name"] == "Subject"), ""
+            )
+            content_fingerprint = hashlib.md5(
+                f"{subject[:100]}{snippet[:100]}".encode()
+            ).hexdigest()
+
+            if content_fingerprint in seen_content:
+                duplicate_count += 1
+                logger.debug(f"  ⏭️  Skipping duplicate: {email_id[:8]}")
+                continue
+
+            seen_content[content_fingerprint] = email_id
+            unique_emails.append(email_data)
 
         logger.info(
             f"📦 Processing batch of {len(emails)} emails "
-            f"(yield_interval={yield_interval}, yield_delay={yield_delay_ms}ms)"
+            f"({len(unique_emails)} unique, {duplicate_count} duplicates, "
+            f"concurrency={max_concurrent})"
         )
 
-        for idx, email_data in enumerate(emails):
+        if not unique_emails:
+            return {
+                "processed": 0,
+                "duplicates_skipped": duplicate_count,
+                "errors": 0,
+                "total_vectors": 0,
+                "upsert_data": [],
+                "processing_time": time.time() - batch_start,
+                "avg_quality_score": 0,
+            }
+
+        # =====================================================================
+        # PHASE 2: Parallel Processing (I/O-bound - benefits from concurrency)
+        # =====================================================================
+        all_upsert_data = []
+        error_count = 0
+        total_quality_score = 0
+        processed_count = 0
+
+        # Create processing tasks for all unique emails
+        async def process_single_email(email_data: dict) -> Optional[Dict]:
+            """Process a single email, returning result or None on error."""
             try:
-                email_id = email_data.get("id", "unknown")
-                snippet = email_data.get("snippet", "")
-
-                # Detect mass emails (same content sent to many recipients)
-                headers = email_data.get("payload", {}).get("headers", [])
-                subject = next(
-                    (h["value"] for h in headers if h["name"] == "Subject"), ""
-                )
-                content_fingerprint = hashlib.md5(
-                    f"{subject[:100]}{snippet[:100]}".encode()
-                ).hexdigest()
-
-                if content_fingerprint in seen_content:
-                    duplicate_count += 1
-                    logger.debug(f"  ⏭️  Skipping duplicate: {email_id[:8]}")
-                    continue
-
-                seen_content[content_fingerprint] = email_id
-
-                # Process email
                 result = await self.process_email_for_indexing(
                     email_data,
                     user_id,
@@ -348,47 +398,47 @@ class GmailIndexerV2:
                     max_attachment_size_mb=max_attachment_size_mb,
                     allowed_attachment_types=allowed_attachment_types,
                 )
-
-                all_upsert_data.extend(result["upsert_data"])
-                processed_count += 1
-                total_quality_score += result.get("quality_score", 0)
-
                 # Clear email data to free memory
                 email_data.clear()
-
-                # CRITICAL: Yield to event loop frequently to keep server responsive
-                # Always yield after each email (minimal overhead)
-                await asyncio.sleep(0)
-
-                # Configurable delay for server responsiveness
-                # Higher yield_interval = faster but less responsive
-                if yield_interval > 0 and processed_count % yield_interval == 0:
-                    if yield_delay > 0:
-                        await asyncio.sleep(yield_delay)
-
-                # Longer delay every 4x yield_interval for breathing room
-                breathing_interval = yield_interval * 4
-                if breathing_interval > 0 and processed_count % breathing_interval == 0:
-                    await asyncio.sleep(yield_delay * 5)  # 5x the normal delay
-
+                return result
             except Exception as e:
                 email_id = email_data.get("id", "unknown")
                 logger.error(f"  ❌ Error processing {email_id[:8]}: {e}")
+                return None
+
+        # Process emails in parallel with controlled concurrency
+        tasks = [process_single_email(email) for email in unique_emails]
+        results = await gather_with_concurrency(
+            tasks,
+            max_concurrent=max_concurrent,
+            return_exceptions=True,
+        )
+
+        # Collect results with periodic yields for server responsiveness
+        for idx, result in enumerate(results):
+            if isinstance(result, Exception):
                 error_count += 1
-                # Still yield even on error
-                await asyncio.sleep(0)
-                continue
+                logger.error(f"  ❌ Parallel processing error: {result}")
+            elif result is None:
+                error_count += 1
+            else:
+                all_upsert_data.extend(result["upsert_data"])
+                total_quality_score += result.get("quality_score", 0)
+                processed_count += 1
+
+            # Yield to event loop periodically
+            if yield_interval > 0 and (idx + 1) % yield_interval == 0:
+                await asyncio.sleep(yield_delay)
 
         batch_time = time.time() - batch_start
-        avg_quality = (
-            total_quality_score / processed_count if processed_count > 0 else 0
-        )
+        avg_quality = total_quality_score / processed_count if processed_count > 0 else 0
         emails_per_second = processed_count / batch_time if batch_time > 0 else 0
 
         logger.info(
             f"✅ Batch complete: {processed_count} emails, "
             f"{duplicate_count} duplicates, {error_count} errors, "
-            f"{emails_per_second:.1f} emails/s, avg quality={avg_quality:.1f}"
+            f"{emails_per_second:.1f} emails/s (parallel, concurrency={max_concurrent}), "
+            f"avg quality={avg_quality:.1f}"
         )
 
         return {

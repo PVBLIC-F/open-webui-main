@@ -45,6 +45,11 @@ class TokenExpiredError(Exception):
     pass
 
 
+class HistoryIdExpiredError(Exception):
+    """Raised when Gmail history ID is too old and full sync is required."""
+    pass
+
+
 class GmailFetcher:
     """
     Fetches emails from Gmail API with proper rate limiting and pagination.
@@ -729,6 +734,211 @@ class GmailFetcher:
         )
         
         return batches
+
+    # =========================================================================
+    # Gmail History API Methods (for efficient incremental sync)
+    # =========================================================================
+
+    async def get_profile(self) -> Optional[Dict]:
+        """
+        Get user's Gmail profile including current historyId.
+
+        The historyId is essential for incremental sync - it represents
+        the current state of the mailbox and can be used with History API.
+
+        Returns:
+            Dict with profile info including 'historyId', or None on error
+
+        Example:
+            >>> profile = await fetcher.get_profile()
+            >>> print(f"Current history ID: {profile['historyId']}")
+        """
+        url = f"{self.GMAIL_API_BASE}/users/me/profile"
+
+        async def _fetch_profile():
+            headers = {
+                "Authorization": f"Bearer {self.oauth_token}",
+                "Accept": "application/json",
+            }
+
+            await self._rate_limit()
+            session = await self._get_session()
+
+            async with session.get(url, headers=headers) as response:
+                self.stats["api_calls"] += 1
+
+                if response.status == 401:
+                    raise TokenExpiredError("OAuth token expired or invalid")
+
+                if response.status != 200:
+                    error_text = await response.text()
+                    logger.error(f"Error fetching profile: {response.status} - {error_text}")
+                    return None
+
+                return await response.json()
+
+        try:
+            return await self._retry_request(_fetch_profile, operation_name="Fetch profile")
+        except TokenExpiredError:
+            if await self._refresh_token_if_needed():
+                return await self.get_profile()
+            return None
+
+    async def fetch_history_changes(
+        self,
+        start_history_id: str,
+        skip_spam_trash: bool = True,
+        max_results: int = 0,
+    ) -> Tuple[List[str], List[str], Optional[str]]:
+        """
+        Fetch mailbox changes since a specific historyId using Gmail History API.
+
+        This is more efficient and accurate than time-based queries because:
+        - Returns EXACTLY what changed (no missed emails, no duplicates)
+        - Handles deletions (so we can remove deleted emails from index)
+        - Smaller API response (just IDs, not full messages)
+
+        Args:
+            start_history_id: The historyId to start from (from previous sync)
+            skip_spam_trash: Skip messages that were moved to SPAM/TRASH
+            max_results: Maximum messages to return (0 = unlimited)
+
+        Returns:
+            Tuple of:
+            - added_message_ids: List of new/modified message IDs
+            - deleted_message_ids: List of deleted message IDs
+            - new_history_id: Latest historyId for next sync (or None on error)
+
+        Raises:
+            HistoryIdExpiredError: If history is too old (need full sync)
+
+        Example:
+            >>> added, deleted, new_id = await fetcher.fetch_history_changes("12345")
+            >>> print(f"Added: {len(added)}, Deleted: {len(deleted)}")
+        """
+        logger.info(f"📜 Fetching history changes since historyId: {start_history_id}")
+
+        added_message_ids = set()
+        deleted_message_ids = set()
+        new_history_id = None
+        next_page_token = None
+        page_count = 0
+
+        session = await self._get_session()
+        url = f"{self.GMAIL_API_BASE}/users/me/history"
+
+        while True:
+            page_count += 1
+
+            params = {
+                "startHistoryId": start_history_id,
+                "historyTypes": ["messageAdded", "messageDeleted"],
+            }
+
+            if skip_spam_trash:
+                # Only get changes that don't involve SPAM/TRASH
+                params["labelId"] = "INBOX"  # Focus on INBOX changes
+
+            if next_page_token:
+                params["pageToken"] = next_page_token
+
+            async def _fetch_history_page():
+                headers = {
+                    "Authorization": f"Bearer {self.oauth_token}",
+                    "Accept": "application/json",
+                }
+
+                await self._rate_limit()
+
+                async with session.get(url, params=params, headers=headers) as response:
+                    self.stats["api_calls"] += 1
+
+                    if response.status == 401:
+                        raise TokenExpiredError("OAuth token expired or invalid")
+
+                    if response.status == 404:
+                        # History ID is too old - Gmail purges history after ~30 days
+                        error_data = await response.json()
+                        if "notFound" in str(error_data).lower():
+                            raise HistoryIdExpiredError(
+                                f"History ID {start_history_id} is too old or invalid. "
+                                "Full sync required."
+                            )
+                        raise Exception(f"History API 404: {error_data}")
+
+                    if response.status != 200:
+                        error_text = await response.text()
+                        raise Exception(f"History API error: {response.status} - {error_text}")
+
+                    return await response.json()
+
+            try:
+                data = await self._retry_request(
+                    _fetch_history_page,
+                    operation_name=f"Fetch history (page {page_count})",
+                )
+
+                if data is None:
+                    logger.error(f"Failed to fetch history page {page_count}")
+                    break
+
+            except TokenExpiredError:
+                if await self._refresh_token_if_needed():
+                    continue  # Retry with new token
+                raise
+            except HistoryIdExpiredError:
+                raise  # Propagate to caller for full sync
+            except Exception as e:
+                logger.error(f"History API error: {e}")
+                self.stats["errors"] += 1
+                raise
+
+            # Update the latest history ID
+            new_history_id = data.get("historyId", new_history_id)
+
+            # Process history records
+            for record in data.get("history", []):
+                # Messages added (new emails or label changes that make them visible)
+                for msg_added in record.get("messagesAdded", []):
+                    msg_id = msg_added.get("message", {}).get("id")
+                    if msg_id:
+                        added_message_ids.add(msg_id)
+                        # If it was previously marked as deleted, remove from deleted set
+                        deleted_message_ids.discard(msg_id)
+
+                # Messages deleted (or moved to SPAM/TRASH)
+                for msg_deleted in record.get("messagesDeleted", []):
+                    msg_id = msg_deleted.get("message", {}).get("id")
+                    if msg_id:
+                        deleted_message_ids.add(msg_id)
+                        # Remove from added if it was added then deleted
+                        added_message_ids.discard(msg_id)
+
+            logger.info(
+                f"   Page {page_count}: +{len(added_message_ids)} added, "
+                f"-{len(deleted_message_ids)} deleted so far"
+            )
+
+            # Check for more pages
+            next_page_token = data.get("nextPageToken")
+            if not next_page_token:
+                break
+
+            # Check max results limit
+            if max_results > 0 and len(added_message_ids) >= max_results:
+                logger.info(f"   Reached max_results limit: {max_results}")
+                break
+
+        # Convert sets to lists
+        added_list = list(added_message_ids)
+        deleted_list = list(deleted_message_ids)
+
+        logger.info(
+            f"✅ History sync complete: {len(added_list)} added, "
+            f"{len(deleted_list)} deleted, new historyId: {new_history_id}"
+        )
+
+        return added_list, deleted_list, new_history_id
 
     async def fetch_attachment(
         self, message_id: str, attachment_id: str, filename: str,

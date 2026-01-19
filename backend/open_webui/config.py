@@ -535,6 +535,15 @@ GMAIL_YIELD_DELAY_MS = PersistentConfig(
     int(os.environ.get("GMAIL_YIELD_DELAY_MS", "10")),
 )
 
+# Number of emails to process in parallel within each batch
+# Higher = faster but more memory/CPU. Lower = slower but more stable.
+# Range: 1-10, Default: 5 (balanced), Conservative: 3, Aggressive: 8
+GMAIL_EMAIL_PROCESSING_CONCURRENCY = PersistentConfig(
+    "GMAIL_EMAIL_PROCESSING_CONCURRENCY",
+    "gmail.performance.email_processing_concurrency",
+    int(os.environ.get("GMAIL_EMAIL_PROCESSING_CONCURRENCY", "5")),
+)
+
 ####################################
 # Google Drive Knowledge Sync Settings
 ####################################
