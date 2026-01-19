@@ -423,10 +423,10 @@
 
 		<div class="flex flex-col md:flex-row w-full px-5 pb-5 md:space-x-4">
 			<div
-				class="flex flex-col w-full dark:text-gray-200 overflow-y-scroll max-h-[36rem] scrollbar-thin gap-1"
+				class="flex flex-col w-full dark:text-gray-200 overflow-y-scroll max-h-[36rem] scrollbar-thin gap-4"
 			>
 				{#each mergedDocuments as document, documentIdx}
-					<div class="flex flex-col w-full gap-2">
+					<div class="flex flex-col w-full gap-3 pb-4 border-b border-gray-200 dark:border-gray-700 last:border-b-0 last:pb-0">
 						{#if document.metadata?.parameters}
 							<div>
 								<div class="text-sm font-medium dark:text-gray-300 mb-1">
@@ -498,7 +498,7 @@
 								{@const fileId = document.metadata?.file_id}
 								{@const chapters = getChaptersForFile(fileId)}
 								<!-- Enhanced video player with timeline highlighting (full video with seek) -->
-								<div class="flex flex-col gap-2 p-3 bg-gray-50 dark:bg-gray-850 rounded-lg">
+								<div class="flex flex-col gap-3 p-4 bg-gray-50 dark:bg-gray-850 rounded-lg">
 									<VideoPlayerWithTimeline
 										src={`${WEBUI_BASE_URL}${getVideoUrl(document)}`}
 										startTime={document.metadata?.timestamp_start || 0}

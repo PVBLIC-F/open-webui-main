@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import quote
 import asyncio
+import threading
 
 from fastapi import (
     BackgroundTasks,
@@ -57,6 +58,106 @@ from pydantic import BaseModel
 log = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+############################
+# Auto Chapter Generation
+############################
+
+
+def trigger_chapter_generation_background(
+    request: Request,
+    file_id: str,
+    user,
+):
+    """
+    Trigger chapter generation for a video/audio file in a background thread.
+    Uses internal API call to leverage existing chapter generation logic.
+    """
+    try:
+        import httpx
+        
+        # Check if auto chapter generation is enabled
+        if not getattr(request.app.state.config, "AUTO_GENERATE_CHAPTERS", False):
+            return
+        
+        if not getattr(request.app.state.config, "ENABLE_CHAPTER_GENERATION", True):
+            return
+        
+        # Get available models to find a task model
+        models = getattr(request.app.state, "MODELS", {})
+        if not models:
+            log.warning("No models available for chapter generation")
+            return
+        
+        # Get task model or first available model
+        task_model = getattr(request.app.state.config, "TASK_MODEL", "")
+        task_model_external = getattr(request.app.state.config, "TASK_MODEL_EXTERNAL", "")
+        
+        model_id = None
+        # Try task model first
+        if task_model and task_model in models:
+            model_id = task_model
+        elif task_model_external and task_model_external in models:
+            model_id = task_model_external
+        else:
+            # Use first available model
+            model_id = next(iter(models.keys()), None)
+        
+        if not model_id:
+            log.warning("No model available for chapter generation")
+            return
+        
+        # Extract auth token from request (cookies or headers)
+        auth_token = None
+        if hasattr(request, 'cookies') and request.cookies.get('token'):
+            auth_token = request.cookies.get('token')
+        elif hasattr(request, 'headers'):
+            auth_header = request.headers.get('authorization', '')
+            if auth_header.lower().startswith('bearer '):
+                auth_token = auth_header[7:]
+        
+        if not auth_token:
+            log.warning("No auth token available for chapter generation")
+            return
+        
+        # Get base URL
+        base_url = str(request.base_url).rstrip('/')
+        
+        log.info(f"Auto-generating chapters for file {file_id} using model {model_id}")
+        
+        def _generate_chapters():
+            """Background thread function to call chapter generation API."""
+            try:
+                # Make internal API call with proper auth
+                with httpx.Client(timeout=120.0) as client:
+                    response = client.post(
+                        f"{base_url}/api/v1/tasks/chapters/completions",
+                        json={
+                            "file_id": file_id,
+                            "model": model_id
+                        },
+                        headers={
+                            "Content-Type": "application/json",
+                            "Authorization": f"Bearer {auth_token}",
+                        },
+                    )
+                    
+                    if response.status_code == 200:
+                        result = response.json()
+                        log.info(f"Auto-generated {result.get('total_chapters', 0)} chapters for file {file_id}")
+                    else:
+                        log.warning(f"Chapter generation returned status {response.status_code}: {response.text[:200]}")
+                        
+            except Exception as e:
+                log.error(f"Background chapter generation failed for file {file_id}: {e}")
+        
+        # Run in background thread to not block file processing
+        thread = threading.Thread(target=_generate_chapters, daemon=True)
+        thread.start()
+        
+    except Exception as e:
+        log.error(f"Failed to trigger chapter generation for file {file_id}: {e}")
 
 
 ############################
@@ -161,6 +262,12 @@ def process_uploaded_file(
                         user=user,
                         db=db_session,
                     )
+                    
+                    # Trigger automatic chapter generation if enabled
+                    if result.get("segments"):
+                        trigger_chapter_generation_background(
+                            request, file_item.id, user
+                        )
                 elif (not file.content_type.startswith(("image/", "video/"))) or (
                     request.app.state.config.CONTENT_EXTRACTION_ENGINE == "external"
                 ):

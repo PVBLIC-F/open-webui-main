@@ -2341,6 +2341,12 @@ ENABLE_CHAPTER_GENERATION = PersistentConfig(
     os.environ.get("ENABLE_CHAPTER_GENERATION", "True").lower() == "true",
 )
 
+AUTO_GENERATE_CHAPTERS = PersistentConfig(
+    "AUTO_GENERATE_CHAPTERS",
+    "task.chapter.auto_generate",
+    os.environ.get("AUTO_GENERATE_CHAPTERS", "False").lower() == "true",
+)
+
 CHAPTER_GENERATION_PROMPT_TEMPLATE = PersistentConfig(
     "CHAPTER_GENERATION_PROMPT_TEMPLATE",
     "task.chapter.prompt_template",

@@ -348,7 +348,7 @@
 		</div>
 		
 		<!-- Segment Info -->
-		<div class="flex items-center gap-2 mb-2 text-xs">
+		<div class="flex items-center gap-2 text-xs">
 			<span class="text-gray-500 dark:text-gray-400">Relevant section:</span>
 			<span class="font-medium text-blue-600 dark:text-blue-400">
 				{formatTime(segmentStart)} - {formatTime(segmentEnd)}
@@ -367,7 +367,7 @@
 		
 		<!-- Chapter Info (if chapters available) -->
 		{#if hasChapters}
-			<div class="flex items-center gap-2 mb-2 text-xs relative">
+			<div class="flex items-center gap-2 mt-2 pt-2 border-t border-gray-200 dark:border-gray-700 text-xs relative">
 				<span class="text-gray-500 dark:text-gray-400">Chapter:</span>
 				<button 
 					class="flex items-center gap-1 px-2 py-0.5 rounded bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300 hover:bg-purple-200 dark:hover:bg-purple-800/50 transition-colors"
@@ -414,7 +414,7 @@
 		
 		<!-- Visual Timeline -->
 		<div 
-			class="timeline relative h-2 bg-gray-300 dark:bg-gray-600 rounded-full cursor-pointer overflow-hidden"
+			class="timeline relative h-3 mt-3 bg-gray-300 dark:bg-gray-600 rounded-full cursor-pointer overflow-hidden"
 			on:click={seekToPosition}
 			on:keydown={seekToPosition}
 			role="slider"
