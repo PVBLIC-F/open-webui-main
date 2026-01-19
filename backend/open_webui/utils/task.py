@@ -359,3 +359,33 @@ def moa_response_generation_template(
 def tools_function_calling_generation_template(template: str, tools_specs: str) -> str:
     template = template.replace("{{TOOLS}}", tools_specs)
     return template
+
+
+def chapter_generation_template(
+    template: str, 
+    transcript: str, 
+    duration: float,
+    user: Optional[Any] = None
+) -> str:
+    """
+    Generate a prompt for chapter extraction from video/audio transcript.
+    
+    Args:
+        template: The chapter generation prompt template
+        transcript: The full transcript text with timestamps
+        duration: Total duration in seconds
+        user: Optional user context
+        
+    Returns:
+        Formatted prompt string
+    """
+    # Replace transcript placeholder
+    template = template.replace("{{transcript}}", transcript)
+    
+    # Replace duration placeholder
+    template = template.replace("{{duration}}", str(round(duration, 2)))
+    
+    # Apply user-specific variables if available
+    template = prompt_template(template, user)
+    
+    return template

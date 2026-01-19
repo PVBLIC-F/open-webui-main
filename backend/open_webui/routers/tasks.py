@@ -3,6 +3,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 
 from pydantic import BaseModel
 from typing import Optional
+import json
 import logging
 import re
 
@@ -17,11 +18,13 @@ from open_webui.utils.task import (
     tags_generation_template,
     emoji_generation_template,
     moa_response_generation_template,
+    chapter_generation_template,
 )
 from open_webui.utils.auth import get_admin_user, get_verified_user
 from open_webui.constants import TASKS
 
 from open_webui.routers.pipelines import process_pipeline_inlet_filter
+from open_webui.models.files import Files
 
 from open_webui.utils.task import get_task_model_id
 
@@ -36,6 +39,7 @@ from open_webui.config import (
     DEFAULT_EMOJI_GENERATION_PROMPT_TEMPLATE,
     DEFAULT_MOA_GENERATION_PROMPT_TEMPLATE,
     DEFAULT_VOICE_MODE_PROMPT_TEMPLATE,
+    DEFAULT_CHAPTER_GENERATION_PROMPT_TEMPLATE,
 )
 
 
@@ -823,4 +827,194 @@ async def generate_moa_response(
         return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,
             content={"detail": str(e)},
+        )
+
+
+####################################
+# Chapter Generation (Video/Audio)
+####################################
+
+
+class ChapterGenerationForm(BaseModel):
+    model: str
+    file_id: str
+
+
+@router.post("/chapters/completions")
+async def generate_chapters(
+    request: Request, form_data: ChapterGenerationForm, user=Depends(get_verified_user)
+):
+    """
+    Generate chapters for a video/audio file using LLM analysis of the transcript.
+    
+    The LLM will identify topic changes and natural breaks to create a chapter
+    structure with titles, summaries, and timestamps.
+    """
+    if not request.app.state.config.ENABLE_CHAPTER_GENERATION:
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={"detail": "Chapter generation is disabled"},
+        )
+    
+    # Get the file
+    file = Files.get_file_by_id(form_data.file_id)
+    if not file:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="File not found",
+        )
+    
+    # Check permissions
+    if file.user_id != user.id and user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied",
+        )
+    
+    # Get transcript data from file
+    transcript_segments = file.meta.get("transcript_segments", [])
+    transcript_duration = file.meta.get("transcript_duration")
+    
+    if not transcript_segments:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="File does not have transcript data. Please transcribe the file first.",
+        )
+    
+    if not transcript_duration:
+        # Calculate duration from last segment
+        transcript_duration = transcript_segments[-1].get("end", 0) if transcript_segments else 0
+    
+    # Build transcript text with timestamps for LLM
+    transcript_text = ""
+    for seg in transcript_segments:
+        start = seg.get("start", 0)
+        text = seg.get("text", "").strip()
+        # Format: [MM:SS] Text
+        mins = int(start // 60)
+        secs = int(start % 60)
+        transcript_text += f"[{mins:02d}:{secs:02d}] {text}\n"
+    
+    # Get models
+    if getattr(request.state, "direct", False) and hasattr(request.state, "model"):
+        models = {request.state.model["id"]: request.state.model}
+    else:
+        models = request.app.state.MODELS
+    
+    model_id = form_data.model
+    if model_id not in models:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Model not found",
+        )
+    
+    # Get task model
+    task_model_id = get_task_model_id(
+        model_id,
+        request.app.state.config.TASK_MODEL,
+        request.app.state.config.TASK_MODEL_EXTERNAL,
+        models,
+    )
+    
+    log.info(f"Generating chapters for file {form_data.file_id} using model {task_model_id}")
+    
+    # Get template
+    if request.app.state.config.CHAPTER_GENERATION_PROMPT_TEMPLATE:
+        template = request.app.state.config.CHAPTER_GENERATION_PROMPT_TEMPLATE
+    else:
+        template = DEFAULT_CHAPTER_GENERATION_PROMPT_TEMPLATE
+    
+    # Build prompt
+    content = chapter_generation_template(
+        template, 
+        transcript_text, 
+        transcript_duration,
+        user
+    )
+    
+    payload = {
+        "model": task_model_id,
+        "messages": [{"role": "user", "content": content}],
+        "stream": False,
+        "metadata": {
+            **(request.state.metadata if hasattr(request.state, "metadata") else {}),
+            "task": "CHAPTER_GENERATION",
+            "task_body": {"file_id": form_data.file_id},
+        },
+    }
+    
+    # Process through pipeline
+    try:
+        payload = await process_pipeline_inlet_filter(request, payload, user, models)
+    except Exception as e:
+        raise e
+    
+    try:
+        response = await generate_chat_completion(request, form_data=payload, user=user)
+        
+        # Parse the response to extract chapters
+        if hasattr(response, "body"):
+            response_body = response.body
+            if isinstance(response_body, bytes):
+                response_body = response_body.decode("utf-8")
+            response_data = json.loads(response_body)
+        else:
+            response_data = response
+        
+        # Extract content from response
+        chapters_json = None
+        if "choices" in response_data and response_data["choices"]:
+            llm_content = response_data["choices"][0].get("message", {}).get("content", "")
+            
+            # Try to parse JSON from content
+            try:
+                # Clean up markdown code fences if present
+                llm_content = llm_content.strip()
+                if llm_content.startswith("```"):
+                    # Remove ```json or ``` prefix
+                    llm_content = re.sub(r"^```(?:json)?\s*", "", llm_content)
+                    llm_content = re.sub(r"\s*```$", "", llm_content)
+                
+                chapters_json = json.loads(llm_content)
+            except json.JSONDecodeError as e:
+                log.error(f"Failed to parse chapter JSON: {e}")
+                log.debug(f"Raw content: {llm_content}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Failed to parse chapter data from LLM response",
+                )
+        
+        if not chapters_json or "chapters" not in chapters_json:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Invalid chapter data returned from LLM",
+            )
+        
+        # Validate and store chapters
+        chapters = chapters_json["chapters"]
+        
+        # Update file metadata with chapters
+        Files.update_file_metadata_by_id(
+            form_data.file_id,
+            {"chapters": chapters}
+        )
+        
+        log.info(f"Generated {len(chapters)} chapters for file {form_data.file_id}")
+        
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={
+                "file_id": form_data.file_id,
+                "chapters": chapters,
+                "total_chapters": len(chapters),
+            },
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error(f"Chapter generation failed: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"detail": f"Chapter generation failed: {str(e)}"},
         )

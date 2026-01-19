@@ -2332,6 +2332,62 @@ Responses from models: {{responses}}"""
 
 
 ####################################
+# Video/Audio Chapter Generation
+####################################
+
+ENABLE_CHAPTER_GENERATION = PersistentConfig(
+    "ENABLE_CHAPTER_GENERATION",
+    "task.chapter.enable",
+    os.environ.get("ENABLE_CHAPTER_GENERATION", "True").lower() == "true",
+)
+
+CHAPTER_GENERATION_PROMPT_TEMPLATE = PersistentConfig(
+    "CHAPTER_GENERATION_PROMPT_TEMPLATE",
+    "task.chapter.prompt_template",
+    os.environ.get("CHAPTER_GENERATION_PROMPT_TEMPLATE", ""),
+)
+
+DEFAULT_CHAPTER_GENERATION_PROMPT_TEMPLATE = """### Task:
+Analyze this video/audio transcript and identify logical chapters or sections based on topic changes.
+
+### Guidelines:
+- Identify 3-8 distinct chapters based on topic shifts, speaker changes, or natural breaks
+- Each chapter should represent a coherent topic or theme
+- Chapter titles should be concise (3-7 words) and descriptive
+- Summaries should be 1-2 sentences explaining the main content
+- Use the provided timestamps to determine chapter boundaries
+- Ensure chapters cover the entire transcript without gaps
+- Detect natural transition points (topic changes, speaker turns, "now let's talk about...", etc.)
+
+### Transcript:
+{{transcript}}
+
+### Total Duration: {{duration}} seconds
+
+### Output Format:
+Return a valid JSON object with this structure:
+{
+  "chapters": [
+    {
+      "index": 0,
+      "title": "Chapter title here",
+      "summary": "Brief summary of what this section covers",
+      "start": 0.0,
+      "end": 180.5,
+      "keywords": ["keyword1", "keyword2", "keyword3"]
+    }
+  ]
+}
+
+### Important:
+- Your entire response must be ONLY the JSON object, no other text
+- Timestamps must be in seconds (float)
+- Chapters must be sequential with no gaps (end of one = start of next)
+- Last chapter's end time should match the total duration
+- Include 3-5 relevant keywords per chapter for search"""
+
+
+####################################
 # Code Interpreter
 ####################################
 
