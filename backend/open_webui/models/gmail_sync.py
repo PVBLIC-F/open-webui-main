@@ -279,7 +279,11 @@ class GmailSyncStatusTable:
             log.error(f"Error marking sync error for user {user_id}: {e}")
             return None
 
-    def get_users_needing_sync(self, max_hours_since_sync: float = 24) -> list[str]:
+    def get_users_needing_sync(
+        self, 
+        max_hours_since_sync: float = 24,
+        stuck_sync_timeout_hours: float = 2.0,
+    ) -> list[str]:
         """
         Get list of user IDs that need syncing (production-optimized).
         
@@ -288,10 +292,13 @@ class GmailSyncStatusTable:
         - Selects only user_id (minimal data transfer)
         - Query benefits from composite index: gmail_sync_enabled_idx
         - Executes as single SELECT with WHERE clause
+        - Auto-recovers stuck syncs that have been "active" too long
         
         Args:
             max_hours_since_sync: Hours since last sync to consider stale (can be fractional, 
                                   e.g., 0.25 for 15 minutes)
+            stuck_sync_timeout_hours: Hours after which an "active" sync is considered stuck
+                                      and should be reset (default: 2 hours)
             
         Returns:
             list[str]: User IDs needing sync
@@ -299,6 +306,7 @@ class GmailSyncStatusTable:
         try:
             with get_db() as db:
                 cutoff_time = int(time.time() - (max_hours_since_sync * 3600))
+                stuck_cutoff_time = int(time.time() - (stuck_sync_timeout_hours * 3600))
 
                 # First, log total users with sync records for debugging
                 total_sync_records = db.query(GmailSyncStatus).count()
@@ -311,6 +319,35 @@ class GmailSyncStatusTable:
                     f"Gmail sync status: {total_sync_records} total records, "
                     f"{enabled_users} with sync+auto enabled"
                 )
+
+                # Check for stuck syncs first (sync_status == "active" but updated_at is old)
+                stuck_syncs = (
+                    db.query(GmailSyncStatus)
+                    .filter(
+                        GmailSyncStatus.sync_enabled == True,
+                        GmailSyncStatus.auto_sync_enabled == True,
+                        GmailSyncStatus.sync_status == "active",
+                        GmailSyncStatus.updated_at < stuck_cutoff_time,
+                    )
+                    .all()
+                )
+                
+                # Auto-reset stuck syncs
+                stuck_user_ids = []
+                for stuck in stuck_syncs:
+                    stuck_duration_hours = (time.time() - stuck.updated_at) / 3600
+                    log.warning(
+                        f"⚠️  Resetting stuck sync for user {stuck.user_id} "
+                        f"(stuck for {stuck_duration_hours:.1f} hours)"
+                    )
+                    stuck.sync_status = "error"
+                    stuck.last_error = f"Sync timed out after {stuck_duration_hours:.1f} hours (auto-reset)"
+                    stuck.updated_at = int(time.time())
+                    stuck_user_ids.append(stuck.user_id)
+                
+                if stuck_syncs:
+                    db.commit()
+                    log.info(f"🔄 Auto-reset {len(stuck_syncs)} stuck sync(s)")
 
                 # Optimized query - leverages database indexes
                 # Index usage: gmail_sync_enabled_idx (sync_enabled, auto_sync_enabled)
