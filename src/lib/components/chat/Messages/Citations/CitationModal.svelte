@@ -3,12 +3,13 @@
 	import Modal from '$lib/components/common/Modal.svelte';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import { WEBUI_API_BASE_URL, WEBUI_BASE_URL } from '$lib/constants';
-	import { settings } from '$lib/stores';
+	import { settings, models } from '$lib/stores';
 
 	import XMark from '$lib/components/icons/XMark.svelte';
 	import Textarea from '$lib/components/common/Textarea.svelte';
 	import Markdown from '$lib/components/chat/Messages/Markdown.svelte';
 	import VideoPlayerWithTimeline from './VideoPlayerWithTimeline.svelte';
+	import { getFileById, generateChapters } from '$lib/apis/files';
 
 	const i18n = getContext('i18n');
 	
@@ -33,6 +34,90 @@
 	let emailSending = false;
 	let emailSuccess = false;
 	let emailError = '';
+	
+	// Chapter state
+	let fileChapters: Record<string, any[]> = {}; // Cache chapters by file_id
+	let chaptersLoading: Record<string, boolean> = {};
+	let chaptersGenerating: Record<string, boolean> = {};
+	let chaptersError: Record<string, string> = {};
+	
+	/**
+	 * Fetch file data to get chapters
+	 */
+	async function fetchFileChapters(fileId: string) {
+		if (fileChapters[fileId] || chaptersLoading[fileId]) return;
+		
+		chaptersLoading[fileId] = true;
+		try {
+			const token = localStorage.getItem('token') ?? '';
+			if (!token) return;
+			const file = await getFileById(token, fileId);
+			if (file?.meta?.chapters) {
+				fileChapters[fileId] = file.meta.chapters;
+				fileChapters = fileChapters; // Trigger reactivity
+			}
+		} catch (err) {
+			console.error('Failed to fetch file chapters:', err);
+		} finally {
+			chaptersLoading[fileId] = false;
+			chaptersLoading = chaptersLoading;
+		}
+	}
+	
+	/**
+	 * Generate chapters for a file using LLM
+	 */
+	async function handleGenerateChapters(fileId: string) {
+		if (chaptersGenerating[fileId]) return;
+		
+		// Get default model from store
+		const modelList = $models || [];
+		const defaultModel = modelList.find(m => m.id) || modelList[0];
+		if (!defaultModel) {
+			chaptersError[fileId] = 'No model available';
+			chaptersError = chaptersError;
+			return;
+		}
+		
+		chaptersGenerating[fileId] = true;
+		chaptersError[fileId] = '';
+		chaptersGenerating = chaptersGenerating;
+		chaptersError = chaptersError;
+		
+		try {
+			const token = localStorage.getItem('token') ?? '';
+			if (!token) {
+				chaptersError[fileId] = 'Not authenticated';
+				return;
+			}
+			const result = await generateChapters(token, fileId, defaultModel.id);
+			if (result?.chapters) {
+				fileChapters[fileId] = result.chapters;
+				fileChapters = fileChapters;
+			}
+		} catch (err: any) {
+			console.error('Failed to generate chapters:', err);
+			chaptersError[fileId] = err.message || 'Failed to generate chapters';
+			chaptersError = chaptersError;
+		} finally {
+			chaptersGenerating[fileId] = false;
+			chaptersGenerating = chaptersGenerating;
+		}
+	}
+	
+	/**
+	 * Get chapters for a file, fetching if needed
+	 */
+	function getChaptersForFile(fileId: string | undefined): any[] {
+		if (!fileId) return [];
+		
+		// Trigger fetch if not cached
+		if (!fileChapters[fileId] && !chaptersLoading[fileId]) {
+			fetchFileChapters(fileId);
+		}
+		
+		return fileChapters[fileId] || [];
+	}
 	
 	// Shared utilities for report generation
 	function getReportContent(): string {
@@ -410,6 +495,8 @@
 							</div>
 
 							{#if getVideoUrl(document)}
+								{@const fileId = document.metadata?.file_id}
+								{@const chapters = getChaptersForFile(fileId)}
 								<!-- Enhanced video player with timeline highlighting (full video with seek) -->
 								<div class="flex flex-col gap-2 p-3 bg-gray-50 dark:bg-gray-850 rounded-lg">
 									<VideoPlayerWithTimeline
@@ -417,7 +504,38 @@
 										startTime={document.metadata?.timestamp_start || 0}
 										endTime={document.metadata?.timestamp_end}
 										totalDuration={document.metadata?.transcript_duration}
+										{chapters}
 									/>
+									
+									<!-- Chapter generation button (if no chapters) -->
+									{#if fileId && chapters.length === 0 && !chaptersLoading[fileId]}
+										<div class="flex items-center gap-2 mt-1">
+											{#if chaptersGenerating[fileId]}
+												<div class="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
+													<svg class="animate-spin size-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+														<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+														<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+													</svg>
+													<span>Generating chapters...</span>
+												</div>
+											{:else}
+												<Tooltip content="Use AI to identify chapters in this video">
+													<button
+														class="flex items-center gap-1.5 px-2 py-1 text-xs rounded bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300 hover:bg-purple-200 dark:hover:bg-purple-800/50 transition-colors"
+														on:click={() => handleGenerateChapters(fileId)}
+													>
+														<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-3.5">
+															<path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456ZM16.894 20.567 16.5 21.75l-.394-1.183a2.25 2.25 0 0 0-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 0 0 1.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 0 0 1.423 1.423l1.183.394-1.183.394a2.25 2.25 0 0 0-1.423 1.423Z" />
+														</svg>
+														Generate Chapters
+													</button>
+												</Tooltip>
+											{/if}
+											{#if chaptersError[fileId]}
+												<span class="text-xs text-red-500">{chaptersError[fileId]}</span>
+											{/if}
+										</div>
+									{/if}
 								</div>
 								<!-- Text content below video -->
 								{#if isMarkdownContent(document.document)}

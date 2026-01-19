@@ -329,3 +329,42 @@ export const deleteAllFiles = async (token: string) => {
 
 	return res;
 };
+
+/**
+ * Generate chapters for a video/audio file using LLM analysis.
+ * Chapters are stored in file.meta.chapters.
+ */
+export const generateChapters = async (token: string, fileId: string, model: string) => {
+	let error = null;
+
+	const res = await fetch(`${WEBUI_API_BASE_URL}/tasks/chapters/completions`, {
+		method: 'POST',
+		headers: {
+			Accept: 'application/json',
+			'Content-Type': 'application/json',
+			authorization: `Bearer ${token}`
+		},
+		body: JSON.stringify({
+			file_id: fileId,
+			model: model
+		})
+	})
+		.then(async (res) => {
+			if (!res.ok) throw await res.json();
+			return res.json();
+		})
+		.then((json) => {
+			return json;
+		})
+		.catch((err) => {
+			error = err.detail || err.message || 'Failed to generate chapters';
+			console.error(err);
+			return null;
+		});
+
+	if (error) {
+		throw error;
+	}
+
+	return res;
+};

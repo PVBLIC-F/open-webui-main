@@ -5,6 +5,14 @@
 	export let startTime: number = 0;
 	export let endTime: number | undefined = undefined;
 	export let totalDuration: number | undefined = undefined;
+	export let chapters: Array<{
+		index: number;
+		title: string;
+		summary?: string;
+		start: number;
+		end: number;
+		keywords?: string[];
+	}> = [];
 	
 	let videoElement: HTMLVideoElement;
 	let currentTime = 0;
@@ -16,6 +24,7 @@
 	let previousVolume = 1;
 	let isFullscreen = false;
 	let containerElement: HTMLDivElement;
+	let showChapterList = false;
 	
 	// Computed values
 	$: segmentStart = startTime || 0;
@@ -29,6 +38,10 @@
 	
 	// Check if current time is within the relevant segment
 	$: isInSegment = currentTime >= segmentStart && currentTime <= segmentEnd;
+	
+	// Find current chapter based on playback position
+	$: currentChapter = chapters.find(ch => currentTime >= ch.start && currentTime < ch.end) || null;
+	$: hasChapters = chapters && chapters.length > 0;
 	
 	function formatTime(seconds: number): string {
 		if (!isFinite(seconds)) return '0:00';
@@ -103,6 +116,16 @@
 	
 	function toggleLoop() {
 		loopSegment = !loopSegment;
+	}
+	
+	function jumpToChapter(chapter: typeof chapters[0]) {
+		videoElement.currentTime = chapter.start;
+		videoElement.play();
+		showChapterList = false;
+	}
+	
+	function toggleChapterList() {
+		showChapterList = !showChapterList;
 	}
 	
 	function toggleMute() {
@@ -342,6 +365,53 @@
 			</span>
 		</div>
 		
+		<!-- Chapter Info (if chapters available) -->
+		{#if hasChapters}
+			<div class="flex items-center gap-2 mb-2 text-xs relative">
+				<span class="text-gray-500 dark:text-gray-400">Chapter:</span>
+				<button 
+					class="flex items-center gap-1 px-2 py-0.5 rounded bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300 hover:bg-purple-200 dark:hover:bg-purple-800/50 transition-colors"
+					on:click={toggleChapterList}
+				>
+					<span class="font-medium truncate max-w-[200px]">
+						{currentChapter?.title || 'Select chapter'}
+					</span>
+					<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="size-3">
+						<path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+					</svg>
+				</button>
+				<span class="text-gray-400 dark:text-gray-500">
+					{chapters.length} chapters
+				</span>
+				
+				<!-- Chapter dropdown -->
+				{#if showChapterList}
+					<div class="absolute bottom-full left-0 mb-1 w-72 max-h-48 overflow-y-auto bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-10">
+						{#each chapters as chapter}
+							<button
+								class="w-full text-left px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-start gap-2 {currentChapter?.index === chapter.index ? 'bg-purple-50 dark:bg-purple-900/30' : ''}"
+								on:click={() => jumpToChapter(chapter)}
+							>
+								<span class="text-xs text-gray-400 dark:text-gray-500 min-w-[40px]">
+									{formatTime(chapter.start)}
+								</span>
+								<div class="flex-1 min-w-0">
+									<div class="font-medium text-sm truncate text-gray-800 dark:text-gray-200">
+										{chapter.title}
+									</div>
+									{#if chapter.summary}
+										<div class="text-xs text-gray-500 dark:text-gray-400 truncate">
+											{chapter.summary}
+										</div>
+									{/if}
+								</div>
+							</button>
+						{/each}
+					</div>
+				{/if}
+			</div>
+		{/if}
+		
 		<!-- Visual Timeline -->
 		<div 
 			class="timeline relative h-2 bg-gray-300 dark:bg-gray-600 rounded-full cursor-pointer overflow-hidden"
@@ -354,6 +424,20 @@
 			aria-valuemax={videoDuration}
 			aria-valuenow={currentTime}
 		>
+			<!-- Chapter Markers (behind everything) -->
+			{#if hasChapters}
+				{#each chapters as chapter, idx}
+					{#if idx > 0}
+						<Tooltip content={chapter.title}>
+							<div 
+								class="absolute top-0 h-full w-0.5 bg-purple-500 dark:bg-purple-400 z-[1]"
+								style="left: {videoDuration > 0 ? (chapter.start / videoDuration) * 100 : 0}%;"
+							></div>
+						</Tooltip>
+					{/if}
+				{/each}
+			{/if}
+			
 			<!-- Highlighted Segment Region -->
 			<div 
 				class="absolute top-0 h-full bg-blue-200 dark:bg-blue-800 opacity-60"
