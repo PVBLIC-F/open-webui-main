@@ -563,17 +563,24 @@ class KnowledgeDriveSyncService:
         """
         Process a file through the RAG pipeline.
         
-        Reuses existing Open WebUI file processing infrastructure.
+        Uses the SAME process_uploaded_file function as regular uploads to ensure
+        consistent handling of all file types including audio/video transcription.
         """
         try:
             # Import here to avoid circular imports
             from open_webui.routers.retrieval import process_file, ProcessFileForm
+            from open_webui.routers.files import process_uploaded_file
             from open_webui.models.users import Users
 
             # Get user for auth
             user = Users.get_user_by_id(user_id)
             if not user:
                 raise ValueError(f"User {user_id} not found")
+            
+            # Get file record
+            file_record = Files.get_file_by_id(file_id)
+            if not file_record:
+                raise ValueError(f"File {file_id} not found")
 
             # Create a mock request object for process_file
             # This is a workaround since process_file expects a Request
@@ -584,46 +591,48 @@ class KnowledgeDriveSyncService:
             if self.app_state:
                 request = MockRequest(self.app_state)
                 loop = asyncio.get_running_loop()
-
-                # STEP 1: Process file to extract content and create vectors in file-{file_id}
-                log.info(f"   📄 Step 1: Extracting content for {file_id[:8]}...")
-                result1 = await loop.run_in_executor(
+                
+                # Create a simple file-like object with content_type for process_uploaded_file
+                # This ensures audio/video files are handled identically to direct uploads
+                class MockFile:
+                    def __init__(self, content_type: str):
+                        self.content_type = content_type
+                
+                mock_file = MockFile(file_record.meta.get("content_type", ""))
+                file_metadata = {"name": file_record.filename}
+                
+                # STEP 1: Process file using the SAME function as regular uploads
+                # This handles transcription for audio/video, extraction for documents, etc.
+                log.info(f"   📄 Step 1: Processing file {file_id[:8]} (same as direct upload)...")
+                
+                await loop.run_in_executor(
                     None,
-                    process_file,
+                    process_uploaded_file,
                     request,
-                    ProcessFileForm(file_id=file_id),  # No collection_name - creates file-{file_id} collection
+                    mock_file,
+                    file_record.path,
+                    file_record,
+                    file_metadata,
                     user,
                     None,  # db session
                 )
                 
-                if not result1 or not result1.get("status"):
-                    log.error(f"   ❌ Step 1 failed for {file_id[:8]}: {result1}")
-                    Files.update_file_data_by_id(file_id, {"status": "error", "error": "Content extraction failed"})
-                    return
-                
-                # Get the extracted content from step 1
-                extracted_content = result1.get("content", "")
-                log.info(f"   ✅ Step 1 complete: {len(extracted_content)} chars extracted")
-                
-                if not extracted_content:
-                    log.error(f"   ❌ No content extracted for {file_id[:8]}")
-                    Files.update_file_data_by_id(file_id, {"status": "error", "error": "No content extracted from file"})
-                    return
-                
-                # Verify content was persisted to database before step 2
-                # This ensures the fallback in process_file will work
+                # Verify content was extracted
                 file_check = Files.get_file_by_id(file_id)
                 if not file_check or not file_check.data or not file_check.data.get("content"):
-                    log.warning(f"   ⚠️ Content not yet in DB, forcing update...")
-                    Files.update_file_data_by_id(file_id, {"content": extracted_content})
+                    # Check if file status indicates failure
+                    if file_check and file_check.data and file_check.data.get("status") == "failed":
+                        error = file_check.data.get("error", "Unknown error")
+                        log.error(f"   ❌ Step 1 failed: {error}")
+                        return
+                    log.warning(f"   ⚠️ No content extracted (may be image-only file)")
                 else:
-                    log.info(f"   ✓ Content verified in database ({len(file_check.data.get('content', ''))} chars)")
+                    log.info(f"   ✅ Step 1 complete: {len(file_check.data.get('content', ''))} chars")
                 
                 # Wait for Pinecone eventual consistency
                 # Vectors in file-{file_id} may not be immediately queryable
-                import time
                 log.info(f"   ⏳ Waiting 5s for Pinecone indexing...")
-                time.sleep(5)
+                await asyncio.sleep(5)
                 
                 # STEP 2: Add to knowledge base collection
                 # This will query file-{file_id} for vectors, or fall back to file.data.content

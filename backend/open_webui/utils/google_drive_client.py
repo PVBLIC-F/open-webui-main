@@ -44,6 +44,24 @@ SUPPORTED_MIME_TYPES = {
     "application/json": ".json",
     "application/xml": ".xml",
     "text/xml": ".xml",
+    # Video (transcribed via STT for RAG)
+    "video/mp4": ".mp4",
+    "video/mpeg": ".mpeg",
+    "video/quicktime": ".mov",
+    "video/x-msvideo": ".avi",
+    "video/webm": ".webm",
+    "video/x-matroska": ".mkv",
+    # Audio (transcribed via STT for RAG)
+    "audio/mpeg": ".mp3",
+    "audio/mp3": ".mp3",
+    "audio/wav": ".wav",
+    "audio/x-wav": ".wav",
+    "audio/ogg": ".ogg",
+    "audio/webm": ".webm",
+    "audio/flac": ".flac",
+    "audio/aac": ".aac",
+    "audio/mp4": ".m4a",
+    "audio/x-m4a": ".m4a",
 }
 
 # Google Workspace export formats
