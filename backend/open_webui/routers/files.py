@@ -186,12 +186,14 @@ def process_uploaded_file(
                 )
 
         except Exception as e:
-            log.error(f"Error processing file: {file_item.id}")
+            error_msg = str(e.detail) if hasattr(e, "detail") else str(e)
+            log.error(f"Error processing file {file_item.id}: {error_msg}")
+            log.exception(e)  # Log full traceback
             Files.update_file_data_by_id(
                 file_item.id,
                 {
                     "status": "failed",
-                    "error": str(e.detail) if hasattr(e, "detail") else str(e),
+                    "error": error_msg,
                 },
                 db=db_session,
             )
