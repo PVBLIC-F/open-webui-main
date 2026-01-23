@@ -34,7 +34,6 @@
 	let spendLimitEnabled = false;
 	let spendLimitDaily: string = '';
 	let spendLimitMonthly: string = '';
-	let savingSpendLimits = false;
 
 	$: if (show) {
 		init();
@@ -65,9 +64,8 @@
 		}
 	};
 
-	const saveSpendLimits = async () => {
-		if (!selectedUser?.id) return;
-		savingSpendLimits = true;
+	const saveSpendLimits = async (): Promise<boolean> => {
+		if (!selectedUser?.id) return true;
 
 		try {
 			const res = await updateUserSpendLimits(localStorage.token, selectedUser.id, {
@@ -76,14 +74,10 @@
 				spend_limit_monthly: spendLimitMonthly ? parseFloat(spendLimitMonthly) : null
 			});
 
-			if (res) {
-				toast.success($i18n.t('Spend limits updated'));
-				await loadSpendLimits();
-			}
+			return !!res;
 		} catch (error) {
 			toast.error($i18n.t('Failed to update spend limits: {{error}}', { error }));
-		} finally {
-			savingSpendLimits = false;
+			return false;
 		}
 	};
 
@@ -99,18 +93,21 @@
 	let userGroups: any[] | null = null;
 
 	const submitHandler = async () => {
-		console.log('Submitting user data:', _user);
-		console.log('Gmail sync enabled:', _user.gmail_sync_enabled);
-		
+		// Save user profile
 		const res = await updateUserById(localStorage.token, selectedUser.id, _user).catch((error) => {
 			toast.error(`${error}`);
 		});
 
-		if (res) {
-			console.log('User update successful:', res);
-			dispatch('save');
-			show = false;
+		if (!res) return;
+
+		// Save spend limits if they've been loaded
+		if (spendLimits !== null) {
+			const limitsRes = await saveSpendLimits();
+			if (!limitsRes) return;
 		}
+
+		dispatch('save');
+		show = false;
 	};
 
 	const handleForceGmailSync = async () => {
@@ -311,7 +308,7 @@
 														_user.gmail_sync_enabled = e.target.checked ? 1 : 0;
 													}}
 												/>
-												<div class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
+												<div class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-gray-300 dark:peer-focus:ring-gray-600 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-black dark:peer-checked:bg-white"></div>
 											</label>
 											<span class="text-sm text-gray-700 dark:text-gray-300">
 												{_user.gmail_sync_enabled === 1 ? $i18n.t('Enabled') : $i18n.t('Disabled')}
@@ -325,10 +322,10 @@
 											<div class="mt-2">
 												<button
 													type="button"
-													class="px-3 py-1.5 text-xs font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition"
+													class="px-3 py-1.5 text-xs font-medium bg-black hover:bg-gray-900 text-white dark:bg-white dark:text-black dark:hover:bg-gray-100 rounded-lg transition"
 													on:click={handleForceGmailSync}
 												>
-													🔄 {$i18n.t('Force Full Sync')}
+													{$i18n.t('Force Full Sync')}
 												</button>
 												<div class="text-xs text-gray-500 mt-1">
 													{$i18n.t('Trigger a complete re-sync of all Gmail emails')}
@@ -374,7 +371,7 @@
 														class="sr-only peer"
 														bind:checked={spendLimitEnabled}
 													/>
-													<div class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
+													<div class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-gray-300 dark:peer-focus:ring-gray-600 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-black dark:peer-checked:bg-white"></div>
 												</label>
 												<span class="text-sm text-gray-700 dark:text-gray-300">
 													{spendLimitEnabled ? $i18n.t('Limits Enabled') : $i18n.t('Limits Disabled')}
@@ -408,15 +405,6 @@
 													</div>
 												</div>
 											{/if}
-
-											<button
-												type="button"
-												class="px-3 py-1.5 text-xs font-medium bg-green-600 hover:bg-green-700 text-white rounded-lg transition disabled:opacity-50"
-												on:click={saveSpendLimits}
-												disabled={savingSpendLimits}
-											>
-												{savingSpendLimits ? $i18n.t('Saving...') : $i18n.t('Save Limits')}
-											</button>
 										{:else}
 											<div class="text-xs text-gray-500">{$i18n.t('Loading spend data...')}</div>
 										{/if}
