@@ -6,7 +6,14 @@
 
 	import { goto } from '$app/navigation';
 
-	import { updateUserById, getUserGroupsById, forceGmailSync } from '$lib/apis/users';
+	import {
+		updateUserById,
+		getUserGroupsById,
+		forceGmailSync,
+		getUserSpendLimits,
+		updateUserSpendLimits,
+		type SpendLimitsResponse
+	} from '$lib/apis/users';
 
 	import Modal from '$lib/components/common/Modal.svelte';
 	import localizedFormat from 'dayjs/plugin/localizedFormat';
@@ -22,6 +29,13 @@
 	export let selectedUser;
 	export let sessionUser;
 
+	// Spend limits state
+	let spendLimits: SpendLimitsResponse | null = null;
+	let spendLimitEnabled = false;
+	let spendLimitDaily: string = '';
+	let spendLimitMonthly: string = '';
+	let savingSpendLimits = false;
+
 	$: if (show) {
 		init();
 	}
@@ -31,6 +45,45 @@
 			_user = selectedUser;
 			_user.password = '';
 			loadUserGroups();
+			loadSpendLimits();
+		}
+	};
+
+	const loadSpendLimits = async () => {
+		if (!selectedUser?.id) return;
+		spendLimits = null;
+
+		try {
+			spendLimits = await getUserSpendLimits(localStorage.token, selectedUser.id);
+			if (spendLimits) {
+				spendLimitEnabled = spendLimits.spend_limit_enabled;
+				spendLimitDaily = spendLimits.spend_limit_daily?.toString() ?? '';
+				spendLimitMonthly = spendLimits.spend_limit_monthly?.toString() ?? '';
+			}
+		} catch (error) {
+			console.error('Failed to load spend limits:', error);
+		}
+	};
+
+	const saveSpendLimits = async () => {
+		if (!selectedUser?.id) return;
+		savingSpendLimits = true;
+
+		try {
+			const res = await updateUserSpendLimits(localStorage.token, selectedUser.id, {
+				spend_limit_enabled: spendLimitEnabled,
+				spend_limit_daily: spendLimitDaily ? parseFloat(spendLimitDaily) : null,
+				spend_limit_monthly: spendLimitMonthly ? parseFloat(spendLimitMonthly) : null
+			});
+
+			if (res) {
+				toast.success($i18n.t('Spend limits updated'));
+				await loadSpendLimits();
+			}
+		} catch (error) {
+			toast.error($i18n.t('Failed to update spend limits: {{error}}', { error }));
+		} finally {
+			savingSpendLimits = false;
 		}
 	};
 
@@ -281,6 +334,91 @@
 													{$i18n.t('Trigger a complete re-sync of all Gmail emails')}
 												</div>
 											</div>
+										{/if}
+									</div>
+
+									<!-- Spend Limits Section -->
+									<div class="flex flex-col w-full pt-3 border-t border-gray-100 dark:border-gray-800 mt-3">
+										<div class="mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">
+											{$i18n.t('Spend Limits')}
+										</div>
+
+										{#if spendLimits !== null}
+											<!-- Current Usage -->
+											<div class="mb-3 p-2 bg-gray-50 dark:bg-gray-800 rounded-lg text-xs">
+												<div class="grid grid-cols-2 gap-2">
+													<div>
+														<span class="text-gray-500">{$i18n.t('Daily Spend')}:</span>
+														<span class="font-medium ml-1">${spendLimits.daily_spend?.toFixed(4) ?? '0.00'}</span>
+													</div>
+													<div>
+														<span class="text-gray-500">{$i18n.t('Monthly Spend')}:</span>
+														<span class="font-medium ml-1">${spendLimits.monthly_spend?.toFixed(4) ?? '0.00'}</span>
+													</div>
+													<div>
+														<span class="text-gray-500">{$i18n.t('Daily Requests')}:</span>
+														<span class="font-medium ml-1">{spendLimits.daily_requests ?? 0}</span>
+													</div>
+													<div>
+														<span class="text-gray-500">{$i18n.t('Monthly Requests')}:</span>
+														<span class="font-medium ml-1">{spendLimits.monthly_requests ?? 0}</span>
+													</div>
+												</div>
+											</div>
+
+											<!-- Enable/Disable Limits -->
+											<div class="flex items-center space-x-2 mb-2">
+												<label class="relative inline-flex items-center cursor-pointer">
+													<input
+														type="checkbox"
+														class="sr-only peer"
+														bind:checked={spendLimitEnabled}
+													/>
+													<div class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
+												</label>
+												<span class="text-sm text-gray-700 dark:text-gray-300">
+													{spendLimitEnabled ? $i18n.t('Limits Enabled') : $i18n.t('Limits Disabled')}
+												</span>
+											</div>
+
+											{#if spendLimitEnabled}
+												<!-- Limit Inputs -->
+												<div class="grid grid-cols-2 gap-2 mb-2">
+													<div>
+														<div class="text-xs text-gray-500 mb-1">{$i18n.t('Daily Limit ($)')}</div>
+														<input
+															type="number"
+															step="0.01"
+															min="0"
+															class="w-full text-sm bg-transparent border border-gray-200 dark:border-gray-700 rounded px-2 py-1 outline-none"
+															placeholder="No limit"
+															bind:value={spendLimitDaily}
+														/>
+													</div>
+													<div>
+														<div class="text-xs text-gray-500 mb-1">{$i18n.t('Monthly Limit ($)')}</div>
+														<input
+															type="number"
+															step="0.01"
+															min="0"
+															class="w-full text-sm bg-transparent border border-gray-200 dark:border-gray-700 rounded px-2 py-1 outline-none"
+															placeholder="No limit"
+															bind:value={spendLimitMonthly}
+														/>
+													</div>
+												</div>
+											{/if}
+
+											<button
+												type="button"
+												class="px-3 py-1.5 text-xs font-medium bg-green-600 hover:bg-green-700 text-white rounded-lg transition disabled:opacity-50"
+												on:click={saveSpendLimits}
+												disabled={savingSpendLimits}
+											>
+												{savingSpendLimits ? $i18n.t('Saving...') : $i18n.t('Save Limits')}
+											</button>
+										{:else}
+											<div class="text-xs text-gray-500">{$i18n.t('Loading spend data...')}</div>
 										{/if}
 									</div>
 								</div>
