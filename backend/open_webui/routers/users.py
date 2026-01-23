@@ -465,6 +465,7 @@ async def get_my_spend_limits(
     spend_summary = UserUsages.get_user_spend_summary(user.id, db=db)
     
     return {
+        "user_id": user.id,
         "spend_limit_enabled": current_user.spend_limit_enabled if current_user else False,
         "spend_limit_daily": current_user.spend_limit_daily if current_user else None,
         "spend_limit_monthly": current_user.spend_limit_monthly if current_user else None,
@@ -1003,8 +1004,8 @@ async def get_user_spend_limits(
         "spend_limit_enabled": target_user.spend_limit_enabled,
         "spend_limit_daily": target_user.spend_limit_daily,
         "spend_limit_monthly": target_user.spend_limit_monthly,
-        "current_daily_spend": spend_summary.daily_spend,
-        "current_monthly_spend": spend_summary.monthly_spend,
+        "daily_spend": spend_summary.daily_spend,
+        "monthly_spend": spend_summary.monthly_spend,
         "daily_tokens": spend_summary.daily_tokens,
         "monthly_tokens": spend_summary.monthly_tokens,
         "daily_requests": spend_summary.daily_requests,

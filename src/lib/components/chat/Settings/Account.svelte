@@ -14,11 +14,15 @@
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import SensitiveInput from '$lib/components/common/SensitiveInput.svelte';
 	import Textarea from '$lib/components/common/Textarea.svelte';
-	import { getUserById } from '$lib/apis/users';
+	import { getMySpendLimits, type SpendLimitsResponse } from '$lib/apis/users';
 	import User from '$lib/components/icons/User.svelte';
 	import UserProfileImage from './Account/UserProfileImage.svelte';
 
 	const i18n = getContext('i18n');
+
+	// Spend tracking
+	let spendData: SpendLimitsResponse | null = null;
+	let showSpendDetails = false;
 
 	export let saveHandler: Function;
 	export let saveSettings: Function;
@@ -90,6 +94,14 @@
 		}
 	};
 
+	const loadSpendData = async () => {
+		try {
+			spendData = await getMySpendLimits(localStorage.token);
+		} catch (error) {
+			console.log('Failed to load spend data:', error);
+		}
+	};
+
 	onMount(async () => {
 		const user = await getSessionUser(localStorage.token).catch((error) => {
 			toast.error(`${error}`);
@@ -120,6 +132,9 @@
 				return '';
 			});
 		}
+
+		// Load spend data
+		await loadSpendData();
 
 		loaded = true;
 	});
@@ -408,6 +423,75 @@
 
 										{$i18n.t('Create new secret key')}</button
 									>
+								{/if}
+							</div>
+						</div>
+					{/if}
+				</div>
+			{/if}
+		{/if}
+
+		<!-- Usage & Spend Section -->
+		{#if spendData}
+			<hr class="border-gray-50 dark:border-gray-850/30 my-4" />
+
+			<div class="flex justify-between items-center text-sm">
+				<div class="font-medium">{$i18n.t('Usage & Spend')}</div>
+				<button
+					class="text-xs font-medium text-gray-500"
+					type="button"
+					on:click={() => {
+						showSpendDetails = !showSpendDetails;
+					}}>{showSpendDetails ? $i18n.t('Hide') : $i18n.t('Show')}</button
+				>
+			</div>
+
+			{#if showSpendDetails}
+				<div class="mt-3 p-3 bg-gray-50 dark:bg-gray-850 rounded-lg">
+					<div class="grid grid-cols-2 gap-3 text-sm">
+						<div>
+							<div class="text-xs text-gray-500 mb-1">{$i18n.t('Today')}</div>
+							<div class="font-medium">${spendData.daily_spend?.toFixed(4) ?? '0.0000'}</div>
+							<div class="text-xs text-gray-500">{spendData.daily_requests ?? 0} {$i18n.t('requests')}</div>
+						</div>
+						<div>
+							<div class="text-xs text-gray-500 mb-1">{$i18n.t('This Month')}</div>
+							<div class="font-medium">${spendData.monthly_spend?.toFixed(4) ?? '0.0000'}</div>
+							<div class="text-xs text-gray-500">{spendData.monthly_requests ?? 0} {$i18n.t('requests')}</div>
+						</div>
+					</div>
+
+					{#if spendData.spend_limit_enabled}
+						<div class="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
+							<div class="text-xs text-gray-500 mb-2">{$i18n.t('Spend Limits')}</div>
+							<div class="grid grid-cols-2 gap-3 text-sm">
+								{#if spendData.spend_limit_daily !== null}
+									<div>
+										<div class="text-xs text-gray-500">{$i18n.t('Daily Limit')}</div>
+										<div class="font-medium">
+											${spendData.daily_spend?.toFixed(2)} / ${spendData.spend_limit_daily?.toFixed(2)}
+										</div>
+										<div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-1.5 mt-1">
+											<div 
+												class="h-1.5 rounded-full {spendData.daily_spend >= spendData.spend_limit_daily ? 'bg-red-500' : 'bg-blue-500'}"
+												style="width: {Math.min(100, (spendData.daily_spend / spendData.spend_limit_daily) * 100)}%"
+											></div>
+										</div>
+									</div>
+								{/if}
+								{#if spendData.spend_limit_monthly !== null}
+									<div>
+										<div class="text-xs text-gray-500">{$i18n.t('Monthly Limit')}</div>
+										<div class="font-medium">
+											${spendData.monthly_spend?.toFixed(2)} / ${spendData.spend_limit_monthly?.toFixed(2)}
+										</div>
+										<div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-1.5 mt-1">
+											<div 
+												class="h-1.5 rounded-full {spendData.monthly_spend >= spendData.spend_limit_monthly ? 'bg-red-500' : 'bg-blue-500'}"
+												style="width: {Math.min(100, (spendData.monthly_spend / spendData.spend_limit_monthly) * 100)}%"
+											></div>
+										</div>
+									</div>
 								{/if}
 							</div>
 						</div>
