@@ -29,6 +29,7 @@ from open_webui.models.oauth_sessions import OAuthSessions
 from open_webui.models.chats import Chats
 from open_webui.models.folders import Folders
 from open_webui.models.users import Users
+from open_webui.models.user_usage import UserUsages, UsageRecordForm
 from open_webui.socket.main import (
     get_event_call,
     get_event_emitter,
@@ -2761,9 +2762,13 @@ async def process_chat_response(
                         },
                     )
 
+                # Variable to capture usage data for spend tracking
+                captured_usage = {}
+
                 async def stream_body_handler(response, form_data):
                     nonlocal content
                     nonlocal content_blocks
+                    nonlocal captured_usage
 
                     response_tool_calls = []
 
@@ -2849,6 +2854,9 @@ async def process_chat_response(
                                     usage = data.get("usage", {}) or {}
                                     usage.update(data.get("timings", {}))  # llama.cpp
                                     if usage:
+                                        # Capture usage for spend tracking
+                                        captured_usage.update(usage)
+                                        
                                         await event_emitter(
                                             {
                                                 "type": "chat:completion",
@@ -3657,6 +3665,23 @@ async def process_chat_response(
                 )
 
                 await background_tasks_handler()
+
+                # Record usage for spend tracking (if cost data available)
+                if captured_usage and captured_usage.get("cost"):
+                    try:
+                        UserUsages.record_usage(
+                            UsageRecordForm(
+                                user_id=user.id,
+                                model_id=model_id,
+                                input_tokens=captured_usage.get("input_tokens", 0) or captured_usage.get("prompt_tokens", 0) or 0,
+                                output_tokens=captured_usage.get("output_tokens", 0) or captured_usage.get("completion_tokens", 0) or 0,
+                                reasoning_tokens=captured_usage.get("output_tokens_details", {}).get("reasoning_tokens", 0) if captured_usage.get("output_tokens_details") else 0,
+                                cost=captured_usage.get("cost", 0.0),
+                            )
+                        )
+                    except Exception as e:
+                        log.debug(f"Error recording usage: {e}")
+
             except asyncio.CancelledError:
                 log.warning("Task was cancelled!")
                 await event_emitter({"type": "chat:tasks:cancel"})

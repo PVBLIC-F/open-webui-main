@@ -26,7 +26,9 @@ from open_webui.models.users import (
     Users,
     UserSettings,
     UserUpdateForm,
+    UserSpendLimitForm,
 )
+from open_webui.models.user_usage import UserUsages, UserSpendSummary, UserUsageListResponse
 
 from open_webui.constants import ERROR_MESSAGES
 from open_webui.env import STATIC_DIR
@@ -428,6 +430,66 @@ async def update_user_info_by_session_user(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=ERROR_MESSAGES.USER_NOT_FOUND,
         )
+
+
+############################
+# User Spend/Usage (Self)
+# NOTE: These /me/ routes MUST be defined BEFORE /{user_id}/ routes
+############################
+
+
+@router.get("/me/spend", response_model=UserSpendSummary)
+async def get_my_spend(
+    user=Depends(get_verified_user),
+    db: Session = Depends(get_session),
+):
+    """
+    Get current user's spend summary.
+    
+    Returns daily and monthly spend totals for the authenticated user.
+    """
+    return UserUsages.get_user_spend_summary(user.id, db=db)
+
+
+@router.get("/me/spend-limits", response_model=dict)
+async def get_my_spend_limits(
+    user=Depends(get_verified_user),
+    db: Session = Depends(get_session),
+):
+    """
+    Get current user's spend limits and current usage.
+    
+    Returns whether limits are enabled, the limit values, and current usage.
+    """
+    current_user = Users.get_user_by_id(user.id, db=db)
+    spend_summary = UserUsages.get_user_spend_summary(user.id, db=db)
+    
+    return {
+        "spend_limit_enabled": current_user.spend_limit_enabled if current_user else False,
+        "spend_limit_daily": current_user.spend_limit_daily if current_user else None,
+        "spend_limit_monthly": current_user.spend_limit_monthly if current_user else None,
+        "daily_spend": spend_summary.daily_spend,
+        "monthly_spend": spend_summary.monthly_spend,
+        "daily_tokens": spend_summary.daily_tokens,
+        "monthly_tokens": spend_summary.monthly_tokens,
+        "daily_requests": spend_summary.daily_requests,
+        "monthly_requests": spend_summary.monthly_requests,
+    }
+
+
+@router.get("/me/usage", response_model=UserUsageListResponse)
+async def get_my_usage_history(
+    skip: int = 0,
+    limit: int = 30,
+    user=Depends(get_verified_user),
+    db: Session = Depends(get_session),
+):
+    """
+    Get current user's usage history.
+    
+    Returns paginated list of usage records for the authenticated user.
+    """
+    return UserUsages.get_user_usage_history(user.id, skip=skip, limit=limit, db=db)
 
 
 ############################
@@ -908,3 +970,111 @@ async def force_gmail_sync(user_id: str, request: Request, user=Depends(get_admi
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to start Gmail sync: {str(e)}"
         )
+
+
+############################
+# User Spend Limits (Admin)
+############################
+
+
+@router.get("/{user_id}/spend-limits", response_model=dict)
+async def get_user_spend_limits(
+    user_id: str,
+    user=Depends(get_admin_user),
+    db: Session = Depends(get_session),
+):
+    """
+    Get spend limit configuration for a user (admin only).
+    
+    Returns the user's spend limits and current usage.
+    """
+    target_user = Users.get_user_by_id(user_id, db=db)
+    if not target_user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=ERROR_MESSAGES.USER_NOT_FOUND,
+        )
+    
+    # Get current spend summary
+    spend_summary = UserUsages.get_user_spend_summary(user_id, db=db)
+    
+    return {
+        "user_id": user_id,
+        "spend_limit_enabled": target_user.spend_limit_enabled,
+        "spend_limit_daily": target_user.spend_limit_daily,
+        "spend_limit_monthly": target_user.spend_limit_monthly,
+        "current_daily_spend": spend_summary.daily_spend,
+        "current_monthly_spend": spend_summary.monthly_spend,
+        "daily_tokens": spend_summary.daily_tokens,
+        "monthly_tokens": spend_summary.monthly_tokens,
+        "daily_requests": spend_summary.daily_requests,
+        "monthly_requests": spend_summary.monthly_requests,
+    }
+
+
+@router.post("/{user_id}/spend-limits", response_model=dict)
+async def update_user_spend_limits(
+    user_id: str,
+    form_data: UserSpendLimitForm,
+    user=Depends(get_admin_user),
+    db: Session = Depends(get_session),
+):
+    """
+    Update spend limit configuration for a user (admin only).
+    
+    Set daily and/or monthly spend limits in USD.
+    Set limits to null to remove that limit.
+    """
+    target_user = Users.get_user_by_id(user_id, db=db)
+    if not target_user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=ERROR_MESSAGES.USER_NOT_FOUND,
+        )
+    
+    # Update spend limits
+    update_data = {
+        "spend_limit_enabled": form_data.spend_limit_enabled,
+        "spend_limit_daily": form_data.spend_limit_daily,
+        "spend_limit_monthly": form_data.spend_limit_monthly,
+    }
+    
+    updated_user = Users.update_user_by_id(user_id, update_data, db=db)
+    if not updated_user:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update user spend limits",
+        )
+    
+    log.info(f"Admin {user.id} updated spend limits for user {user_id}: enabled={form_data.spend_limit_enabled}, daily={form_data.spend_limit_daily}, monthly={form_data.spend_limit_monthly}")
+    
+    return {
+        "success": True,
+        "user_id": user_id,
+        "spend_limit_enabled": updated_user.spend_limit_enabled,
+        "spend_limit_daily": updated_user.spend_limit_daily,
+        "spend_limit_monthly": updated_user.spend_limit_monthly,
+    }
+
+
+@router.get("/{user_id}/usage", response_model=UserUsageListResponse)
+async def get_user_usage_history(
+    user_id: str,
+    skip: int = 0,
+    limit: int = 30,
+    user=Depends(get_admin_user),
+    db: Session = Depends(get_session),
+):
+    """
+    Get usage history for a user (admin only).
+    
+    Returns paginated list of usage records with totals.
+    """
+    target_user = Users.get_user_by_id(user_id, db=db)
+    if not target_user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=ERROR_MESSAGES.USER_NOT_FOUND,
+        )
+    
+    return UserUsages.get_user_usage_history(user_id, skip=skip, limit=limit, db=db)

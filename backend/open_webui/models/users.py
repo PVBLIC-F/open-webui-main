@@ -23,6 +23,7 @@ from sqlalchemy import (
     Boolean,
     Text,
     Date,
+    Float,
     exists,
     select,
     cast,
@@ -78,6 +79,11 @@ class User(Base):
     # Gmail sync settings
     gmail_sync_enabled = Column(BigInteger, default=0)  # 0 = disabled, 1 = enabled
 
+    # Spend limits (in USD) - null means no limit
+    spend_limit_daily = Column(Float, nullable=True)  # Daily spend limit in USD
+    spend_limit_monthly = Column(Float, nullable=True)  # Monthly spend limit in USD
+    spend_limit_enabled = Column(Boolean, default=False)  # Whether limits are enforced
+
 
 class UserModel(BaseModel):
     id: str
@@ -110,6 +116,11 @@ class UserModel(BaseModel):
     
     # Gmail sync settings
     gmail_sync_enabled: int = 0  # 0 = disabled, 1 = enabled
+
+    # Spend limits
+    spend_limit_daily: Optional[float] = None  # Daily spend limit in USD
+    spend_limit_monthly: Optional[float] = None  # Monthly spend limit in USD
+    spend_limit_enabled: bool = False  # Whether limits are enforced
     
     updated_at: int  # timestamp in epoch
     created_at: int  # timestamp in epoch
@@ -241,6 +252,16 @@ class UserUpdateForm(BaseModel):
     profile_image_url: str
     password: Optional[str] = None
     gmail_sync_enabled: Optional[int] = None  # 0 = disabled, 1 = enabled
+    spend_limit_daily: Optional[float] = None  # Daily spend limit in USD
+    spend_limit_monthly: Optional[float] = None  # Monthly spend limit in USD
+    spend_limit_enabled: Optional[bool] = None  # Whether limits are enforced
+
+
+class UserSpendLimitForm(BaseModel):
+    """Form for updating user spend limits (admin only)."""
+    spend_limit_daily: Optional[float] = None  # Daily spend limit in USD (null = no limit)
+    spend_limit_monthly: Optional[float] = None  # Monthly spend limit in USD (null = no limit)
+    spend_limit_enabled: bool = False  # Whether limits are enforced
 
 
 class UsersTable:
@@ -671,6 +692,10 @@ class UsersTable:
             # Delete User Chats
             result = Chats.delete_chats_by_user_id(id, db=db)
             if result:
+                # Delete User Usage records (import here to avoid circular imports)
+                from open_webui.models.user_usage import UserUsages
+                UserUsages.delete_user_usage(id, db=db)
+
                 with get_db_context(db) as db:
                     # Delete User
                     db.query(User).filter_by(id=id).delete()

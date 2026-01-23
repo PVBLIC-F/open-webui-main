@@ -547,6 +547,7 @@ from open_webui.utils.chat import (
 from open_webui.utils.embeddings import generate_embeddings
 from open_webui.utils.middleware import process_chat_payload, process_chat_response
 from open_webui.utils.access_control import has_access
+from open_webui.utils.spend_limit import enforce_spend_limit
 
 from open_webui.utils.auth import (
     get_license_data,
@@ -1676,6 +1677,9 @@ async def chat_completion(
     form_data: dict,
     user=Depends(get_verified_user),
 ):
+    # Check spend limits before processing request
+    await enforce_spend_limit(user)
+
     if not request.app.state.MODELS:
         await get_all_models(request, user=user)
 
