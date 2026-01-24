@@ -913,6 +913,16 @@ async def generate_chat_completion(
         request, url, key, api_config, metadata, user=user
     )
 
+    # Set "user" field for tracking in provider analytics (OpenAI spec)
+    # Task calls get "task:{type}", regular calls get the user ID
+    if "user" not in payload:
+        if metadata and metadata.get("task"):
+            # Task calls (title_generation, tags_generation, etc.)
+            payload["user"] = f"task:{metadata.get('task')}"
+        else:
+            # Regular chat calls - use user ID for tracking
+            payload["user"] = user.id
+
     if api_config.get("azure", False):
         api_version = api_config.get("api_version", "2023-03-15-preview")
         request_url, payload = convert_to_azure_payload(url, payload, api_version)

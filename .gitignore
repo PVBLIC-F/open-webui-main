@@ -313,3 +313,6 @@ cypress/screenshots
 
 # Local tool - not for repo
 tools/llm_council.py
+tools/langfuse-pipeline-template.py
+tools/langfuse-pipeline.py
+tools/openrouter-function.py
