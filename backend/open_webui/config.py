@@ -568,6 +568,13 @@ KNOWLEDGE_DRIVE_MAX_FILES = PersistentConfig(
     int(os.environ.get("KNOWLEDGE_DRIVE_MAX_FILES", "1000")),
 )
 
+# Maximum file size in MB for Drive sync (prevents OOM on large files)
+KNOWLEDGE_DRIVE_MAX_FILE_SIZE_MB = PersistentConfig(
+    "KNOWLEDGE_DRIVE_MAX_FILE_SIZE_MB",
+    "knowledge.drive_sync.max_file_size_mb",
+    int(os.environ.get("KNOWLEDGE_DRIVE_MAX_FILE_SIZE_MB", "100")),
+)
+
 ####################################
 # Temp File Cleanup (critical for Render's 2GB /tmp limit)
 ####################################

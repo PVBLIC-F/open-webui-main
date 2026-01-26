@@ -374,13 +374,55 @@ class KnowledgeDriveSourceTable:
             return None
 
     def mark_sync_start(self, source_id: str) -> Optional[KnowledgeDriveSourceModel]:
-        """Mark a Drive source sync as starting"""
-        return self.update_drive_source(
-            source_id,
-            sync_status="active",
-            error_count=0,
-            last_error=None,
-        )
+        """
+        Mark a Drive source sync as starting (atomic operation).
+        
+        Uses conditional update to prevent race conditions when multiple
+        sync requests are triggered simultaneously.
+        
+        Returns:
+            KnowledgeDriveSourceModel if sync started successfully
+            None if sync is already active (another sync is running)
+        """
+        try:
+            with get_db() as db:
+                # Atomic update: only update if not already active
+                # This prevents race conditions where two syncs could start simultaneously
+                result = (
+                    db.query(KnowledgeDriveSource)
+                    .filter(
+                        KnowledgeDriveSource.id == source_id,
+                        KnowledgeDriveSource.sync_status != "active",  # Only if not active
+                    )
+                    .update(
+                        {
+                            "sync_status": "active",
+                            "error_count": 0,
+                            "last_error": None,
+                            "updated_at": int(time.time()),
+                        },
+                        synchronize_session=False,
+                    )
+                )
+                db.commit()
+                
+                # If no rows were updated, sync is already active
+                if result == 0:
+                    log.warning(f"Sync already active for source {source_id}, skipping")
+                    return None
+                
+                # Return updated source
+                source = (
+                    db.query(KnowledgeDriveSource)
+                    .filter_by(id=source_id)
+                    .first()
+                )
+                if source:
+                    return KnowledgeDriveSourceModel.model_validate(source)
+                return None
+        except Exception as e:
+            log.error(f"Error marking sync start for {source_id}: {e}")
+            return None
 
     def mark_sync_complete(
         self,

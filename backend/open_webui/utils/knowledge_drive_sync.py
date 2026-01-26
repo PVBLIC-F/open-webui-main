@@ -18,9 +18,7 @@ import time
 import uuid
 import io
 import hashlib
-from typing import Optional, List, Dict, Any
-from datetime import datetime
-
+from typing import Optional, Dict, Any
 from open_webui.utils.google_drive_client import (
     GoogleDriveClient,
     DriveFile,
@@ -32,7 +30,6 @@ from open_webui.models.knowledge_drive import (
     KnowledgeDriveSources,
     KnowledgeDriveFiles,
     KnowledgeDriveSourceModel,
-    KnowledgeDriveFileModel,
 )
 from open_webui.models.knowledge import Knowledges, KnowledgeModel
 from open_webui.models.files import Files, FileForm
@@ -63,6 +60,21 @@ class KnowledgeDriveSyncService:
         """
         self.app_state = app_state
         self.active_syncs: Dict[str, dict] = {}
+
+    def _get_config(self, key: str, default: Any) -> Any:
+        """
+        Get a configuration value from app_state.config.
+        
+        Args:
+            key: Configuration key name (e.g., "KNOWLEDGE_DRIVE_MAX_FILES")
+            default: Default value if config is not available
+            
+        Returns:
+            Configuration value or default
+        """
+        if self.app_state and hasattr(self.app_state, "config"):
+            return getattr(self.app_state.config, key, default)
+        return default
 
     async def sync_drive_source(
         self,
@@ -105,8 +117,21 @@ class KnowledgeDriveSyncService:
             "errors": 0,
         }
 
-        # Mark sync as starting
-        KnowledgeDriveSources.mark_sync_start(source_id)
+        # Mark sync as starting (atomic operation to prevent race conditions)
+        sync_started = KnowledgeDriveSources.mark_sync_start(source_id)
+        if not sync_started:
+            # Another sync is already running
+            log.warning(f"⚠️ Sync already active for source {source_id[:8]}, aborting")
+            self.active_syncs[source_id]["status"] = "skipped"
+            return {
+                "status": "skipped",
+                "reason": "Sync already in progress",
+                "files_found": 0,
+                "files_synced": 0,
+                "files_updated": 0,
+                "files_deleted": 0,
+                "errors": 0,
+            }
 
         try:
             # Get Knowledge base
@@ -187,11 +212,7 @@ class KnowledgeDriveSyncService:
         Perform a full sync of all files in the Drive folder.
         """
         # Get max files from config, default to 1000
-        max_files = 1000
-        if self.app_state and hasattr(self.app_state, "config"):
-            max_files = getattr(
-                self.app_state.config, "KNOWLEDGE_DRIVE_MAX_FILES", 1000
-            )
+        max_files = self._get_config("KNOWLEDGE_DRIVE_MAX_FILES", 1000)
 
         # Detect if folder is in a Shared Drive (need drive_id for API)
         folder_info = await drive_client.get_folder_info(source.drive_folder_id)
@@ -451,6 +472,18 @@ class KnowledgeDriveSyncService:
             Open WebUI file ID if successful, None otherwise
         """
         try:
+            # Check file size limit to prevent OOM on large files
+            max_file_size_mb = self._get_config("KNOWLEDGE_DRIVE_MAX_FILE_SIZE_MB", 100)
+            max_file_size_bytes = max_file_size_mb * 1024 * 1024
+            
+            if drive_file.size and drive_file.size > max_file_size_bytes:
+                file_size_mb = drive_file.size / (1024 * 1024)
+                log.warning(
+                    f"   ⚠️ Skipping {drive_file.name}: file too large "
+                    f"({file_size_mb:.1f}MB > {max_file_size_mb}MB limit)"
+                )
+                return None
+            
             # Download file content
             log.info(f"   ⬇️  Downloading {drive_file.name}...")
             content = await drive_client.download_file(drive_file)
@@ -539,6 +572,68 @@ class KnowledgeDriveSyncService:
             log.error(f"   ❌ Error downloading/processing {drive_file.name}: {e}")
             return None
 
+    async def _wait_for_vectors_ready(
+        self,
+        file_id: str,
+        max_retries: int = 5,
+        base_delay: float = 1.0,
+    ) -> bool:
+        """
+        Wait for vectors to be indexed and queryable using async retry with exponential backoff.
+        
+        Replaces blocking sleep with non-blocking async wait that checks if vectors
+        are actually available before proceeding.
+        
+        Args:
+            file_id: The file ID whose vectors we're waiting for
+            max_retries: Maximum number of retry attempts (default: 5)
+            base_delay: Base delay in seconds for exponential backoff (default: 1.0)
+            
+        Returns:
+            True if vectors are ready, False if timeout reached
+        """
+        try:
+            # Import here to avoid circular imports
+            from open_webui.retrieval.vector.connector import VECTOR_DB_CLIENT
+            from open_webui.routers.retrieval import get_namespace_for_collection
+            
+            collection_name = f"file-{file_id}"
+            # Use proper namespace for Pinecone isolation (None for other vector DBs)
+            namespace = get_namespace_for_collection(collection_name)
+            
+            for attempt in range(max_retries):
+                try:
+                    # Try to query the collection to check if vectors exist
+                    # We use a simple existence check rather than a full query
+                    result = VECTOR_DB_CLIENT.get(
+                        collection_name=collection_name,
+                        namespace=namespace,
+                        limit=1,
+                    )
+                    
+                    # Check if we got any results back
+                    if result and result.ids and len(result.ids) > 0 and len(result.ids[0]) > 0:
+                        log.info(f"   ✓ Vectors ready after {attempt + 1} attempt(s)")
+                        return True
+                    
+                except Exception as e:
+                    # Collection might not exist yet, or other transient error
+                    log.debug(f"   Vector check attempt {attempt + 1} failed: {e}")
+                
+                if attempt < max_retries - 1:
+                    # Exponential backoff: 1s, 2s, 4s, 8s, 16s
+                    delay = base_delay * (2 ** attempt)
+                    log.debug(f"   Retrying in {delay:.1f}s...")
+                    await asyncio.sleep(delay)
+            
+            # Timeout reached - vectors may still be indexing
+            log.warning(f"   ⚠️ Vectors not ready after {max_retries} attempts, continuing anyway")
+            return False
+            
+        except Exception as e:
+            log.error(f"   ❌ Error checking vector readiness: {e}")
+            return False
+
     async def _process_file_rag(
         self,
         file_id: str,
@@ -604,11 +699,12 @@ class KnowledgeDriveSyncService:
                 else:
                     log.info(f"   ✓ Content verified in database ({len(file_check.data.get('content', ''))} chars)")
                 
-                # Wait for Pinecone eventual consistency
-                # Vectors in file-{file_id} may not be immediately queryable
-                import time
-                log.info(f"   ⏳ Waiting 5s for Pinecone indexing...")
-                time.sleep(5)
+                # Wait for vector database eventual consistency using async retry
+                # Instead of blocking sleep, use non-blocking async wait with exponential backoff
+                log.info(f"   ⏳ Waiting for vector indexing (async retry)...")
+                vectors_ready = await self._wait_for_vectors_ready(file_id)
+                if not vectors_ready:
+                    log.warning(f"   ⚠️ Vectors may not be fully indexed yet, proceeding with fallback")
                 
                 # STEP 2: Add to knowledge base collection
                 # This will query file-{file_id} for vectors, or fall back to file.data.content
