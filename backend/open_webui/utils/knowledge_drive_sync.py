@@ -594,7 +594,7 @@ class KnowledgeDriveSyncService:
         """
         try:
             # Import here to avoid circular imports
-            from open_webui.retrieval.vector.connector import VECTOR_DB_CLIENT
+            from open_webui.retrieval.vector.factory import VECTOR_DB_CLIENT
             from open_webui.routers.retrieval import get_namespace_for_collection
             
             collection_name = f"file-{file_id}"
